@@ -1270,7 +1270,7 @@ Deno.serve(async (req) => {
       .eq("key", "constitution")
       .maybeSingle();
 
-    const budget = kind === "test" ? 0.25 : kind === "change_request" ? 3.0 : 10.0;
+    const budget = kind === "test" ? 0.25 : kind === "change_request" ? 3.0 : kind === "batches" ? 3.0 : 10.0;
     const { data: run, error: rerr } = await admin
       .from("boardroom_runs")
       .insert({
