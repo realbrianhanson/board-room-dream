@@ -65,6 +65,139 @@ export type Database = {
         }
         Relationships: []
       }
+      audit_findings: {
+        Row: {
+          audit_id: string
+          created_at: string
+          description: string | null
+          file_path: string | null
+          fix_batch_id: string | null
+          id: string
+          seat: string | null
+          severity: string
+          status: string
+          title: string
+          user_id: string
+        }
+        Insert: {
+          audit_id: string
+          created_at?: string
+          description?: string | null
+          file_path?: string | null
+          fix_batch_id?: string | null
+          id?: string
+          seat?: string | null
+          severity: string
+          status?: string
+          title: string
+          user_id: string
+        }
+        Update: {
+          audit_id?: string
+          created_at?: string
+          description?: string | null
+          file_path?: string | null
+          fix_batch_id?: string | null
+          id?: string
+          seat?: string | null
+          severity?: string
+          status?: string
+          title?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_findings_audit_id_fkey"
+            columns: ["audit_id"]
+            isOneToOne: false
+            referencedRelation: "audits"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_findings_fix_batch_id_fkey"
+            columns: ["fix_batch_id"]
+            isOneToOne: false
+            referencedRelation: "batches"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      audits: {
+        Row: {
+          base_sha: string | null
+          batch_id: string | null
+          completed_at: string | null
+          created_at: string
+          files_analyzed: number | null
+          head_sha: string | null
+          id: string
+          kind: string
+          loop_no: number
+          project_id: string
+          run_id: string | null
+          source: string | null
+          status: string
+          summary: Json | null
+          user_id: string
+        }
+        Insert: {
+          base_sha?: string | null
+          batch_id?: string | null
+          completed_at?: string | null
+          created_at?: string
+          files_analyzed?: number | null
+          head_sha?: string | null
+          id?: string
+          kind: string
+          loop_no?: number
+          project_id: string
+          run_id?: string | null
+          source?: string | null
+          status?: string
+          summary?: Json | null
+          user_id: string
+        }
+        Update: {
+          base_sha?: string | null
+          batch_id?: string | null
+          completed_at?: string | null
+          created_at?: string
+          files_analyzed?: number | null
+          head_sha?: string | null
+          id?: string
+          kind?: string
+          loop_no?: number
+          project_id?: string
+          run_id?: string | null
+          source?: string | null
+          status?: string
+          summary?: Json | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audits_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "batches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audits_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audits_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "boardroom_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       batches: {
         Row: {
           batch_no: number
