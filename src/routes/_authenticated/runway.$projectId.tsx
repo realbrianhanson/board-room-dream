@@ -90,6 +90,28 @@ function MiniRing({ fill, color = "hsl(38 65% 55%)", size = 22 }: { fill: number
   );
 }
 
+type AuditRow = {
+  id: string;
+  batch_id: string | null;
+  kind: "batch" | "final_az";
+  status: "running" | "clean" | "findings" | "failed";
+  loop_no: number;
+  source: "github" | "paste" | null;
+  head_sha: string | null;
+  files_analyzed: number | null;
+  summary: { counts?: Record<string, number>; text?: string } | null;
+  created_at: string;
+};
+
+type FindingRow = {
+  id: string;
+  audit_id: string;
+  severity: "P0" | "P1" | "P2" | "P3";
+  file_path: string | null;
+  title: string;
+  status: "open" | "fix_drafted" | "resolved" | "dismissed";
+};
+
 function RunwayPage() {
   const { projectId } = Route.useParams();
   const [uid, setUid] = useState<string | null>(null);
@@ -102,20 +124,34 @@ function RunwayPage() {
   const [urlEdit, setUrlEdit] = useState("");
   const [showRollback, setShowRollback] = useState(false);
   const [showSkipConfirm, setShowSkipConfirm] = useState<Batch | null>(null);
+  const [audits, setAudits] = useState<AuditRow[]>([]);
+  const [findings, setFindings] = useState<FindingRow[]>([]);
+  const [ghRepo, setGhRepo] = useState<string | null>(null);
+  const [auditModal, setAuditModal] = useState<
+    | { kind: "batch"; batch: Batch; mode: "start" | "reaudit" }
+    | { kind: "final_az" }
+    | null
+  >(null);
+  const [starting, setStarting] = useState(false);
 
   const loadAll = useCallback(async () => {
-    const [{ data: p }, { data: pv }, { data: dv }, { data: bs }, { data: rs }] = await Promise.all([
-      supabase.from("projects").select("id, name, user_id, status, lovable_project_url, current_batch_no").eq("id", projectId).maybeSingle(),
+    const [{ data: p }, { data: pv }, { data: dv }, { data: bs }, { data: rs }, { data: au }, { data: fi }] = await Promise.all([
+      supabase.from("projects").select("id, name, user_id, status, lovable_project_url, current_batch_no, github_repo").eq("id", projectId).maybeSingle(),
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "plan").limit(1),
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "design").limit(1),
       supabase.from("batches").select("*").eq("project_id", projectId).order("batch_no", { ascending: true }),
       supabase.from("boardroom_runs").select("id, kind, status, error").eq("project_id", projectId).eq("kind", "batches").order("created_at", { ascending: false }).limit(1),
+      supabase.from("audits").select("id, batch_id, kind, status, loop_no, source, head_sha, files_analyzed, summary, created_at").eq("project_id", projectId).order("created_at", { ascending: false }),
+      supabase.from("audit_findings").select("id, audit_id, severity, file_path, title, status").order("severity", { ascending: true }),
     ]);
     setProject((p as Project) ?? null);
+    setGhRepo((p as { github_repo: string | null } | null)?.github_repo ?? null);
     setHasPlan(((pv ?? []).length ?? 0) > 0);
     setHasDesign(((dv ?? []).length ?? 0) > 0);
     setBatches((bs ?? []) as Batch[]);
     setRun(((rs ?? [])[0] as Run) ?? null);
+    setAudits((au ?? []) as AuditRow[]);
+    setFindings((fi ?? []) as FindingRow[]);
     if (p && !urlEdit) setUrlEdit((p as Project).lovable_project_url ?? "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
@@ -131,6 +167,7 @@ function RunwayPage() {
       .channel(`runway:${projectId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "batches", filter: `project_id=eq.${projectId}` }, () => loadAll())
       .on("postgres_changes", { event: "*", schema: "public", table: "boardroom_runs", filter: `project_id=eq.${projectId}` }, () => loadAll())
+      .on("postgres_changes", { event: "*", schema: "public", table: "audits", filter: `project_id=eq.${projectId}` }, () => loadAll())
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "projects", filter: `id=eq.${projectId}` }, () => loadAll())
       .subscribe();
     return () => { supabase.removeChannel(ch); };
@@ -145,6 +182,50 @@ function RunwayPage() {
     () => (batches ?? []).findIndex((b) => !isTerminal(b.status)),
     [batches],
   );
+
+  const latestAuditByBatch = useMemo(() => {
+    const m = new Map<string, AuditRow>();
+    for (const a of audits) {
+      if (a.batch_id && !m.has(a.batch_id)) m.set(a.batch_id, a);
+    }
+    return m;
+  }, [audits]);
+
+  const findingsByAudit = useMemo(() => {
+    const m = new Map<string, FindingRow[]>();
+    for (const f of findings) {
+      const list = m.get(f.audit_id) ?? [];
+      list.push(f);
+      m.set(f.audit_id, list);
+    }
+    return m;
+  }, [findings]);
+
+  const finalAudit = useMemo(() => audits.find((a) => a.kind === "final_az") ?? null, [audits]);
+  const allBatchesResolved = total > 0 && (batches ?? []).every((b) => b.status === "passed" || b.status === "skipped");
+
+  async function startAuditCall(action: "start_batch_audit" | "start_reaudit" | "start_final_audit", payload: Record<string, unknown>) {
+    setStarting(true);
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const token = session.session?.access_token;
+      if (!token) throw new Error("Not signed in");
+      const { data, error } = await supabase.functions.invoke("audit-runner", {
+        body: { action, ...payload },
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (error) throw error;
+      if ((data as { error?: string })?.error) throw new Error((data as { error: string }).error);
+      toast.success("The board is reading your code…");
+      setAuditModal(null);
+      await loadAll();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setStarting(false);
+    }
+  }
+
 
   async function generate() {
     setGenerating(true);
