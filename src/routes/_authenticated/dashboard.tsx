@@ -14,6 +14,7 @@ type Project = {
   status: string;
   current_batch_no: number;
   created_at: string;
+  has_design?: boolean;
 };
 
 const NEXT_ACTION: Record<string, string> = {
@@ -27,6 +28,11 @@ const NEXT_ACTION: Record<string, string> = {
   done: "Publish",
   killed: "Revise the idea",
 };
+
+function nextActionLabel(p: Project): string {
+  if (p.status === "locked" && !p.has_design) return "Convene the Design Council";
+  return NEXT_ACTION[p.status] ?? "Open";
+}
 
 const STATUS_COLOR: Record<string, string> = {
   intake: "hsl(40 10% 62%)",
