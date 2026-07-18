@@ -445,9 +445,8 @@ function EmptyState({
       <p className="mt-4 font-display text-2xl text-foreground">{title}</p>
       <p className="mt-2 text-sm text-muted-foreground">{subtitle}</p>
       <Link
-        // @ts-expect-error dynamic route string
-        to={actionTo}
-        params={actionParams}
+        to={actionTo as any}
+        params={actionParams as any}
         className="mt-6 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
       >
         {actionLabel} <ArrowRight className="h-4 w-4" />
