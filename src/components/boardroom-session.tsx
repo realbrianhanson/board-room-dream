@@ -84,6 +84,7 @@ export function BoardroomSession(props: BoardroomSessionProps) {
     lockCard,
     showHeader = true,
     onRunLoaded,
+    readOnly = false,
   } = props;
 
   const navigate = useNavigate();
