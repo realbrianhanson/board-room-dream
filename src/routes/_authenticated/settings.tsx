@@ -237,6 +237,7 @@ async function callGh(action: string, payload: Record<string, unknown> = {}) {
 function GitHubCard({ isAdmin }: { isAdmin: boolean }) {
   const [state, setState] = useState<GhStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [iframeNotice, setIframeNotice] = useState(false);
 
   async function refresh() {
     try {
@@ -249,6 +250,11 @@ function GitHubCard({ isAdmin }: { isAdmin: boolean }) {
   useEffect(() => { refresh(); }, []);
 
   async function connect() {
+    if (window.self !== window.top) {
+      setIframeNotice(true);
+      return;
+    }
+    setIframeNotice(false);
     setBusy(true);
     try {
       const data = (await callGh("start", { origin: window.location.origin })) as { url: string };
@@ -307,7 +313,20 @@ function GitHubCard({ isAdmin }: { isAdmin: boolean }) {
           )}
         </div>
       ) : !state.connected ? (
-        <div className="mt-6">
+        <div className="mt-6 space-y-3">
+          {iframeNotice && (
+            <div className="rounded-md border border-dashed border-[hsl(38_65%_55%/0.4)] bg-[hsl(38_65%_55%/0.12)] p-4">
+              <p className="text-sm text-foreground">
+                GitHub can't open inside an embedded preview. Open the app in its own browser tab, then connect.
+              </p>
+              <button
+                onClick={() => window.open(window.location.href, "_blank")}
+                className="mt-3 rounded-md border border-[hsl(38_65%_55%/0.4)] px-4 py-2 text-sm font-medium text-[hsl(38_70%_62%)] transition-colors hover:bg-[hsl(38_65%_55%/0.16)]"
+              >
+                Open in new tab
+              </button>
+            </div>
+          )}
           <button
             onClick={connect}
             disabled={busy}
