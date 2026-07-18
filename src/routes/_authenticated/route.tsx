@@ -152,7 +152,12 @@ function AuthenticatedShell() {
                 }`}
               >
                 <Icon className="h-4 w-4" />
-                {item.label}
+                <span className="flex-1">{item.label}</span>
+                {item.to === "/cohort" && alertCount > 0 && (
+                  <span className="rounded-full border border-[hsl(8_60%_55%)]/40 bg-[hsl(8_60%_55%)]/10 px-1.5 py-0.5 font-mono text-[9px] leading-none text-[hsl(8_60%_55%)]">
+                    {alertCount}
+                  </span>
+                )}
               </Link>
             );
           })}
