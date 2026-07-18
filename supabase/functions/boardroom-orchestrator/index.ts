@@ -1626,14 +1626,14 @@ Deno.serve(async (req) => {
       const locked = await loadLockedPlan(admin, projectId);
       if (!locked) {
         if (kind === "design" && project.is_import) {
-          // Imports may design without a locked plan: need either a linked repo
-          // or a description in the intake.
+          // Design Council for imports may run without a locked plan: need repo or description.
           const intake = await loadIntake(admin, projectId);
           const hasDesc = !!intake?.answers?.description;
           if (!project.github_repo && !hasDesc) {
             return j(400, { error: "Link your repo or describe the app so the board can see it." });
           }
         } else {
+          // 'batches' ALWAYS requires a locked plan — imports must lock their improvement plan first.
           return j(400, { error: kind === "design" ? "The board locks the plan before it debates the look." : "The board locks the plan before it sequences the build." });
         }
       }
