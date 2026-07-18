@@ -52,12 +52,23 @@ type Step = {
   seat: Seat;
   status: "queued" | "running" | "completed" | "failed" | "skipped";
   response_text: string | null;
+  response_json: any;
   error: string | null;
   cost_usd: number;
   created_at: string;
   completed_at: string | null;
 };
 type SeatRow = { seat: Seat; display_name: string | null; model_id: string; enabled: boolean };
+
+const RUBRIC = [
+  "painful_problem",
+  "reachable_buyer",
+  "monetization_path",
+  "buildable_scope",
+  "differentiation",
+  "wow_factor",
+] as const;
+type RubricKey = typeof RUBRIC[number];
 
 const CONVENE_BLOCKED: Record<string, string> = {
   intake: "Finish the intake first — the board needs a validated idea.",
@@ -79,7 +90,7 @@ function BoardroomProjectPage() {
   const loadSteps = useCallback(async (runId: string) => {
     const { data } = await supabase
       .from("run_steps")
-      .select("id, run_id, step_key, round, seat, status, response_text, error, cost_usd, created_at, completed_at")
+      .select("id, run_id, step_key, round, seat, status, response_text, response_json, error, cost_usd, created_at, completed_at")
       .eq("run_id", runId)
       .order("created_at", { ascending: true });
     setSteps((data ?? []) as Step[]);
@@ -213,7 +224,45 @@ function BoardroomProjectPage() {
 
   const completedR1 = steps.filter((s) => s.round === 1 && s.status === "completed").length;
   const totalR1 = Math.max(4, steps.filter((s) => s.round === 1).length || 4);
-  const consensusFill = run?.status === "consensus" ? 1 : completedR1 / totalR1;
+
+  // Consensus ring: 24 segments (6 rubric scores × 4 seats) from the latest Round-4 votes.
+  const segments = useMemo(() => {
+    const voteSteps = steps.filter(
+      (s) => s.round === 4 && s.status === "completed" && s.step_key.startsWith("r4_vote_"),
+    );
+    let latestLoop = -1;
+    for (const v of voteSteps) {
+      const m = /_loop(\d+)$/.exec(v.step_key);
+      if (m) latestLoop = Math.max(latestLoop, Number(m[1]));
+    }
+    const latest = voteSteps.filter((v) => v.step_key.endsWith(`_loop${latestLoop}`));
+    const bySeat = new Map<Seat, Step>();
+    for (const v of latest) bySeat.set(v.seat, v);
+    // 24 segments ordered [seat0×6 rubric, seat1×6, ...]
+    const out: Array<"empty" | "brass" | "oxblood"> = [];
+    for (const seat of SEAT_ORDER) {
+      const v = bySeat.get(seat);
+      const scores = v?.response_json?.scores as Record<string, number> | undefined;
+      for (const key of RUBRIC) {
+        if (!scores || typeof scores[key] !== "number") {
+          out.push("empty");
+        } else {
+          out.push(scores[key] >= 8 ? "brass" : "oxblood");
+        }
+      }
+    }
+    return out;
+  }, [steps]);
+
+  const roundOneFill = completedR1 / totalR1;
+  const votesFilled = segments.filter((s) => s !== "empty").length;
+  const votesFraction = votesFilled / 24;
+  const consensusFill =
+    run?.status === "consensus" || run?.status === "chair_ruled"
+      ? 1
+      : votesFilled > 0
+        ? votesFraction
+        : roundOneFill; // fall back to R1 progress before any votes exist
 
   async function convene() {
     if (!project) return;
@@ -274,7 +323,7 @@ function BoardroomProjectPage() {
   }
 
   const overBudget = run && Number(run.spent_usd) >= Number(run.budget_usd) * 0.8;
-  const awaitingProtocol = run?.status === "paused" && run.consensus?.awaiting === "batch6_protocol";
+  const locked = run?.status === "consensus" || run?.status === "chair_ruled";
 
   return (
     <div className="mx-auto w-full max-w-6xl px-6 py-10 md:py-14">
@@ -339,6 +388,8 @@ function BoardroomProjectPage() {
             step: stepBySeat.get(s),
           }))}
           consensusFill={consensusFill}
+          segments={segments}
+          runStatus={run?.status}
           consensusRingRef={consensusPulseRef}
           round={run?.round_no ?? 1}
           completed={completedR1}
@@ -356,6 +407,7 @@ function BoardroomProjectPage() {
             step: stepBySeat.get(s),
           }))}
           consensusFill={consensusFill}
+          runStatus={run?.status}
           round={run?.round_no ?? 1}
           completed={completedR1}
           total={totalR1}
@@ -363,13 +415,20 @@ function BoardroomProjectPage() {
         />
       </div>
 
-      {/* Interstitial when awaiting Batch 6 */}
-      {awaitingProtocol && (
-        <div className="mt-10 rounded-xl border border-border bg-surface-1/70 p-6 text-center">
-          <p className="font-display text-xl text-foreground">Round 1 complete.</p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            The cross-examination convenes in the next build batch. The four independent drafts remain readable below.
+
+      {/* Lock card when consensus reached or chair-ruled */}
+      {locked && project && (
+        <div className="mt-10 rounded-xl border border-[hsl(38_65%_55%/0.4)] bg-[hsl(38_65%_55%/0.06)] p-6 text-center">
+          <p className="font-display text-2xl text-foreground">
+            {run?.status === "consensus" ? "The plan is locked." : "The Chair has ruled."}
           </p>
+          <Link
+            to="/plan/$projectId"
+            params={{ projectId: project.id }}
+            className="mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:brightness-110"
+          >
+            View the Locked Plan →
+          </Link>
         </div>
       )}
 
@@ -452,6 +511,8 @@ function seatGlowState(step: Step | undefined) {
 function TheTable({
   seats,
   consensusFill,
+  segments,
+  runStatus,
   consensusRingRef,
   round,
   completed,
@@ -459,6 +520,8 @@ function TheTable({
 }: {
   seats: SeatView[];
   consensusFill: number;
+  segments: Array<"empty" | "brass" | "oxblood">;
+  runStatus: string | undefined;
   consensusRingRef: React.RefObject<HTMLDivElement | null>;
   round: number;
   completed: number;
@@ -471,22 +534,21 @@ function TheTable({
   const cy = H / 2;
   const rx = 280;
   const ry = 120;
-  // Seat positions around ellipse (top, right, bottom, left)
-  const angles = [Math.PI * 1.5, 0, Math.PI * 0.5, Math.PI]; // chair, strategist, contrarian, inspector positions
+  const angles = [Math.PI * 1.5, 0, Math.PI * 0.5, Math.PI];
   const positions = angles.map((a) => ({
     x: cx + rx * Math.cos(a),
     y: cy + ry * Math.sin(a),
   }));
 
-  // Consensus ring: outer ellipse path with dasharray progress
   const ringRx = rx + 46;
   const ringRy = ry + 46;
-  const ringPerim = ellipsePerimeter(ringRx, ringRy);
+  const showSegments = segments.some((s) => s !== "empty") || runStatus === "consensus" || runStatus === "chair_ruled";
+  const chairRuled = runStatus === "chair_ruled";
 
   return (
     <div className="relative" ref={consensusRingRef}>
       <svg viewBox={`0 0 ${W} ${H + 140}`} className="w-full">
-        {/* Consensus ring */}
+        {/* Consensus ring — base */}
         <ellipse
           cx={cx}
           cy={cy}
@@ -496,19 +558,55 @@ function TheTable({
           stroke="hsl(40 15% 24% / 0.5)"
           strokeWidth="1.5"
         />
-        <ellipse
-          cx={cx}
-          cy={cy}
-          rx={ringRx}
-          ry={ringRy}
-          fill="none"
-          stroke="hsl(38 65% 55%)"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeDasharray={`${ringPerim * consensusFill} ${ringPerim}`}
-          transform={`rotate(-90 ${cx} ${cy})`}
-          style={{ transition: "stroke-dasharray 400ms ease-out" }}
-        />
+
+        {/* Fallback continuous progress arc (pre-vote fill from Round 1) */}
+        {!showSegments && (
+          <ellipse
+            cx={cx}
+            cy={cy}
+            rx={ringRx}
+            ry={ringRy}
+            fill="none"
+            stroke="hsl(38 65% 55%)"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeDasharray={`${ellipsePerimeter(ringRx, ringRy) * consensusFill} ${ellipsePerimeter(ringRx, ringRy)}`}
+            transform={`rotate(-90 ${cx} ${cy})`}
+            style={{ transition: "stroke-dasharray 400ms ease-out" }}
+          />
+        )}
+
+        {/* 24 segments (6 rubric × 4 seats) */}
+        {showSegments && segments.map((seg, i) => {
+          const t0 = (i / 24) * Math.PI * 2 - Math.PI / 2;
+          const t1 = ((i + 1) / 24) * Math.PI * 2 - Math.PI / 2;
+          const mid = (t0 + t1) / 2;
+          const x0 = cx + ringRx * Math.cos(t0);
+          const y0 = cy + ringRy * Math.sin(t0);
+          const x1 = cx + ringRx * Math.cos(t1);
+          const y1 = cy + ringRy * Math.sin(t1);
+          const stroke = seg === "brass"
+            ? (chairRuled ? "hsl(38 45% 45%)" : "hsl(38 65% 55%)")
+            : seg === "oxblood"
+              ? "hsl(8 60% 55%)"
+              : "transparent";
+          if (seg === "empty") return null;
+          // Approx arc (small segment) — line segment is close enough at 24 divisions on a shallow ellipse.
+          const _mid = mid; void _mid;
+          return (
+            <path
+              key={i}
+              d={`M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${ringRx} ${ringRy} 0 0 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`}
+              fill="none"
+              stroke={stroke}
+              strokeWidth={seg === "oxblood" ? 2.5 : 2}
+              strokeLinecap="round"
+              opacity={chairRuled ? 0.65 : 1}
+              style={{ transition: "opacity 300ms ease-out" }}
+            />
+          );
+        })}
+
 
         {/* The elliptical table */}
         <defs>
@@ -620,6 +718,7 @@ function SeatAvatar({ seat, state, size = 64 }: { seat: SeatView; state: string;
 function RollCall({
   seats,
   consensusFill,
+  runStatus,
   round,
   completed,
   total,
@@ -627,11 +726,14 @@ function RollCall({
 }: {
   seats: SeatView[];
   consensusFill: number;
+  runStatus: string | undefined;
   round: number;
   completed: number;
   total: number;
   consensusRingRef: React.RefObject<HTMLDivElement | null>;
 }) {
+  const chairRuled = runStatus === "chair_ruled";
+  void chairRuled;
   const r = 14;
   const c = 2 * Math.PI * r;
   return (
@@ -686,6 +788,17 @@ function RollCall({
 
 // ============================== Transcript ==============================
 
+function stepRoundLabel(step: Step): string {
+  if (step.step_key.startsWith("r1_")) return "Round 1 — Independent drafts";
+  if (step.step_key.startsWith("r2_exam_")) return "Round 2 — Cross-examination";
+  const loopMatch = /_loop(\d+)/.exec(step.step_key);
+  const loop = loopMatch ? Number(loopMatch[1]) : 0;
+  if (step.step_key.startsWith("r3_synthesis_")) return `Round 3 — Synthesis (loop ${loop})`;
+  if (step.step_key.startsWith("r4_vote_")) return `Round 4 — The vote (loop ${loop})`;
+  if (step.step_key === "r_final_ruling_chair") return "Final ruling — Chair rules";
+  return `Round ${step.round}`;
+}
+
 function TranscriptCard({
   step,
   isOwner,
@@ -696,8 +809,7 @@ function TranscriptCard({
   onRetry: () => void;
 }) {
   const meta = SEAT_META[step.seat];
-  const roundLabel =
-    step.round === 1 ? "Round 1 — Independent drafts" : `Round ${step.round}`;
+  const roundLabel = stepRoundLabel(step);
   const failed = step.status === "failed";
   return (
     <div
@@ -745,17 +857,220 @@ function TranscriptCard({
               </button>
             )}
           </div>
-        ) : step.response_text ? (
-          <div
-            className="prose prose-invert max-w-[65ch] text-sm leading-[1.7] text-foreground/90"
-            style={{ fontFamily: "var(--font-sans)" }}
-          >
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{step.response_text}</ReactMarkdown>
-          </div>
         ) : (
-          <p className="text-sm text-muted-foreground">No output.</p>
+          <StepBody step={step} />
         )}
       </div>
+    </div>
+  );
+}
+
+function StepBody({ step }: { step: Step }) {
+  const json = step.response_json;
+  const invalid = json && typeof json === "object" && json.invalid === true;
+
+  if (invalid) {
+    return (
+      <div className="rounded-md border border-[hsl(8_60%_45%/0.35)] bg-[hsl(8_60%_45%/0.06)] p-3 font-mono text-[11px] text-[hsl(8_60%_75%)]">
+        Response failed structured validation. Raw output preserved.
+      </div>
+    );
+  }
+
+  if (step.step_key.startsWith("r2_exam_") && json) {
+    return <Round2Body json={json} />;
+  }
+  if (step.step_key.startsWith("r3_synthesis_") && json) {
+    return <Round3Body json={json} />;
+  }
+  if (step.step_key.startsWith("r4_vote_") && json) {
+    return <Round4Body json={json} />;
+  }
+  if (step.step_key === "r_final_ruling_chair" && json) {
+    return <FinalRulingBody json={json} />;
+  }
+
+  if (step.response_text) {
+    return (
+      <div className="prose prose-invert max-w-[65ch] text-sm leading-[1.7] text-foreground/90">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{step.response_text}</ReactMarkdown>
+      </div>
+    );
+  }
+  return <p className="text-sm text-muted-foreground">No output.</p>;
+}
+
+function severityStyle(sev: string) {
+  if (sev === "blocking") return "border-l-[hsl(8_60%_55%)] text-[hsl(8_60%_80%)]";
+  if (sev === "major") return "border-l-[hsl(38_65%_55%)] text-[hsl(38_65%_75%)]";
+  return "border-l-[hsl(40_10%_45%)] text-muted-foreground";
+}
+
+function Round2Body({ json }: { json: any }) {
+  const objections: any[] = Array.isArray(json.objections) ? json.objections : [];
+  const steals: any[] = Array.isArray(json.steals) ? json.steals : [];
+  return (
+    <div className="space-y-3">
+      <div className="space-y-2">
+        {objections.map((o, i) => (
+          <div
+            key={i}
+            className={`rounded-md border border-border border-l-2 bg-surface-2/40 px-3 py-2 text-sm ${severityStyle(String(o.severity ?? ""))}`}
+          >
+            <p className="font-mono text-[10px] uppercase tracking-widest">
+              → {String(o.target_seat ?? "?")} · {String(o.severity ?? "minor")}
+            </p>
+            <p className="mt-1 text-foreground/90">{String(o.text ?? "")}</p>
+          </div>
+        ))}
+      </div>
+      {steals.length > 0 && (
+        <div className="space-y-1">
+          {steals.map((s, i) => (
+            <p key={i} className="font-mono text-[11px] text-[hsl(160_45%_62%)]">
+              STEAL: <span className="text-foreground/90">{String(s.idea ?? "")}</span>
+              <span className="text-muted-foreground"> — from {String(s.from_seat ?? "?")}</span>
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Round3Body({ json }: { json: any }) {
+  const md = String(json.candidate_md ?? "");
+  const log: any[] = Array.isArray(json.decision_log) ? json.decision_log : [];
+  const steals: any[] = Array.isArray(json.steals_adopted) ? json.steals_adopted : [];
+  return (
+    <div className="space-y-4">
+      <div className="prose prose-invert max-w-[65ch] text-sm leading-[1.7] text-foreground/90">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
+      </div>
+      {steals.length > 0 && (
+        <div className="space-y-1">
+          {steals.map((s, i) => (
+            <p key={i} className="font-mono text-[11px] text-[hsl(160_45%_62%)]">
+              STEAL ADOPTED: <span className="text-foreground/90">{String(s)}</span>
+            </p>
+          ))}
+        </div>
+      )}
+      <details className="rounded-md border border-border bg-surface-2/30 px-3 py-2 text-sm">
+        <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+          Decision log ({log.length})
+        </summary>
+        <div className="mt-3 space-y-2">
+          {log.map((d, i) => (
+            <div key={i} className="rounded border border-border/60 bg-surface-1 p-2">
+              <p className="font-mono text-[10px] uppercase tracking-widest">
+                {String(d.from_seat ?? "?")} ·{" "}
+                <span
+                  className={
+                    d.decision === "accepted"
+                      ? "text-[hsl(160_45%_62%)]"
+                      : "text-[hsl(8_60%_70%)]"
+                  }
+                >
+                  {String(d.decision ?? "?")}
+                </span>
+              </p>
+              <p className="mt-1 text-foreground/90">{String(d.objection ?? "")}</p>
+              {d.reason && (
+                <p className="mt-1 text-xs text-muted-foreground">{String(d.reason)}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function Round4Body({ json }: { json: any }) {
+  const scores = (json.scores ?? {}) as Record<string, number>;
+  const blocking: string[] = Array.isArray(json.blocking_objections) ? json.blocking_objections : [];
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+        {RUBRIC.map((k) => {
+          const n = scores[k];
+          const good = typeof n === "number" && n >= 8;
+          return (
+            <div
+              key={k}
+              className={`flex items-center justify-between rounded-md border px-3 py-2 font-mono text-[11px] ${
+                good
+                  ? "border-[hsl(160_45%_42%/0.4)] text-[hsl(160_45%_62%)]"
+                  : "border-[hsl(8_60%_45%/0.4)] text-[hsl(8_60%_70%)]"
+              }`}
+            >
+              <span className="uppercase tracking-widest text-muted-foreground">
+                {k.replace(/_/g, " ")}
+              </span>
+              <span className="text-lg text-foreground">{typeof n === "number" ? n : "—"}</span>
+            </div>
+          );
+        })}
+      </div>
+      {blocking.length > 0 && (
+        <div className="space-y-1">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-[hsl(8_60%_70%)]">
+            Blocking objections
+          </p>
+          {blocking.map((b, i) => (
+            <p key={i} className="text-sm text-foreground/90">
+              — {b}
+            </p>
+          ))}
+        </div>
+      )}
+      {json.comment && (
+        <p className="text-sm italic text-muted-foreground">{String(json.comment)}</p>
+      )}
+    </div>
+  );
+}
+
+function FinalRulingBody({ json }: { json: any }) {
+  const md = String(json.final_md ?? "");
+  const note = String(json.ruling_note ?? "");
+  const ledger: any[] = Array.isArray(json.dissent_ledger) ? json.dissent_ledger : [];
+  return (
+    <div className="space-y-4">
+      {note && (
+        <div className="rounded-md border border-[hsl(38_65%_55%/0.35)] bg-[hsl(38_65%_55%/0.06)] p-3 text-sm text-foreground/90">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-[hsl(38_65%_70%)]">
+            Chair's ruling
+          </p>
+          <p className="mt-1">{note}</p>
+        </div>
+      )}
+      <div className="prose prose-invert max-w-[65ch] text-sm leading-[1.7] text-foreground/90">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
+      </div>
+      {ledger.length > 0 && (
+        <details className="rounded-md border border-border bg-surface-2/30 px-3 py-2 text-sm">
+          <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+            Dissent ledger ({ledger.length})
+          </summary>
+          <div className="mt-3 space-y-2">
+            {ledger.map((d, i) => (
+              <div key={i} className="rounded border border-border/60 bg-surface-1 p-2">
+                <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                  {String(d.seat ?? "?")}
+                </p>
+                <p className="mt-1 text-foreground/90">{String(d.objection ?? "")}</p>
+                {d.chair_response && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Chair: {String(d.chair_response)}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   );
 }
@@ -801,7 +1116,7 @@ function StatusPill({ run }: { run: Run | null }) {
       label: "In session",
       cls: "border-[hsl(38_65%_55%/0.4)] text-[hsl(38_65%_70%)]",
     },
-    paused: { label: "Awaiting protocol", cls: "border-border text-muted-foreground" },
+    paused: { label: "Paused", cls: "border-border text-muted-foreground" },
     paused_budget: {
       label: "Paused · budget",
       cls: "border-[hsl(8_60%_45%/0.4)] text-[hsl(8_60%_65%)]",
@@ -883,7 +1198,7 @@ function RunControls({
       </button>
     );
   }
-  if (run.status === "paused_budget" || (run.status === "paused" && run.consensus?.awaiting !== "batch6_protocol")) {
+  if (run.status === "paused_budget" || run.status === "paused") {
     return (
       <button
         onClick={onResume}
