@@ -354,5 +354,34 @@ Deno.serve(async (req) => {
     return j(200, { ok: true });
   }
 
+  if (action === "retry_step") {
+    const runId: string = body?.run_id;
+    const stepId: string = body?.step_id;
+    if (!runId || !stepId) return j(400, { error: "Missing run_id or step_id" });
+    const { data: run } = await admin
+      .from("boardroom_runs")
+      .select("id, user_id, status")
+      .eq("id", runId)
+      .maybeSingle();
+    if (!run || run.user_id !== userId) return j(404, { error: "Run not found" });
+    const { data: step } = await admin
+      .from("run_steps")
+      .select("id, status")
+      .eq("id", stepId)
+      .eq("run_id", runId)
+      .maybeSingle();
+    if (!step) return j(404, { error: "Step not found" });
+    if (step.status !== "failed") return j(400, { error: "Only failed steps can be retried" });
+    await admin
+      .from("run_steps")
+      .update({ status: "queued", error: null, completed_at: null })
+      .eq("id", stepId);
+    if (run.status === "failed") {
+      await admin.from("boardroom_runs").update({ status: "running", error: null }).eq("id", runId);
+    }
+    fireSelfTick();
+    return j(200, { ok: true });
+  }
+
   return j(400, { error: "Unknown action" });
 });

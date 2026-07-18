@@ -209,7 +209,7 @@ function IntakePage() {
         projectName={projectName}
         verdict={verdict}
         scores={scores}
-        onEnterBoardroom={() => navigate({ to: "/boardroom" })}
+        onEnterBoardroom={() => navigate({ to: "/boardroom/$projectId", params: { projectId } })}
         onRevise={reviseIdea}
       />
     );

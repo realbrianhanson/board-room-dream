@@ -22,6 +22,7 @@ import { Route as AuthenticatedBoardroomRouteImport } from './routes/_authentica
 import { Route as AuthenticatedAuditsRouteImport } from './routes/_authenticated/audits'
 import { Route as AuthenticatedIntakeIntakeIdRouteImport } from './routes/_authenticated/intake.$intakeId'
 import { Route as AuthenticatedDebugRunsRouteImport } from './routes/_authenticated/debug.runs'
+import { Route as AuthenticatedBoardroomProjectIdRouteImport } from './routes/_authenticated/boardroom.$projectId'
 
 const AuthRoute = AuthRouteImport.update({
   id: '/auth',
@@ -88,18 +89,25 @@ const AuthenticatedDebugRunsRoute = AuthenticatedDebugRunsRouteImport.update({
   path: '/debug/runs',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedBoardroomProjectIdRoute =
+  AuthenticatedBoardroomProjectIdRouteImport.update({
+    id: '/$projectId',
+    path: '/$projectId',
+    getParentRoute: () => AuthenticatedBoardroomRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
   '/audits': typeof AuthenticatedAuditsRoute
-  '/boardroom': typeof AuthenticatedBoardroomRoute
+  '/boardroom': typeof AuthenticatedBoardroomRouteWithChildren
   '/cohort': typeof AuthenticatedCohortRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/design': typeof AuthenticatedDesignRoute
   '/onboarding': typeof AuthenticatedOnboardingRoute
   '/runway': typeof AuthenticatedRunwayRoute
   '/settings': typeof AuthenticatedSettingsRoute
+  '/boardroom/$projectId': typeof AuthenticatedBoardroomProjectIdRoute
   '/debug/runs': typeof AuthenticatedDebugRunsRoute
   '/intake/$intakeId': typeof AuthenticatedIntakeIntakeIdRoute
 }
@@ -107,13 +115,14 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
   '/audits': typeof AuthenticatedAuditsRoute
-  '/boardroom': typeof AuthenticatedBoardroomRoute
+  '/boardroom': typeof AuthenticatedBoardroomRouteWithChildren
   '/cohort': typeof AuthenticatedCohortRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/design': typeof AuthenticatedDesignRoute
   '/onboarding': typeof AuthenticatedOnboardingRoute
   '/runway': typeof AuthenticatedRunwayRoute
   '/settings': typeof AuthenticatedSettingsRoute
+  '/boardroom/$projectId': typeof AuthenticatedBoardroomProjectIdRoute
   '/debug/runs': typeof AuthenticatedDebugRunsRoute
   '/intake/$intakeId': typeof AuthenticatedIntakeIntakeIdRoute
 }
@@ -123,13 +132,14 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
   '/auth': typeof AuthRoute
   '/_authenticated/audits': typeof AuthenticatedAuditsRoute
-  '/_authenticated/boardroom': typeof AuthenticatedBoardroomRoute
+  '/_authenticated/boardroom': typeof AuthenticatedBoardroomRouteWithChildren
   '/_authenticated/cohort': typeof AuthenticatedCohortRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/_authenticated/design': typeof AuthenticatedDesignRoute
   '/_authenticated/onboarding': typeof AuthenticatedOnboardingRoute
   '/_authenticated/runway': typeof AuthenticatedRunwayRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
+  '/_authenticated/boardroom/$projectId': typeof AuthenticatedBoardroomProjectIdRoute
   '/_authenticated/debug/runs': typeof AuthenticatedDebugRunsRoute
   '/_authenticated/intake/$intakeId': typeof AuthenticatedIntakeIntakeIdRoute
 }
@@ -146,6 +156,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/runway'
     | '/settings'
+    | '/boardroom/$projectId'
     | '/debug/runs'
     | '/intake/$intakeId'
   fileRoutesByTo: FileRoutesByTo
@@ -160,6 +171,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/runway'
     | '/settings'
+    | '/boardroom/$projectId'
     | '/debug/runs'
     | '/intake/$intakeId'
   id:
@@ -175,6 +187,7 @@ export interface FileRouteTypes {
     | '/_authenticated/onboarding'
     | '/_authenticated/runway'
     | '/_authenticated/settings'
+    | '/_authenticated/boardroom/$projectId'
     | '/_authenticated/debug/runs'
     | '/_authenticated/intake/$intakeId'
   fileRoutesById: FileRoutesById
@@ -278,12 +291,33 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDebugRunsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/boardroom/$projectId': {
+      id: '/_authenticated/boardroom/$projectId'
+      path: '/$projectId'
+      fullPath: '/boardroom/$projectId'
+      preLoaderRoute: typeof AuthenticatedBoardroomProjectIdRouteImport
+      parentRoute: typeof AuthenticatedBoardroomRoute
+    }
   }
 }
 
+interface AuthenticatedBoardroomRouteChildren {
+  AuthenticatedBoardroomProjectIdRoute: typeof AuthenticatedBoardroomProjectIdRoute
+}
+
+const AuthenticatedBoardroomRouteChildren: AuthenticatedBoardroomRouteChildren =
+  {
+    AuthenticatedBoardroomProjectIdRoute: AuthenticatedBoardroomProjectIdRoute,
+  }
+
+const AuthenticatedBoardroomRouteWithChildren =
+  AuthenticatedBoardroomRoute._addFileChildren(
+    AuthenticatedBoardroomRouteChildren,
+  )
+
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedAuditsRoute: typeof AuthenticatedAuditsRoute
-  AuthenticatedBoardroomRoute: typeof AuthenticatedBoardroomRoute
+  AuthenticatedBoardroomRoute: typeof AuthenticatedBoardroomRouteWithChildren
   AuthenticatedCohortRoute: typeof AuthenticatedCohortRoute
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
   AuthenticatedDesignRoute: typeof AuthenticatedDesignRoute
@@ -296,7 +330,7 @@ interface AuthenticatedRouteRouteChildren {
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedAuditsRoute: AuthenticatedAuditsRoute,
-  AuthenticatedBoardroomRoute: AuthenticatedBoardroomRoute,
+  AuthenticatedBoardroomRoute: AuthenticatedBoardroomRouteWithChildren,
   AuthenticatedCohortRoute: AuthenticatedCohortRoute,
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
   AuthenticatedDesignRoute: AuthenticatedDesignRoute,
