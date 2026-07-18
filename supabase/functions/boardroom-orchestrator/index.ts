@@ -1227,7 +1227,7 @@ Deno.serve(async (req) => {
     const kind: string = body?.kind;
     const changeRequestId: string | undefined = body?.change_request_id;
     if (!projectId || !kind) return j(400, { error: "Missing project_id or kind" });
-    if (!["test", "plan", "features", "design", "change_request", "audit"].includes(kind)) {
+    if (!["test", "plan", "features", "design", "change_request", "audit", "batches"].includes(kind)) {
       return j(400, { error: "Invalid kind" });
     }
     const { data: project } = await admin
@@ -1237,9 +1237,16 @@ Deno.serve(async (req) => {
       .maybeSingle();
     if (!project || project.user_id !== userId) return j(404, { error: "Project not found" });
 
-    if (kind === "design") {
+    if (kind === "design" || kind === "batches") {
       const locked = await loadLockedPlan(admin, projectId);
-      if (!locked) return j(400, { error: "The board locks the plan before it debates the look." });
+      if (!locked) return j(400, { error: kind === "design" ? "The board locks the plan before it debates the look." : "The board locks the plan before it sequences the build." });
+    }
+    if (kind === "batches") {
+      const { count } = await admin
+        .from("batches")
+        .select("id", { count: "exact", head: true })
+        .eq("project_id", projectId);
+      if ((count ?? 0) > 0) return j(400, { error: "This project already has a build sequence." });
     }
 
     let consensusMeta: any = null;
