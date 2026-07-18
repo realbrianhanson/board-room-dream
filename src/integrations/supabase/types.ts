@@ -130,6 +130,64 @@ export type Database = {
           },
         ]
       }
+      change_requests: {
+        Row: {
+          board_verdict: Json | null
+          created_at: string
+          description: string
+          id: string
+          plan_version_id: string | null
+          project_id: string
+          run_id: string | null
+          status: string
+          user_id: string
+        }
+        Insert: {
+          board_verdict?: Json | null
+          created_at?: string
+          description: string
+          id?: string
+          plan_version_id?: string | null
+          project_id: string
+          run_id?: string | null
+          status?: string
+          user_id: string
+        }
+        Update: {
+          board_verdict?: Json | null
+          created_at?: string
+          description?: string
+          id?: string
+          plan_version_id?: string | null
+          project_id?: string
+          run_id?: string | null
+          status?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "change_requests_plan_version_id_fkey"
+            columns: ["plan_version_id"]
+            isOneToOne: false
+            referencedRelation: "plan_versions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "change_requests_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "change_requests_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "boardroom_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       cohorts: {
         Row: {
           id: string
@@ -278,6 +336,66 @@ export type Database = {
           use_latest_alias?: boolean
         }
         Relationships: []
+      }
+      plan_versions: {
+        Row: {
+          content_md: string
+          decision_log: Json | null
+          dissent_ledger: Json | null
+          features: Json | null
+          id: string
+          is_chair_ruled: boolean
+          kind: string
+          locked_at: string
+          project_id: string
+          source_run_id: string | null
+          user_id: string
+          version: number
+        }
+        Insert: {
+          content_md: string
+          decision_log?: Json | null
+          dissent_ledger?: Json | null
+          features?: Json | null
+          id?: string
+          is_chair_ruled?: boolean
+          kind?: string
+          locked_at?: string
+          project_id: string
+          source_run_id?: string | null
+          user_id: string
+          version: number
+        }
+        Update: {
+          content_md?: string
+          decision_log?: Json | null
+          dissent_ledger?: Json | null
+          features?: Json | null
+          id?: string
+          is_chair_ruled?: boolean
+          kind?: string
+          locked_at?: string
+          project_id?: string
+          source_run_id?: string | null
+          user_id?: string
+          version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "plan_versions_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "plan_versions_source_run_id_fkey"
+            columns: ["source_run_id"]
+            isOneToOne: false
+            referencedRelation: "boardroom_runs"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       profiles: {
         Row: {
