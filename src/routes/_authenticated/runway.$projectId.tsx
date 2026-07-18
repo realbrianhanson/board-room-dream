@@ -8,9 +8,13 @@ import {
   Check,
   Copy,
   ExternalLink,
+  Gavel,
+  Github,
   Lock,
   Palette,
   Rocket,
+  ScrollText,
+  ShieldCheck,
   SkipForward,
   X,
 } from "lucide-react";
@@ -18,6 +22,7 @@ import {
 export const Route = createFileRoute("/_authenticated/runway/$projectId")({
   component: RunwayPage,
 });
+
 
 type Project = {
   id: string;
