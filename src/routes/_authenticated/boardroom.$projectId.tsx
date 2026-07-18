@@ -224,7 +224,45 @@ function BoardroomProjectPage() {
 
   const completedR1 = steps.filter((s) => s.round === 1 && s.status === "completed").length;
   const totalR1 = Math.max(4, steps.filter((s) => s.round === 1).length || 4);
-  const consensusFill = run?.status === "consensus" ? 1 : completedR1 / totalR1;
+
+  // Consensus ring: 24 segments (6 rubric scores × 4 seats) from the latest Round-4 votes.
+  const segments = useMemo(() => {
+    const voteSteps = steps.filter(
+      (s) => s.round === 4 && s.status === "completed" && s.step_key.startsWith("r4_vote_"),
+    );
+    let latestLoop = -1;
+    for (const v of voteSteps) {
+      const m = /_loop(\d+)$/.exec(v.step_key);
+      if (m) latestLoop = Math.max(latestLoop, Number(m[1]));
+    }
+    const latest = voteSteps.filter((v) => v.step_key.endsWith(`_loop${latestLoop}`));
+    const bySeat = new Map<Seat, Step>();
+    for (const v of latest) bySeat.set(v.seat, v);
+    // 24 segments ordered [seat0×6 rubric, seat1×6, ...]
+    const out: Array<"empty" | "brass" | "oxblood"> = [];
+    for (const seat of SEAT_ORDER) {
+      const v = bySeat.get(seat);
+      const scores = v?.response_json?.scores as Record<string, number> | undefined;
+      for (const key of RUBRIC) {
+        if (!scores || typeof scores[key] !== "number") {
+          out.push("empty");
+        } else {
+          out.push(scores[key] >= 8 ? "brass" : "oxblood");
+        }
+      }
+    }
+    return out;
+  }, [steps]);
+
+  const roundOneFill = completedR1 / totalR1;
+  const votesFilled = segments.filter((s) => s !== "empty").length;
+  const votesFraction = votesFilled / 24;
+  const consensusFill =
+    run?.status === "consensus" || run?.status === "chair_ruled"
+      ? 1
+      : votesFilled > 0
+        ? votesFraction
+        : roundOneFill; // fall back to R1 progress before any votes exist
 
   async function convene() {
     if (!project) return;
