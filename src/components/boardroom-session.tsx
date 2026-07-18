@@ -65,6 +65,9 @@ export type BoardroomSessionProps = {
   showHeader?: boolean;
   /** Called after a run first becomes available. */
   onRunLoaded?: (run: SessionRun | null) => void;
+  /** When true, all mutation UI (convene, pause/resume, retry) is hidden regardless of ownership. */
+  readOnly?: boolean;
+
 };
 
 export function BoardroomSession(props: BoardroomSessionProps) {
