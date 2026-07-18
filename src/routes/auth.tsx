@@ -58,6 +58,26 @@ function AuthPage() {
     }
   }
 
+  async function handleForgotPassword() {
+    if (!email) {
+      setMessage({ tone: "error", text: "Enter your email above, then click Forgot password again." });
+      return;
+    }
+    setLoading(true);
+    setMessage(null);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin + "/reset-password",
+      });
+      if (error) throw error;
+      setMessage({ tone: "info", text: "Password reset link sent. Check your inbox." });
+    } catch (err) {
+      setMessage({ tone: "error", text: (err as Error).message });
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-background px-6 py-12">
       <div className="w-full max-w-md">
@@ -161,16 +181,30 @@ function AuthPage() {
           </form>
 
           {mode === "password" && (
-            <p className="mt-6 text-center text-xs text-muted-foreground">
-              {isSignup ? "Already have a seat?" : "New to the boardroom?"}{" "}
-              <button
-                type="button"
-                onClick={() => setIsSignup((v) => !v)}
-                className="text-primary transition-colors hover:brightness-125"
-              >
-                {isSignup ? "Sign in" : "Create an account"}
-              </button>
-            </p>
+            <>
+              {!isSignup && (
+                <div className="mt-4 text-center">
+                  <button
+                    type="button"
+                    onClick={handleForgotPassword}
+                    disabled={loading}
+                    className="text-xs text-muted-foreground transition-colors hover:text-primary disabled:opacity-60"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+              )}
+              <p className="mt-6 text-center text-xs text-muted-foreground">
+                {isSignup ? "Already have a seat?" : "New to the boardroom?"}{" "}
+                <button
+                  type="button"
+                  onClick={() => setIsSignup((v) => !v)}
+                  className="text-primary transition-colors hover:brightness-125"
+                >
+                  {isSignup ? "Sign in" : "Create an account"}
+                </button>
+              </p>
+            </>
           )}
         </div>
       </div>
