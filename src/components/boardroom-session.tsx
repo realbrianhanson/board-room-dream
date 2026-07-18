@@ -138,7 +138,7 @@ export function BoardroomSession(props: BoardroomSessionProps) {
         return;
       }
       setProject(proj);
-      setIsOwner(!!uid && uid === proj.user_id);
+      setIsOwner(!readOnly && !!uid && uid === proj.user_id);
 
       const { data: seatRows } = await supabase
         .from("model_registry")
