@@ -20,6 +20,7 @@ import { Route as AuthenticatedDashboardRouteImport } from './routes/_authentica
 import { Route as AuthenticatedCohortRouteImport } from './routes/_authenticated/cohort'
 import { Route as AuthenticatedBoardroomRouteImport } from './routes/_authenticated/boardroom'
 import { Route as AuthenticatedAuditsRouteImport } from './routes/_authenticated/audits'
+import { Route as AuthenticatedIntakeIntakeIdRouteImport } from './routes/_authenticated/intake.$intakeId'
 
 const AuthRoute = AuthRouteImport.update({
   id: '/auth',
@@ -75,6 +76,12 @@ const AuthenticatedAuditsRoute = AuthenticatedAuditsRouteImport.update({
   path: '/audits',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedIntakeIntakeIdRoute =
+  AuthenticatedIntakeIntakeIdRouteImport.update({
+    id: '/intake/$intakeId',
+    path: '/intake/$intakeId',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -87,6 +94,7 @@ export interface FileRoutesByFullPath {
   '/onboarding': typeof AuthenticatedOnboardingRoute
   '/runway': typeof AuthenticatedRunwayRoute
   '/settings': typeof AuthenticatedSettingsRoute
+  '/intake/$intakeId': typeof AuthenticatedIntakeIntakeIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -99,6 +107,7 @@ export interface FileRoutesByTo {
   '/onboarding': typeof AuthenticatedOnboardingRoute
   '/runway': typeof AuthenticatedRunwayRoute
   '/settings': typeof AuthenticatedSettingsRoute
+  '/intake/$intakeId': typeof AuthenticatedIntakeIntakeIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -113,6 +122,7 @@ export interface FileRoutesById {
   '/_authenticated/onboarding': typeof AuthenticatedOnboardingRoute
   '/_authenticated/runway': typeof AuthenticatedRunwayRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
+  '/_authenticated/intake/$intakeId': typeof AuthenticatedIntakeIntakeIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -127,6 +137,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/runway'
     | '/settings'
+    | '/intake/$intakeId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -139,6 +150,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/runway'
     | '/settings'
+    | '/intake/$intakeId'
   id:
     | '__root__'
     | '/'
@@ -152,6 +164,7 @@ export interface FileRouteTypes {
     | '/_authenticated/onboarding'
     | '/_authenticated/runway'
     | '/_authenticated/settings'
+    | '/_authenticated/intake/$intakeId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -239,6 +252,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAuditsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/intake/$intakeId': {
+      id: '/_authenticated/intake/$intakeId'
+      path: '/intake/$intakeId'
+      fullPath: '/intake/$intakeId'
+      preLoaderRoute: typeof AuthenticatedIntakeIntakeIdRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
   }
 }
 
@@ -251,6 +271,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedOnboardingRoute: typeof AuthenticatedOnboardingRoute
   AuthenticatedRunwayRoute: typeof AuthenticatedRunwayRoute
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
+  AuthenticatedIntakeIntakeIdRoute: typeof AuthenticatedIntakeIntakeIdRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
@@ -262,6 +283,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedOnboardingRoute: AuthenticatedOnboardingRoute,
   AuthenticatedRunwayRoute: AuthenticatedRunwayRoute,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
+  AuthenticatedIntakeIntakeIdRoute: AuthenticatedIntakeIntakeIdRoute,
 }
 
 const AuthenticatedRouteRouteWithChildren =
