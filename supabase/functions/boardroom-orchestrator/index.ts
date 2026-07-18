@@ -228,15 +228,25 @@ Requirements: at least ONE objection targeting EACH of the three other seats, at
 
 async function queueRound3(admin: any, run: any, steps: any[], loop: number) {
   const intake = await loadIntake(admin, run.project_id);
-  const system = `Round 3 — Chair synthesis${loop > 0 ? ` (loop ${loop}, revising after a failed vote)` : ""}. You are the Chair. Weld the four drafts and the objections into ONE candidate plan.
-
-${loop > 0 ? "Revise ONLY the contested parts from the previous vote. Preserve agreed parts verbatim. " : ""}Return ONLY valid JSON matching this shape:
-{
+  const isDesign = run.kind === "design";
+  const plan = isDesign ? await loadLockedPlan(admin, run.project_id) : null;
+  const planShape = `{
   "candidate_md": "Full markdown plan: concept, target user, MVP features, data stored, cuts.",
   "decision_log": [ { "from_seat": "...", "objection": "...", "decision": "accepted"|"rejected", "reason": "..." } ],
   "steals_adopted": [ "..." ]
 }`;
-  const parts: string[] = [intakeBlock(intake), draftsBlock(steps), objectionsAndStealsBlock(steps)];
+  const designShape = `{
+  "candidate_md": "Full markdown design brief — a paste-ready design system prompt with these EXACT H2 sections in this exact order:\\n## Direction\\n## Tokens (CSS variables, HSL)\\n## Type\\n## Spacing & shape\\n## Signature element\\n## Motion\\n## Component rules",
+  "decision_log": [ { "from_seat": "...", "objection": "...", "decision": "accepted"|"rejected", "reason": "..." } ],
+  "steals_adopted": [ "..." ]
+}`;
+  const system = `Round 3 — Chair synthesis${loop > 0 ? ` (loop ${loop}, revising after a failed vote)` : ""}. You are the Chair. Weld the four ${isDesign ? "design directions" : "drafts"} and the objections into ONE candidate ${isDesign ? "design brief" : "plan"}.
+
+${loop > 0 ? "Revise ONLY the contested parts from the previous vote. Preserve agreed parts verbatim. " : ""}Return ONLY valid JSON matching this shape:
+${isDesign ? designShape : planShape}${isDesign ? "\n\nEvery H2 header must appear exactly as written. Be specific: exact HSL values, real font names, concrete component rules." : ""}`;
+  const parts: string[] = [intakeBlock(intake)];
+  if (isDesign && plan) parts.push(`LOCKED PLAN\n\n${plan.content_md ?? ""}\n\nPRD\n\n${plan.prd_md ?? "(none)"}`);
+  parts.push(draftsBlock(steps), objectionsAndStealsBlock(steps));
   if (loop > 0) parts.push(priorRoundFailureBlock(steps, loop - 1));
   const user = `${parts.join("\n\n")}\n\nProduce your JSON now.`;
   await admin.from("run_steps").insert({
