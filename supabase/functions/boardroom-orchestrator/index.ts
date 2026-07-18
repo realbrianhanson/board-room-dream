@@ -451,7 +451,7 @@ async function createInitialSteps(admin: any, run: any) {
     });
     return;
   }
-  if (run.kind === "plan") {
+  if (run.kind === "plan" || run.kind === "design") {
     await queueRound1(admin, run);
     return;
   }
