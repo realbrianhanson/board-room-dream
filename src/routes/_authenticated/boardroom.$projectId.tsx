@@ -511,6 +511,8 @@ function seatGlowState(step: Step | undefined) {
 function TheTable({
   seats,
   consensusFill,
+  segments,
+  runStatus,
   consensusRingRef,
   round,
   completed,
@@ -518,6 +520,8 @@ function TheTable({
 }: {
   seats: SeatView[];
   consensusFill: number;
+  segments: Array<"empty" | "brass" | "oxblood">;
+  runStatus: string | undefined;
   consensusRingRef: React.RefObject<HTMLDivElement | null>;
   round: number;
   completed: number;
@@ -530,22 +534,21 @@ function TheTable({
   const cy = H / 2;
   const rx = 280;
   const ry = 120;
-  // Seat positions around ellipse (top, right, bottom, left)
-  const angles = [Math.PI * 1.5, 0, Math.PI * 0.5, Math.PI]; // chair, strategist, contrarian, inspector positions
+  const angles = [Math.PI * 1.5, 0, Math.PI * 0.5, Math.PI];
   const positions = angles.map((a) => ({
     x: cx + rx * Math.cos(a),
     y: cy + ry * Math.sin(a),
   }));
 
-  // Consensus ring: outer ellipse path with dasharray progress
   const ringRx = rx + 46;
   const ringRy = ry + 46;
-  const ringPerim = ellipsePerimeter(ringRx, ringRy);
+  const showSegments = segments.some((s) => s !== "empty") || runStatus === "consensus" || runStatus === "chair_ruled";
+  const chairRuled = runStatus === "chair_ruled";
 
   return (
     <div className="relative" ref={consensusRingRef}>
       <svg viewBox={`0 0 ${W} ${H + 140}`} className="w-full">
-        {/* Consensus ring */}
+        {/* Consensus ring — base */}
         <ellipse
           cx={cx}
           cy={cy}
@@ -555,19 +558,55 @@ function TheTable({
           stroke="hsl(40 15% 24% / 0.5)"
           strokeWidth="1.5"
         />
-        <ellipse
-          cx={cx}
-          cy={cy}
-          rx={ringRx}
-          ry={ringRy}
-          fill="none"
-          stroke="hsl(38 65% 55%)"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          strokeDasharray={`${ringPerim * consensusFill} ${ringPerim}`}
-          transform={`rotate(-90 ${cx} ${cy})`}
-          style={{ transition: "stroke-dasharray 400ms ease-out" }}
-        />
+
+        {/* Fallback continuous progress arc (pre-vote fill from Round 1) */}
+        {!showSegments && (
+          <ellipse
+            cx={cx}
+            cy={cy}
+            rx={ringRx}
+            ry={ringRy}
+            fill="none"
+            stroke="hsl(38 65% 55%)"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeDasharray={`${ellipsePerimeter(ringRx, ringRy) * consensusFill} ${ellipsePerimeter(ringRx, ringRy)}`}
+            transform={`rotate(-90 ${cx} ${cy})`}
+            style={{ transition: "stroke-dasharray 400ms ease-out" }}
+          />
+        )}
+
+        {/* 24 segments (6 rubric × 4 seats) */}
+        {showSegments && segments.map((seg, i) => {
+          const t0 = (i / 24) * Math.PI * 2 - Math.PI / 2;
+          const t1 = ((i + 1) / 24) * Math.PI * 2 - Math.PI / 2;
+          const mid = (t0 + t1) / 2;
+          const x0 = cx + ringRx * Math.cos(t0);
+          const y0 = cy + ringRy * Math.sin(t0);
+          const x1 = cx + ringRx * Math.cos(t1);
+          const y1 = cy + ringRy * Math.sin(t1);
+          const stroke = seg === "brass"
+            ? (chairRuled ? "hsl(38 45% 45%)" : "hsl(38 65% 55%)")
+            : seg === "oxblood"
+              ? "hsl(8 60% 55%)"
+              : "transparent";
+          if (seg === "empty") return null;
+          // Approx arc (small segment) — line segment is close enough at 24 divisions on a shallow ellipse.
+          const _mid = mid; void _mid;
+          return (
+            <path
+              key={i}
+              d={`M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${ringRx} ${ringRy} 0 0 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`}
+              fill="none"
+              stroke={stroke}
+              strokeWidth={seg === "oxblood" ? 2.5 : 2}
+              strokeLinecap="round"
+              opacity={chairRuled ? 0.65 : 1}
+              style={{ transition: "opacity 300ms ease-out" }}
+            />
+          );
+        })}
+
 
         {/* The elliptical table */}
         <defs>
