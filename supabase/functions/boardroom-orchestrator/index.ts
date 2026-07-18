@@ -1030,6 +1030,19 @@ async function afterStepComplete(admin: any, runIn: any) {
     return;
   }
 
+  if (run.kind === "batches") {
+    const step = steps.find((x: any) => x.step_key === "batches_chair");
+    if (step?.status === "completed" && step.response_json && !step.response_json.invalid) {
+      await finalizeBatches(admin, run, step.response_json.batches ?? []);
+    } else {
+      await admin
+        .from("boardroom_runs")
+        .update({ status: "failed", error: step?.response_json?.validation_error ?? "batches_chair did not produce a valid response" })
+        .eq("id", run.id);
+    }
+    return;
+  }
+
   if (run.kind !== "plan" && run.kind !== "design") {
     await admin
       .from("boardroom_runs")
