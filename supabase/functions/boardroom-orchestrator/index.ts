@@ -781,6 +781,7 @@ async function executeStep(admin: any, run: any, step: any) {
       let parsed: any = null;
       let content = "";
       let usage = { tokensIn: 0, tokensOut: 0, costUsd: 0 };
+      let fallbackMeta: any = null;
       let validationAttempt = 0;
 
       // Structured JSON path: one re-prompt on invalid.
@@ -793,6 +794,7 @@ async function executeStep(admin: any, run: any, step: any) {
         });
         content = result.content;
         usage = { tokensIn: result.tokensIn, tokensOut: result.tokensOut, costUsd: result.costUsd };
+        if (result.fallback) fallbackMeta = result.fallback;
         if (!jsonMode) break;
         let candidate: any;
         try {
@@ -806,7 +808,6 @@ async function executeStep(admin: any, run: any, step: any) {
           break;
         }
         if (validationAttempt >= 1) {
-          // Give up, store invalid marker but continue the run
           parsed = { invalid: true, raw: content, validation_error: err };
           break;
         }
@@ -819,6 +820,11 @@ async function executeStep(admin: any, run: any, step: any) {
             content: `Your previous response failed validation: ${err}\nReturn ONLY the required JSON object, no prose, no code fences.`,
           },
         ];
+      }
+
+      if (fallbackMeta) {
+        if (!parsed || typeof parsed !== "object") parsed = {};
+        parsed._meta = { ...(parsed._meta ?? {}), fallback: fallbackMeta };
       }
 
       await admin
@@ -835,6 +841,19 @@ async function executeStep(admin: any, run: any, step: any) {
         .eq("id", step.id);
       return;
     } catch (e) {
+      if (e instanceof DailyCapExceeded) {
+        await admin.from("run_steps").update({ status: "queued", error: "daily_cap" }).eq("id", step.id);
+        await admin.from("boardroom_runs").update({ status: "paused_budget" }).eq("id", run.id);
+        if (run.project_id && run.user_id) {
+          await insertAlert(admin, {
+            user_id: run.user_id,
+            project_id: run.project_id,
+            kind: "spend_cap",
+            detail: { scope: "daily", cap_usd: e.cap, spent_usd: e.spent, source: e.scope },
+          });
+        }
+        return;
+      }
       if (e instanceof BudgetExceeded) {
         await admin.from("run_steps").update({ status: "queued", error: "budget" }).eq("id", step.id);
         await admin.from("boardroom_runs").update({ status: "paused_budget" }).eq("id", run.id);
@@ -843,7 +862,7 @@ async function executeStep(admin: any, run: any, step: any) {
             user_id: run.user_id,
             project_id: run.project_id,
             kind: "spend_cap",
-            detail: { run_kind: run.kind, spent_usd: Number(run.spent_usd ?? 0), budget_usd: Number(run.budget_usd ?? 0) },
+            detail: { scope: "run", run_kind: run.kind, spent_usd: Number(run.spent_usd ?? 0), budget_usd: Number(run.budget_usd ?? 0) },
           });
         }
         return;
