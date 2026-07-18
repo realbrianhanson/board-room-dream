@@ -656,7 +656,7 @@ function checkConsensus(voteSteps: any[]): { pass: boolean; scores: any } {
   return { pass, scores: scoreSets };
 }
 
-async function lockPlan(
+async function lockPlanAndQueueBlueprint(
   admin: any,
   run: any,
   steps: any[],
@@ -682,12 +682,10 @@ async function lockPlan(
     contentMd = String(final?.response_json?.final_md ?? final?.response_text ?? "");
     dissentLedger = final?.response_json?.dissent_ledger ?? null;
     isChairRuled = true;
-    // Include ruling note into decision log for provenance
     if (final?.response_json?.ruling_note) {
       decisionLog = [{ from_seat: "chair", decision: "ruled", reason: final.response_json.ruling_note }];
     }
   } else {
-    // Consensus: use latest r3 candidate_md and merge decision logs from all loops
     const allR3 = steps
       .filter((x) => x.step_key.startsWith("r3_synthesis_chair_loop") && x.status === "completed")
       .sort((a, b) => a.step_key.localeCompare(b.step_key));
@@ -707,32 +705,118 @@ async function lockPlan(
   const latestVotes = voteSteps.filter((v: any) => v.step_key.endsWith(`_loop${latestLoop}`));
   const { scores } = checkConsensus(latestVotes);
 
-  await admin.from("plan_versions").insert({
-    project_id: run.project_id,
-    user_id: run.user_id,
-    kind: "plan",
-    version: nextVersion,
-    content_md: contentMd,
-    decision_log: decisionLog,
-    dissent_ledger: dissentLedger,
-    is_chair_ruled: isChairRuled,
-    source_run_id: run.id,
-  });
+  const { data: inserted } = await admin
+    .from("plan_versions")
+    .insert({
+      project_id: run.project_id,
+      user_id: run.user_id,
+      kind: "plan",
+      version: nextVersion,
+      content_md: contentMd,
+      decision_log: decisionLog,
+      dissent_ledger: dissentLedger,
+      is_chair_ruled: isChairRuled,
+      source_run_id: run.id,
+    })
+    .select("id")
+    .single();
 
+  await admin.from("projects").update({ status: "locked" }).eq("id", run.project_id);
+
+  // Stash pending finalization on run.consensus so blueprint completion can finalize.
   await admin
     .from("boardroom_runs")
     .update({
-      status: mode,
-      consensus: scores,
+      round_no: 6,
+      consensus: {
+        pending_final_status: mode,
+        scores,
+        plan_version_id: inserted?.id ?? null,
+      },
       dissent_ledger: dissentLedger,
       updated_at: new Date().toISOString(),
     })
     .eq("id", run.id);
 
+  const intake = await loadIntake(admin, run.project_id);
+  const refreshed = await getRun(admin, run.id);
+  await queueBlueprint(admin, refreshed, contentMd, intake);
+}
+
+async function finalizeBlueprint(admin: any, run: any, steps: any[]) {
+  const bp = steps.find((x) => x.step_key === "r5_blueprint_chair" && x.status === "completed");
+  const meta = run.consensus ?? {};
+  const finalStatus = meta.pending_final_status === "chair_ruled" ? "chair_ruled" : "consensus";
+  const planVersionId = meta.plan_version_id;
+  const prdMd = String(bp?.response_json?.prd_md ?? "");
+  const features = Array.isArray(bp?.response_json?.features) ? bp!.response_json.features : [];
+  if (planVersionId && prdMd) {
+    await admin
+      .from("plan_versions")
+      .update({ prd_md: prdMd, features })
+      .eq("id", planVersionId);
+  }
   await admin
-    .from("projects")
-    .update({ status: "locked" })
-    .eq("id", run.project_id);
+    .from("boardroom_runs")
+    .update({
+      status: finalStatus,
+      consensus: meta.scores ?? {},
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", run.id);
+}
+
+async function finalizeChangeRequest(admin: any, run: any, steps: any[]) {
+  const crId = run.consensus?.change_request_id;
+  const verdictStep = steps.find((x) => x.step_key === "cr_verdict_chair" && x.status === "completed");
+  const v = verdictStep?.response_json ?? {};
+  const verdict = v.verdict === "approved" ? "approved" : "rejected";
+  let newVersionId: string | null = null;
+  if (verdict === "approved" && crId) {
+    const { data: existing } = await admin
+      .from("plan_versions")
+      .select("version")
+      .eq("project_id", run.project_id)
+      .eq("kind", "plan")
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const nextVersion = (existing?.version ?? 0) + 1;
+    const { data: inserted } = await admin
+      .from("plan_versions")
+      .insert({
+        project_id: run.project_id,
+        user_id: run.user_id,
+        kind: "plan",
+        version: nextVersion,
+        content_md: String(v.amended_plan_md ?? ""),
+        prd_md: String(v.amended_prd_md ?? ""),
+        features: Array.isArray(v.amended_features) ? v.amended_features : [],
+        decision_log: [{ change_request_id: crId, rationale: v.rationale ?? "" }],
+        source_run_id: run.id,
+      })
+      .select("id")
+      .single();
+    newVersionId = inserted?.id ?? null;
+  }
+  if (crId) {
+    await admin
+      .from("change_requests")
+      .update({
+        status: verdict,
+        board_verdict: { ...v, new_plan_version_id: newVersionId },
+        run_id: run.id,
+      })
+      .eq("id", crId);
+  }
+  await admin
+    .from("boardroom_runs")
+    .update({
+      status: "consensus",
+      consensus: { ...(run.consensus ?? {}), verdict, new_plan_version_id: newVersionId },
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", run.id);
 }
 
 // ============================== Round advancement ==============================
@@ -766,6 +850,36 @@ async function afterStepComplete(admin: any, runIn: any) {
       .from("boardroom_runs")
       .update({ status: "consensus", consensus: { test: true }, updated_at: new Date().toISOString() })
       .eq("id", run.id);
+    return;
+  }
+
+  if (run.kind === "change_request") {
+    // Two rounds: cr_exam_* then cr_verdict_chair
+    const examsDone = SEATS.every((s) =>
+      steps.some((x: any) => x.step_key === `cr_exam_${s}` && x.status === "completed"),
+    );
+    const verdictDone = steps.some((x: any) => x.step_key === "cr_verdict_chair" && x.status === "completed");
+    if (verdictDone) {
+      await finalizeChangeRequest(admin, run, steps);
+      return;
+    }
+    if (examsDone) {
+      const crId = run.consensus?.change_request_id;
+      const { data: cr } = crId
+        ? await admin.from("change_requests").select("*").eq("id", crId).maybeSingle()
+        : { data: null };
+      const { data: plan } = await admin
+        .from("plan_versions")
+        .select("content_md, prd_md")
+        .eq("project_id", run.project_id)
+        .eq("kind", "plan")
+        .order("version", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (cr) await queueChangeRequestVerdict(admin, run, cr, plan ?? {}, steps);
+      fireSelfTick();
+      return;
+    }
     return;
   }
 
@@ -816,7 +930,8 @@ async function afterStepComplete(admin: any, runIn: any) {
     );
     const { pass } = checkConsensus(votes);
     if (pass) {
-      await lockPlan(admin, run, steps, "consensus");
+      await lockPlanAndQueueBlueprint(admin, run, steps, "consensus");
+      fireSelfTick();
       return;
     }
     const nextLoop = loop + 1;
@@ -829,7 +944,6 @@ async function afterStepComplete(admin: any, runIn: any) {
       fireSelfTick();
       return;
     }
-    // Final ruling
     await admin
       .from("boardroom_runs")
       .update({ round_no: 5, loop_no: nextLoop, updated_at: new Date().toISOString() })
@@ -841,7 +955,13 @@ async function afterStepComplete(admin: any, runIn: any) {
   }
 
   if (round === 5) {
-    await lockPlan(admin, run, steps, "chair_ruled");
+    await lockPlanAndQueueBlueprint(admin, run, steps, "chair_ruled");
+    fireSelfTick();
+    return;
+  }
+
+  if (round === 6) {
+    await finalizeBlueprint(admin, run, steps);
     return;
   }
 }
