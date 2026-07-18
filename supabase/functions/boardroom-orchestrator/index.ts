@@ -627,10 +627,27 @@ function validateStepJson(stepKey: string, parsed: any, kind: string = "plan"): 
     }
     return null;
   }
+  if (stepKey === "batches_chair") {
+    if (!parsed || !Array.isArray(parsed.batches)) return "Missing batches array.";
+    const b = parsed.batches;
+    if (b.length < 6 || b.length > 14) return "batches must contain 6-14 items.";
+    let prev = 0;
+    const seen = new Set<number>();
+    for (const item of b) {
+      if (!item || typeof item !== "object") return "Each batch must be an object.";
+      const n = Number(item.batch_no);
+      if (!Number.isFinite(n) || n <= prev) return "batch_no must be unique and strictly ascending.";
+      if (seen.has(n)) return "batch_no values must be unique.";
+      seen.add(n);
+      prev = n;
+      if (typeof item.title !== "string" || !item.title.trim()) return "Each batch needs a title.";
+      if (!["lovable", "supabase", "human"].includes(item.channel)) return "Each batch.channel must be lovable, supabase, or human.";
+      if (typeof item.prompt_md !== "string" || !item.prompt_md.trim()) return "Each batch needs a non-empty prompt_md.";
+    }
+    return null;
+  }
   return null;
 }
-
-// ============================== Step claim / execute ==============================
 
 async function claimOneStep(admin: any, runId: string) {
   const { data: candidate } = await admin
