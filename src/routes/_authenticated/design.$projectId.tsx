@@ -193,8 +193,6 @@ function DesignStudioPage() {
         </>
       )}
 
-      {/* Silence unused-var complaints */}
-      <input type="hidden" value={activeRunId ?? ""} readOnly />
     </div>
   );
 }
