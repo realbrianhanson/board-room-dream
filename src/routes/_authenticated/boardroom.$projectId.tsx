@@ -52,12 +52,23 @@ type Step = {
   seat: Seat;
   status: "queued" | "running" | "completed" | "failed" | "skipped";
   response_text: string | null;
+  response_json: any;
   error: string | null;
   cost_usd: number;
   created_at: string;
   completed_at: string | null;
 };
 type SeatRow = { seat: Seat; display_name: string | null; model_id: string; enabled: boolean };
+
+const RUBRIC = [
+  "painful_problem",
+  "reachable_buyer",
+  "monetization_path",
+  "buildable_scope",
+  "differentiation",
+  "wow_factor",
+] as const;
+type RubricKey = typeof RUBRIC[number];
 
 const CONVENE_BLOCKED: Record<string, string> = {
   intake: "Finish the intake first — the board needs a validated idea.",
