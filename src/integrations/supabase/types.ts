@@ -65,6 +65,71 @@ export type Database = {
         }
         Relationships: []
       }
+      boardroom_runs: {
+        Row: {
+          budget_usd: number
+          budget_warning: boolean
+          consensus: Json | null
+          constitution_version: number | null
+          created_at: string
+          dissent_ledger: Json | null
+          error: string | null
+          id: string
+          kind: string
+          loop_no: number
+          project_id: string
+          round_no: number
+          spent_usd: number
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          budget_usd?: number
+          budget_warning?: boolean
+          consensus?: Json | null
+          constitution_version?: number | null
+          created_at?: string
+          dissent_ledger?: Json | null
+          error?: string | null
+          id?: string
+          kind: string
+          loop_no?: number
+          project_id: string
+          round_no?: number
+          spent_usd?: number
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          budget_usd?: number
+          budget_warning?: boolean
+          consensus?: Json | null
+          constitution_version?: number | null
+          created_at?: string
+          dissent_ledger?: Json | null
+          error?: string | null
+          id?: string
+          kind?: string
+          loop_no?: number
+          project_id?: string
+          round_no?: number
+          spent_usd?: number
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "boardroom_runs_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       cohorts: {
         Row: {
           id: string
@@ -88,6 +153,60 @@ export type Database = {
           starts_at?: string | null
         }
         Relationships: []
+      }
+      cost_ledger: {
+        Row: {
+          cost_usd: number
+          created_at: string
+          id: string
+          model_id: string | null
+          project_id: string | null
+          run_id: string | null
+          seat: string | null
+          tokens_in: number
+          tokens_out: number
+          user_id: string
+        }
+        Insert: {
+          cost_usd?: number
+          created_at?: string
+          id?: string
+          model_id?: string | null
+          project_id?: string | null
+          run_id?: string | null
+          seat?: string | null
+          tokens_in?: number
+          tokens_out?: number
+          user_id: string
+        }
+        Update: {
+          cost_usd?: number
+          created_at?: string
+          id?: string
+          model_id?: string | null
+          project_id?: string | null
+          run_id?: string | null
+          seat?: string | null
+          tokens_in?: number
+          tokens_out?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cost_ledger_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cost_ledger_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "boardroom_runs"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       intakes: {
         Row: {
@@ -216,6 +335,71 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      run_steps: {
+        Row: {
+          completed_at: string | null
+          cost_usd: number
+          created_at: string
+          error: string | null
+          id: string
+          request: Json | null
+          response_json: Json | null
+          response_text: string | null
+          round: number
+          run_id: string
+          seat: string
+          status: string
+          step_key: string
+          tokens_in: number
+          tokens_out: number
+          user_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          cost_usd?: number
+          created_at?: string
+          error?: string | null
+          id?: string
+          request?: Json | null
+          response_json?: Json | null
+          response_text?: string | null
+          round: number
+          run_id: string
+          seat: string
+          status?: string
+          step_key: string
+          tokens_in?: number
+          tokens_out?: number
+          user_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          cost_usd?: number
+          created_at?: string
+          error?: string | null
+          id?: string
+          request?: Json | null
+          response_json?: Json | null
+          response_text?: string | null
+          round?: number
+          run_id?: string
+          seat?: string
+          status?: string
+          step_key?: string
+          tokens_in?: number
+          tokens_out?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "run_steps_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "boardroom_runs"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {

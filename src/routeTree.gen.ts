@@ -21,6 +21,7 @@ import { Route as AuthenticatedCohortRouteImport } from './routes/_authenticated
 import { Route as AuthenticatedBoardroomRouteImport } from './routes/_authenticated/boardroom'
 import { Route as AuthenticatedAuditsRouteImport } from './routes/_authenticated/audits'
 import { Route as AuthenticatedIntakeIntakeIdRouteImport } from './routes/_authenticated/intake.$intakeId'
+import { Route as AuthenticatedDebugRunsRouteImport } from './routes/_authenticated/debug.runs'
 
 const AuthRoute = AuthRouteImport.update({
   id: '/auth',
@@ -82,6 +83,11 @@ const AuthenticatedIntakeIntakeIdRoute =
     path: '/intake/$intakeId',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedDebugRunsRoute = AuthenticatedDebugRunsRouteImport.update({
+  id: '/debug/runs',
+  path: '/debug/runs',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -94,6 +100,7 @@ export interface FileRoutesByFullPath {
   '/onboarding': typeof AuthenticatedOnboardingRoute
   '/runway': typeof AuthenticatedRunwayRoute
   '/settings': typeof AuthenticatedSettingsRoute
+  '/debug/runs': typeof AuthenticatedDebugRunsRoute
   '/intake/$intakeId': typeof AuthenticatedIntakeIntakeIdRoute
 }
 export interface FileRoutesByTo {
@@ -107,6 +114,7 @@ export interface FileRoutesByTo {
   '/onboarding': typeof AuthenticatedOnboardingRoute
   '/runway': typeof AuthenticatedRunwayRoute
   '/settings': typeof AuthenticatedSettingsRoute
+  '/debug/runs': typeof AuthenticatedDebugRunsRoute
   '/intake/$intakeId': typeof AuthenticatedIntakeIntakeIdRoute
 }
 export interface FileRoutesById {
@@ -122,6 +130,7 @@ export interface FileRoutesById {
   '/_authenticated/onboarding': typeof AuthenticatedOnboardingRoute
   '/_authenticated/runway': typeof AuthenticatedRunwayRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
+  '/_authenticated/debug/runs': typeof AuthenticatedDebugRunsRoute
   '/_authenticated/intake/$intakeId': typeof AuthenticatedIntakeIntakeIdRoute
 }
 export interface FileRouteTypes {
@@ -137,6 +146,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/runway'
     | '/settings'
+    | '/debug/runs'
     | '/intake/$intakeId'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -150,6 +160,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/runway'
     | '/settings'
+    | '/debug/runs'
     | '/intake/$intakeId'
   id:
     | '__root__'
@@ -164,6 +175,7 @@ export interface FileRouteTypes {
     | '/_authenticated/onboarding'
     | '/_authenticated/runway'
     | '/_authenticated/settings'
+    | '/_authenticated/debug/runs'
     | '/_authenticated/intake/$intakeId'
   fileRoutesById: FileRoutesById
 }
@@ -259,6 +271,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedIntakeIntakeIdRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/debug/runs': {
+      id: '/_authenticated/debug/runs'
+      path: '/debug/runs'
+      fullPath: '/debug/runs'
+      preLoaderRoute: typeof AuthenticatedDebugRunsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
   }
 }
 
@@ -271,6 +290,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedOnboardingRoute: typeof AuthenticatedOnboardingRoute
   AuthenticatedRunwayRoute: typeof AuthenticatedRunwayRoute
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
+  AuthenticatedDebugRunsRoute: typeof AuthenticatedDebugRunsRoute
   AuthenticatedIntakeIntakeIdRoute: typeof AuthenticatedIntakeIntakeIdRoute
 }
 
@@ -283,6 +303,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedOnboardingRoute: AuthenticatedOnboardingRoute,
   AuthenticatedRunwayRoute: AuthenticatedRunwayRoute,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
+  AuthenticatedDebugRunsRoute: AuthenticatedDebugRunsRoute,
   AuthenticatedIntakeIntakeIdRoute: AuthenticatedIntakeIntakeIdRoute,
 }
 
