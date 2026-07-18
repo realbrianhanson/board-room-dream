@@ -6,14 +6,15 @@ export const Route = createFileRoute("/auth")({
   component: AuthPage,
 });
 
-type Mode = "password" | "magic";
-
 function AuthPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<Mode>("password");
   const [isSignup, setIsSignup] = useState(false);
+  const [showMagic, setShowMagic] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [magicEmail, setMagicEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ tone: "error" | "info"; text: string } | null>(null);
 
@@ -25,21 +26,27 @@ function AuthPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setLoading(true);
     setMessage(null);
+    if (isSignup) {
+      if (password.length < 8) {
+        setMessage({ tone: "error", text: "Password must be at least 8 characters." });
+        return;
+      }
+      if (password !== confirm) {
+        setMessage({ tone: "error", text: "Passwords do not match." });
+        return;
+      }
+    }
+    setLoading(true);
     try {
-      if (mode === "magic") {
-        const { error } = await supabase.auth.signInWithOtp({
-          email,
-          options: { emailRedirectTo: window.location.origin + "/dashboard" },
-        });
-        if (error) throw error;
-        setMessage({ tone: "info", text: "Check your inbox for the sign-in link." });
-      } else if (isSignup) {
+      if (isSignup) {
         const { error } = await supabase.auth.signUp({
           email,
           password,
-          options: { emailRedirectTo: window.location.origin + "/dashboard" },
+          options: {
+            emailRedirectTo: `${window.location.origin}/dashboard`,
+            data: { display_name: displayName || email.split("@")[0] },
+          },
         });
         if (error) throw error;
         setMessage({
@@ -67,7 +74,7 @@ function AuthPage() {
     setMessage(null);
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: window.location.origin + "/reset-password",
+        redirectTo: `${window.location.origin}/reset-password`,
       });
       if (error) throw error;
       setMessage({ tone: "info", text: "Password reset link sent. Check your inbox." });
@@ -77,6 +84,28 @@ function AuthPage() {
       setLoading(false);
     }
   }
+
+  async function handleMagicLink(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setMessage(null);
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email: magicEmail,
+        options: { emailRedirectTo: `${window.location.origin}/dashboard` },
+      });
+      if (error) throw error;
+      setMessage({ tone: "info", text: "Check your inbox for the sign-in link." });
+    } catch (err) {
+      setMessage({ tone: "error", text: (err as Error).message });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const inputCls =
+    "w-full rounded-md border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none transition-colors focus:border-primary";
+  const labelCls = "mb-1.5 block text-xs uppercase tracking-widest text-muted-foreground";
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-background px-6 py-12">
@@ -98,61 +127,58 @@ function AuthPage() {
               : "Sign in to continue."}
           </p>
 
-          <div className="mt-6 inline-flex rounded-md border border-border bg-background p-1 text-xs">
-            <button
-              type="button"
-              onClick={() => setMode("password")}
-              className={`rounded-sm px-3 py-1.5 transition-colors ${
-                mode === "password"
-                  ? "bg-surface-2 text-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Password
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("magic")}
-              className={`rounded-sm px-3 py-1.5 transition-colors ${
-                mode === "magic"
-                  ? "bg-surface-2 text-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Magic link
-            </button>
-          </div>
-
           <form onSubmit={handleSubmit} className="mt-6 space-y-4">
             <div>
-              <label className="mb-1.5 block text-xs uppercase tracking-widest text-muted-foreground">
-                Email
-              </label>
+              <label className={labelCls}>Email</label>
               <input
                 type="email"
                 required
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full rounded-md border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none transition-colors focus:border-primary"
+                className={inputCls}
               />
             </div>
 
-            {mode === "password" && (
-              <div>
-                <label className="mb-1.5 block text-xs uppercase tracking-widest text-muted-foreground">
-                  Password
-                </label>
-                <input
-                  type="password"
-                  required
-                  minLength={8}
-                  autoComplete={isSignup ? "new-password" : "current-password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full rounded-md border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none transition-colors focus:border-primary"
-                />
-              </div>
+            <div>
+              <label className={labelCls}>Password</label>
+              <input
+                type="password"
+                required
+                minLength={8}
+                autoComplete={isSignup ? "new-password" : "current-password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className={inputCls}
+              />
+            </div>
+
+            {isSignup && (
+              <>
+                <div>
+                  <label className={labelCls}>Confirm password</label>
+                  <input
+                    type="password"
+                    required
+                    minLength={8}
+                    autoComplete="new-password"
+                    value={confirm}
+                    onChange={(e) => setConfirm(e.target.value)}
+                    className={inputCls}
+                  />
+                </div>
+                <div>
+                  <label className={labelCls}>Display name</label>
+                  <input
+                    type="text"
+                    required
+                    autoComplete="name"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    className={inputCls}
+                  />
+                </div>
+              </>
             )}
 
             {message && (
@@ -170,42 +196,76 @@ function AuthPage() {
               disabled={loading}
               className="w-full rounded-md bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
             >
-              {loading
-                ? "Working…"
-                : mode === "magic"
-                  ? "Send magic link"
-                  : isSignup
-                    ? "Create account"
-                    : "Sign in"}
+              {loading ? "Working…" : isSignup ? "Create account" : "Sign in"}
             </button>
           </form>
 
-          {mode === "password" && (
-            <>
-              {!isSignup && (
-                <div className="mt-4 text-center">
+          {!isSignup && (
+            <div className="mt-4 text-center">
+              <button
+                type="button"
+                onClick={handleForgotPassword}
+                disabled={loading}
+                className="text-xs text-muted-foreground transition-colors hover:text-primary disabled:opacity-60"
+              >
+                Forgot password?
+              </button>
+            </div>
+          )}
+
+          <p className="mt-6 text-center text-xs text-muted-foreground">
+            {isSignup ? "Already have a seat?" : "New to the boardroom?"}{" "}
+            <button
+              type="button"
+              onClick={() => {
+                setIsSignup((v) => !v);
+                setMessage(null);
+              }}
+              className="text-primary transition-colors hover:brightness-125"
+            >
+              {isSignup ? "Sign in" : "Create an account"}
+            </button>
+          </p>
+
+          <div className="mt-8 border-t border-border/60 pt-5 text-center">
+            {!showMagic ? (
+              <button
+                type="button"
+                onClick={() => setShowMagic(true)}
+                className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+              >
+                Prefer an emailed sign-in link?
+              </button>
+            ) : (
+              <form onSubmit={handleMagicLink} className="space-y-3 text-left">
+                <label className={labelCls}>Email for sign-in link</label>
+                <input
+                  type="email"
+                  required
+                  autoComplete="email"
+                  value={magicEmail}
+                  onChange={(e) => setMagicEmail(e.target.value)}
+                  className={inputCls}
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="flex-1 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground transition-colors hover:border-primary/60 disabled:opacity-60"
+                  >
+                    {loading ? "Sending…" : "Send magic link"}
+                  </button>
                   <button
                     type="button"
-                    onClick={handleForgotPassword}
-                    disabled={loading}
-                    className="text-xs text-muted-foreground transition-colors hover:text-primary disabled:opacity-60"
+                    onClick={() => setShowMagic(false)}
+                    className="text-xs text-muted-foreground transition-colors hover:text-foreground"
                   >
-                    Forgot password?
+                    Cancel
                   </button>
                 </div>
-              )}
-              <p className="mt-6 text-center text-xs text-muted-foreground">
-                {isSignup ? "Already have a seat?" : "New to the boardroom?"}{" "}
-                <button
-                  type="button"
-                  onClick={() => setIsSignup((v) => !v)}
-                  className="text-primary transition-colors hover:brightness-125"
-                >
-                  {isSignup ? "Sign in" : "Create an account"}
-                </button>
-              </p>
-            </>
-          )}
+              </form>
+            )}
+          </div>
         </div>
       </div>
     </main>
