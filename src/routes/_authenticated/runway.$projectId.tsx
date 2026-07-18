@@ -343,6 +343,10 @@ function RunwayPage() {
             </div>
           )}
 
+          <GitHubRepoCard projectId={projectId} isOwner={isOwner} />
+
+
+
           {batches!.map((b, i) => (
             <BatchCard
               key={b.id}
