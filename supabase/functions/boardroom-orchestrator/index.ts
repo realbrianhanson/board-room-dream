@@ -1065,6 +1065,23 @@ async function afterStepComplete(admin: any, runIn: any) {
     return;
   }
 
+  if (run.kind === "audit") {
+    const chair = steps.find((x: any) => x.step_key === "audit_chair_merge");
+    if (chair?.status === "completed") {
+      await finalizeAudit(admin, run, steps);
+      return;
+    }
+    if (chair) return; // waiting on chair
+    const parallelDone = ["inspector", "contrarian", "strategist"].every((s) =>
+      steps.some((x: any) => x.step_key === `audit_${s}` && x.status === "completed"),
+    );
+    if (parallelDone) {
+      await queueAuditChairMerge(admin, run, steps);
+      fireSelfTick();
+    }
+    return;
+  }
+
   if (run.kind === "batches") {
     const step = steps.find((x: any) => x.step_key === "batches_chair");
     if (step?.status === "completed" && step.response_json && !step.response_json.invalid) {
@@ -1077,6 +1094,7 @@ async function afterStepComplete(admin: any, runIn: any) {
     }
     return;
   }
+
 
   if (run.kind !== "plan" && run.kind !== "design") {
     await admin
