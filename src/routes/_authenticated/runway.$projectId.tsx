@@ -934,12 +934,21 @@ function GitHubRepoCard({ projectId, isOwner }: { projectId: string; isOwner: bo
             </p>
             {isOwner && (
               <div className="mt-4 flex flex-wrap gap-2">
-                <Link
-                  to="/settings"
+                <button
+                  onClick={async () => {
+                    try {
+                      const r = await startGithubConnect();
+                      if (r === "embedded") {
+                        toast("Open the app in its own browser tab to connect GitHub.");
+                      }
+                    } catch (e) {
+                      toast.error((e as Error).message);
+                    }
+                  }}
                   className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
                 >
-                  Connect GitHub in Settings
-                </Link>
+                  Connect GitHub
+                </button>
                 <button
                   onClick={() => setShowGuide(true)}
                   className="rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-muted-foreground hover:border-primary/40 hover:text-foreground"
