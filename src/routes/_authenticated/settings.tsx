@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { SpendPanel } from "@/components/spend-panel";
 
 export const Route = createFileRoute("/_authenticated/settings")({
   component: SettingsPage,
