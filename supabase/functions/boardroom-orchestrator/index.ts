@@ -1283,7 +1283,7 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
           user_id: audit.user_id,
           batch_no: nextNo,
           title: "Final A-Z QA",
-          channel: "human",
+          channel: "lovable",
           prompt_md: qa,
           status: "pending",
         });
