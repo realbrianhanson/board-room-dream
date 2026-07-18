@@ -90,6 +90,36 @@ function fireSelfTick(body: any = {}) {
   }).catch(() => {});
 }
 
+// Idempotent alert insert: skip if there's an OPEN alert for (project, kind).
+async function insertAlert(
+  admin: any,
+  args: { user_id: string; project_id: string; kind: "stuck_48h" | "audit_loop" | "spend_cap" | "never_locked"; detail?: any },
+) {
+  try {
+    const { data: proj } = await admin
+      .from("profiles")
+      .select("cohort_id")
+      .eq("id", args.user_id)
+      .maybeSingle();
+    const cohort_id = proj?.cohort_id ?? null;
+    const { data: existing } = await admin
+      .from("alerts")
+      .select("id")
+      .eq("project_id", args.project_id)
+      .eq("kind", args.kind)
+      .eq("status", "open")
+      .limit(1);
+    if ((existing ?? []).length) return;
+    await admin.from("alerts").insert({
+      cohort_id,
+      user_id: args.user_id,
+      project_id: args.project_id,
+      kind: args.kind,
+      detail: args.detail ?? null,
+    });
+  } catch (_e) { /* alerts must never break the run */ }
+
+
 // ============================== Prompt builders ==============================
 
 async function loadIntake(admin: any, projectId: string) {
