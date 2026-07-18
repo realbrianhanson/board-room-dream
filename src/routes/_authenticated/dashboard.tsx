@@ -303,7 +303,7 @@ function ProjectCard({
         Created {new Date(project.created_at).toLocaleDateString()}
       </p>
       <span className="mt-3 inline-flex items-center gap-1.5 text-xs text-foreground/80 group-hover:text-primary">
-        {NEXT_ACTION[project.status] ?? "Open"}
+        {nextActionLabel(project)}
         <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
       </span>
     </button>
