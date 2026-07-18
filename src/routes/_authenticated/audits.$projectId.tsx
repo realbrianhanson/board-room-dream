@@ -275,14 +275,6 @@ function AuditCenterPage() {
                 </button>
               </div>
             )}
-                  onClick={() => startFinalAudit("paste")}
-                  disabled={starting || !pasted.trim()}
-                  className="mt-3 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
-                >
-                  {starting ? "Opening the audit…" : "Run the A–Z audit on this code"}
-                </button>
-              </div>
-            )}
           </div>
         ) : (
           <div className="mt-4 rounded-lg border border-border bg-surface-1 p-5">
