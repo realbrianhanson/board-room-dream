@@ -13,6 +13,10 @@ export const Route = createFileRoute("/_authenticated/cohort")({
   component: CohortPage,
 });
 
+type CohortRow = { id: string; name: string; daily_cap_usd: number | null; instructor_id: string | null };
+
+
+
 type MemberRow = {
   id: string;
   display_name: string | null;
@@ -55,7 +59,7 @@ function alertLine(a: AlertRow): string {
 }
 
 function CohortPage() {
-  const [cohorts, setCohorts] = useState<{ id: string; name: string }[]>([]);
+  const [cohorts, setCohorts] = useState<CohortRow[]>([]);
   const [members, setMembers] = useState<MemberRow[]>([]);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -67,8 +71,8 @@ function CohortPage() {
     if (!uid) return;
 
     // Cohorts the instructor teaches (RLS also permits admin-wide reads).
-    const { data: cohortsData } = await supabase.from("cohorts").select("id, name").order("name");
-    setCohorts((cohortsData ?? []) as any);
+    const { data: cohortsData } = await supabase.from("cohorts").select("id, name, daily_cap_usd, instructor_id").order("name");
+    setCohorts((cohortsData ?? []) as CohortRow[]);
 
     // Members in those cohorts.
     const cohortIds = (cohortsData ?? []).map((c: any) => c.id);
