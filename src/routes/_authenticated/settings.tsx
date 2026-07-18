@@ -657,6 +657,19 @@ function SettingsPage() {
 
           <div className="mt-14 border-t border-border pt-10">
             <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+              Admin · Default daily cap
+            </span>
+            <h2 className="mt-3 font-display text-2xl text-foreground">The workspace ceiling.</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Fallback cap when a cohort hasn't set its own.
+            </p>
+            <div className="mt-6">
+              <DefaultDailyCapEditor />
+            </div>
+          </div>
+
+          <div className="mt-14 border-t border-border pt-10">
+            <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
               Admin · Constitution
             </span>
             <h2 className="mt-3 font-display text-2xl text-foreground">
