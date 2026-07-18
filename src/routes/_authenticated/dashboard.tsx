@@ -242,7 +242,7 @@ async function resume(
       return;
     }
   }
-  navigate({ to: "/boardroom" });
+  navigate({ to: "/boardroom/$projectId", params: { projectId } });
 }
 
 function ProjectCard({
