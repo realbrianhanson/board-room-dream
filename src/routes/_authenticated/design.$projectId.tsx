@@ -127,7 +127,7 @@ function DesignStudioPage() {
         <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">The Design Council</p>
       </div>
 
-      {!hasPlan ? (
+      {!hasPlan && !project.is_import ? (
         <div className="rounded-xl border border-dashed border-border bg-surface-1/40 px-8 py-20 text-center">
           <Palette className="mx-auto h-6 w-6 text-muted-foreground" />
           <p className="mt-4 font-display text-2xl text-foreground">The board locks the plan before it debates the look.</p>
@@ -141,6 +141,7 @@ function DesignStudioPage() {
           </Link>
         </div>
       ) : (
+
         <>
           <BoardroomSession
             projectId={projectId}
