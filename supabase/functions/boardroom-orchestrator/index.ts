@@ -490,6 +490,31 @@ function validateStepJson(stepKey: string, parsed: any): string | null {
     if (!Array.isArray(parsed.dissent_ledger)) return "Missing dissent_ledger array.";
     return null;
   }
+  if (stepKey === "r5_blueprint_chair") {
+    if (typeof parsed.prd_md !== "string" || !parsed.prd_md.trim()) return "Missing prd_md string.";
+    if (!Array.isArray(parsed.features)) return "Missing features array.";
+    for (const f of parsed.features) {
+      if (!f || typeof f.name !== "string" || typeof f.description !== "string") return "Each feature needs name and description.";
+      if (f.priority !== "mvp" && f.priority !== "later") return "Each feature.priority must be 'mvp' or 'later'.";
+    }
+    return null;
+  }
+  if (stepKey.startsWith("cr_exam_")) {
+    if (!["approve", "approve_with_amendments", "reject"].includes(parsed.stance)) return "Missing/invalid stance.";
+    if (typeof parsed.reasoning !== "string" || !parsed.reasoning.trim()) return "Missing reasoning.";
+    if (!Array.isArray(parsed.amendments)) return "Missing amendments array.";
+    return null;
+  }
+  if (stepKey === "cr_verdict_chair") {
+    if (!["approved", "rejected"].includes(parsed.verdict)) return "Missing/invalid verdict.";
+    if (typeof parsed.rationale !== "string" || !parsed.rationale.trim()) return "Missing rationale.";
+    if (parsed.verdict === "approved") {
+      if (typeof parsed.amended_plan_md !== "string" || !parsed.amended_plan_md.trim()) return "Approved verdict requires amended_plan_md.";
+      if (typeof parsed.amended_prd_md !== "string" || !parsed.amended_prd_md.trim()) return "Approved verdict requires amended_prd_md.";
+      if (!Array.isArray(parsed.amended_features)) return "Approved verdict requires amended_features array.";
+    }
+    return null;
+  }
   return null;
 }
 
