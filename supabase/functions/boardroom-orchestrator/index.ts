@@ -702,11 +702,12 @@ async function lockPlanAndQueueBlueprint(
   steps: any[],
   mode: "consensus" | "chair_ruled",
 ) {
+  const planKind = run.kind === "design" ? "design" : "plan";
   const { data: existing } = await admin
     .from("plan_versions")
     .select("version")
     .eq("project_id", run.project_id)
-    .eq("kind", "plan")
+    .eq("kind", planKind)
     .order("version", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -743,14 +744,14 @@ async function lockPlanAndQueueBlueprint(
     return m ? Number(m[1]) : -1;
   }));
   const latestVotes = voteSteps.filter((v: any) => v.step_key.endsWith(`_loop${latestLoop}`));
-  const { scores } = checkConsensus(latestVotes);
+  const { scores } = checkConsensus(latestVotes, run.kind);
 
   const { data: inserted } = await admin
     .from("plan_versions")
     .insert({
       project_id: run.project_id,
       user_id: run.user_id,
-      kind: "plan",
+      kind: planKind,
       version: nextVersion,
       content_md: contentMd,
       decision_log: decisionLog,
@@ -760,6 +761,22 @@ async function lockPlanAndQueueBlueprint(
     })
     .select("id")
     .single();
+
+  if (run.kind === "design") {
+    // Design runs skip the blueprint step — the candidate IS the deliverable.
+    // Project status is left untouched by design runs.
+    const finalStatus = mode === "chair_ruled" ? "chair_ruled" : "consensus";
+    await admin
+      .from("boardroom_runs")
+      .update({
+        status: finalStatus,
+        consensus: { scores, plan_version_id: inserted?.id ?? null },
+        dissent_ledger: dissentLedger,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", run.id);
+    return;
+  }
 
   await admin.from("projects").update({ status: "locked" }).eq("id", run.project_id);
 
