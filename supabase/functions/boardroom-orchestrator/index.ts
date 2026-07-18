@@ -1338,6 +1338,22 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
     );
   }
 
+  // Loop-2+ with unresolved findings → needs human eyes.
+  if (Number(audit.loop_no ?? 1) >= 2 && findings.length && audit.project_id) {
+    let batchTitle = "";
+    if (audit.batch_id) {
+      const { data: b } = await admin.from("batches").select("title").eq("id", audit.batch_id).maybeSingle();
+      batchTitle = b?.title ?? "";
+    }
+    await insertAlert(admin, {
+      user_id: audit.user_id,
+      project_id: audit.project_id,
+      kind: "audit_loop",
+      detail: { batch_title: batchTitle, loop_no: Number(audit.loop_no ?? 1), counts: summary.counts },
+    });
+  }
+
+
   await admin
     .from("boardroom_runs")
     .update({ status: "consensus", consensus: { ...(run.consensus ?? {}), verdict: "findings", fix_batch_id: fixBatchId } })
