@@ -2,7 +2,7 @@
 // Assembles the code payload, creates the audit + boardroom_run + parallel steps,
 // then kicks the orchestrator. Chair merge + finalization happen in the orchestrator.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-import { decryptSecret } from "../_shared/crypto.ts";
+import { assembleFromGithub, formatFiles, ghToken } from "../_shared/github-payload.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -24,102 +24,7 @@ function j(status: number, body: any) {
   });
 }
 
-const BINARY_EXT = /\.(png|jpe?g|gif|webp|ico|svg|pdf|zip|gz|tar|mp3|mp4|mov|woff2?|ttf|otf|eot|wasm|bin)$/i;
-const LOCK_FILES = /(^|\/)(bun\.lockb?|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|deno\.lock)$/i;
-const IGNORE_DIR = /(^|\/)(node_modules|dist|build|\.next|\.git|\.turbo|coverage)(\/|$)/;
-
-const MAX_FILES = 25;
-const MAX_FILE_BYTES = 100 * 1024;
-const MAX_TOTAL_BYTES = 300 * 1024;
 const MAX_PASTE_BYTES = 200 * 1024;
-
-async function ghToken(admin: any, userId: string): Promise<string | null> {
-  const { data } = await admin
-    .from("api_keys")
-    .select("encrypted_key, status")
-    .eq("user_id", userId)
-    .eq("provider", "github")
-    .maybeSingle();
-  if (!data || data.status === "invalid") return null;
-  return await decryptSecret(data.encrypted_key);
-}
-
-async function gh(token: string, path: string) {
-  const res = await fetch(`https://api.github.com${path}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "boardroom-audit",
-    },
-  });
-  let body: any = null;
-  try { body = await res.json(); } catch { /* ignore */ }
-  return { status: res.status, body };
-}
-
-type FilePayload = { path: string; content: string; bytes: number };
-
-async function assembleFromGithub(
-  token: string,
-  repo: string,
-  baseSha: string | null,
-): Promise<{ files: FilePayload[]; headSha: string; branch: string; skipped: number }> {
-  const repoRes = await gh(token, `/repos/${repo}`);
-  if (repoRes.status >= 300) throw new Error(`repo: ${repoRes.body?.message ?? repoRes.status}`);
-  const branch = repoRes.body?.default_branch ?? "main";
-  const headRes = await gh(token, `/repos/${repo}/commits/${branch}`);
-  if (headRes.status >= 300) throw new Error(`head: ${headRes.body?.message ?? headRes.status}`);
-  const headSha: string = headRes.body?.sha;
-
-  let candidates: { path: string }[] = [];
-  if (baseSha) {
-    const cmp = await gh(token, `/repos/${repo}/compare/${baseSha}...${headSha}`);
-    if (cmp.status < 300 && Array.isArray(cmp.body?.files)) {
-      candidates = cmp.body.files
-        .filter((f: any) => f.status !== "removed")
-        .map((f: any) => ({ path: f.filename }));
-    }
-  }
-  if (!candidates.length) {
-    // Full repo tree, filtered.
-    const tree = await gh(token, `/repos/${repo}/git/trees/${headSha}?recursive=1`);
-    if (tree.status < 300 && Array.isArray(tree.body?.tree)) {
-      candidates = tree.body.tree
-        .filter((t: any) => t.type === "blob")
-        .map((t: any) => ({ path: t.path }));
-    }
-  }
-
-  const filtered = candidates.filter(
-    (f) => !BINARY_EXT.test(f.path) && !LOCK_FILES.test(f.path) && !IGNORE_DIR.test(f.path),
-  );
-
-  const files: FilePayload[] = [];
-  let total = 0;
-  let skipped = 0;
-  for (const f of filtered) {
-    if (files.length >= MAX_FILES) { skipped++; continue; }
-    const c = await gh(token, `/repos/${repo}/contents/${encodeURI(f.path)}?ref=${headSha}`);
-    if (c.status >= 300 || Array.isArray(c.body)) { skipped++; continue; }
-    const size: number = c.body?.size ?? 0;
-    if (size > MAX_FILE_BYTES) { skipped++; continue; }
-    const content = c.body?.encoding === "base64"
-      ? atob(String(c.body?.content ?? "").replace(/\n/g, ""))
-      : String(c.body?.content ?? "");
-    if (total + content.length > MAX_TOTAL_BYTES) { skipped++; continue; }
-    total += content.length;
-    files.push({ path: f.path, content, bytes: content.length });
-  }
-  return { files, headSha, branch, skipped };
-}
-
-function formatFiles(files: FilePayload[]): string {
-  if (!files.length) return "(no code files were readable)";
-  return files
-    .map((f) => `\n=== FILE: ${f.path} (${f.bytes} bytes) ===\n${f.content}`)
-    .join("\n");
-}
 
 function fitPasted(text: string): string {
   const t = String(text ?? "");
@@ -137,6 +42,22 @@ async function loadLockedPlan(admin: any, projectId: string) {
     .maybeSingle();
   return data ?? null;
 }
+
+async function loadImportContract(admin: any, projectId: string): Promise<{ content_md: string; prd_md: string } | null> {
+  const { data } = await admin
+    .from("intakes")
+    .select("answers")
+    .eq("project_id", projectId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const a = data?.answers ?? {};
+  if (!a?.imported) return null;
+  const goals = Array.isArray(a.goals) ? a.goals.join(", ") : "";
+  const contract = `IMPORTED APP — the owner already built this and brought it to the board.\n\nDescription: ${a.description ?? ""}\n\nStated goals for the board: ${goals || "(none stated)"}`;
+  return { content_md: contract, prd_md: contract };
+}
+
 
 const SECURITY_CHECKLIST = `SECURITY CHECKLIST (verbatim, must be applied to code):
 - Every personal-data table has user_id lineage and owner-scoped RLS; no public policies on personal tables.
@@ -254,7 +175,9 @@ async function beginAudit(params: {
   const { admin, userId, project, batchId, kind, loopNo, source, pastedCode, budget } = params;
   const isFinal = kind === "final_az";
 
-  const plan = await loadLockedPlan(admin, project.id);
+  // For imports without a locked plan, substitute the intake description + goals.
+  const plan = (await loadLockedPlan(admin, project.id)) ?? (await loadImportContract(admin, project.id));
+
   const { data: design } = await admin
     .from("plan_versions")
     .select("content_md")
@@ -282,13 +205,14 @@ async function beginAudit(params: {
     if (!token) return { error: "GitHub not connected" as const };
     baseSha = isFinal ? null : await priorHeadSha(admin, project.id);
     try {
-      const res = await assembleFromGithub(token, project.github_repo, baseSha);
+      const res = await assembleFromGithub(token, project.github_repo, { baseSha });
       payload = formatFiles(res.files);
       filesAnalyzed = res.files.length;
       headSha = res.headSha;
     } catch (e) {
       return { error: (e as Error).message };
     }
+
   } else {
     if (!pastedCode || !pastedCode.trim()) return { error: "Empty pasted code" as const };
     payload = fitPasted(pastedCode);
@@ -368,12 +292,13 @@ Deno.serve(async (req) => {
   async function ownProject(project_id: string) {
     const { data } = await admin
       .from("projects")
-      .select("id, user_id, github_repo")
+      .select("id, user_id, github_repo, is_import")
       .eq("id", project_id)
       .maybeSingle();
     if (!data || data.user_id !== userId) return null;
-    return { id: data.id, github_repo: data.github_repo };
+    return { id: data.id, github_repo: data.github_repo, is_import: !!data.is_import };
   }
+
 
   try {
     if (action === "start_batch_audit" || action === "start_reaudit") {
@@ -422,14 +347,21 @@ Deno.serve(async (req) => {
       const pastedCode = source === "paste" ? String(body?.pasted_code ?? "") : null;
       const project = await ownProject(projectId);
       if (!project) return j(404, { error: "Project not found" });
-      // Require all non-final batches passed.
       const { data: batches } = await admin
         .from("batches")
         .select("id, status")
         .eq("project_id", projectId);
-      if (!batches?.length) return j(400, { error: "No batches to audit" });
-      const unresolved = batches.filter((b: any) => !["passed", "skipped"].includes(b.status));
-      if (unresolved.length) return j(400, { error: "All batches must be passed or skipped before the A-Z audit" });
+      const noBatches = !batches?.length;
+      if (project.is_import && noBatches) {
+        // Imports without a build sequence are immediately eligible.
+        if (source === "github" && !project.github_repo) {
+          return j(400, { error: "Link your repo or paste your code first." });
+        }
+      } else {
+        if (noBatches) return j(400, { error: "No batches to audit" });
+        const unresolved = batches!.filter((b: any) => !["passed", "skipped"].includes(b.status));
+        if (unresolved.length) return j(400, { error: "All batches must be passed or skipped before the A-Z audit" });
+      }
 
       const res = await beginAudit({
         admin, userId, project, batchId: null,
@@ -438,6 +370,7 @@ Deno.serve(async (req) => {
       if ("error" in res) return j(400, { error: res.error });
       return j(200, res);
     }
+
 
     return j(400, { error: "Unknown action" });
   } catch (e) {

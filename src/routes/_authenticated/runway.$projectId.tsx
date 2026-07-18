@@ -31,7 +31,10 @@ type Project = {
   status: string;
   lovable_project_url: string | null;
   current_batch_no: number;
+  is_import?: boolean;
+  github_repo?: string | null;
 };
+
 
 type Batch = {
   id: string;
@@ -136,7 +139,7 @@ function RunwayPage() {
 
   const loadAll = useCallback(async () => {
     const [{ data: p }, { data: pv }, { data: dv }, { data: bs }, { data: rs }, { data: au }, { data: fi }] = await Promise.all([
-      supabase.from("projects").select("id, name, user_id, status, lovable_project_url, current_batch_no, github_repo").eq("id", projectId).maybeSingle(),
+      supabase.from("projects").select("id, name, user_id, status, lovable_project_url, current_batch_no, github_repo, is_import").eq("id", projectId).maybeSingle(),
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "plan").limit(1),
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "design").limit(1),
       supabase.from("batches").select("*").eq("project_id", projectId).order("batch_no", { ascending: true }),
@@ -308,15 +311,27 @@ function RunwayPage() {
 
       {/* State A: no locked plan */}
       {!hasPlan && (
-        <EmptyState
-          icon={<Lock className="h-6 w-6 text-muted-foreground" />}
-          title="The board locks the plan before it sequences the build."
-          subtitle="Take this project through the Boardroom first."
-          actionTo="/boardroom/$projectId"
-          actionParams={{ projectId }}
-          actionLabel="To the Boardroom"
-        />
+        project?.is_import ? (
+          <EmptyState
+            icon={<Lock className="h-6 w-6 text-muted-foreground" />}
+            title="The board plans imports in the Boardroom."
+            subtitle="Run the A–Z audit first, then convene the improvement board to lock what to build next."
+            actionTo="/boardroom/$projectId"
+            actionParams={{ projectId }}
+            actionLabel="To the Boardroom"
+          />
+        ) : (
+          <EmptyState
+            icon={<Lock className="h-6 w-6 text-muted-foreground" />}
+            title="The board locks the plan before it sequences the build."
+            subtitle="Take this project through the Boardroom first."
+            actionTo="/boardroom/$projectId"
+            actionParams={{ projectId }}
+            actionLabel="To the Boardroom"
+          />
+        )
       )}
+
 
       {/* State B: locked plan, no batches, no run */}
       {hasPlan && total === 0 && !runInFlight && (

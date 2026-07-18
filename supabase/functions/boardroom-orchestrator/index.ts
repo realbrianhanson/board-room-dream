@@ -7,6 +7,8 @@ import {
   NoUserKey,
   SeatUnavailable,
 } from "../_shared/openrouter-proxy.ts";
+import { assembleFromGithub, formatFiles, ghToken } from "../_shared/github-payload.ts";
+
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -101,8 +103,53 @@ async function loadIntake(admin: any, projectId: string) {
   return data ?? { answers: {}, validation_scores: null };
 }
 
+async function loadProjectMeta(admin: any, projectId: string) {
+  const { data } = await admin
+    .from("projects")
+    .select("id, user_id, is_import, github_repo")
+    .eq("id", projectId)
+    .maybeSingle();
+  return data ?? null;
+}
+
+async function loadRepoSample(admin: any, project: any, maxFiles: number) {
+  if (!project?.github_repo) return { files: [], fileTree: [] as string[] };
+  const token = await ghToken(admin, project.user_id);
+  if (!token) return { files: [], fileTree: [] as string[] };
+  try {
+    const res = await assembleFromGithub(token, project.github_repo, {
+      maxFiles,
+      maxFileBytes: 100 * 1024,
+      maxTotalBytes: 300 * 1024,
+      preferKeyFiles: true,
+    });
+    return { files: res.files, fileTree: res.fileTree };
+  } catch {
+    return { files: [], fileTree: [] as string[] };
+  }
+}
+
+async function latestAuditSummary(admin: any, projectId: string) {
+  const { data } = await admin
+    .from("audits")
+    .select("id, kind, status, summary, completed_at")
+    .eq("project_id", projectId)
+    .eq("kind", "final_az")
+    .not("summary", "is", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data ?? null;
+}
+
 function intakeBlock(intake: any) {
   const a = intake?.answers ?? {};
+  if (a?.imported) {
+    const goals = Array.isArray(a.goals) ? a.goals.join(", ") : "";
+    return `IMPORT INTAKE (owner already built this app)
+Description: ${a.description ?? ""}
+Goals for the board: ${goals || "(none stated)"}`;
+  }
   return `INTAKE ANSWERS
 Idea: ${a.idea ?? ""}
 Buyer: ${a.buyer ?? ""}
@@ -113,6 +160,7 @@ Inspiration: ${a.inspiration ?? ""}
 VALIDATION SCORES
 ${JSON.stringify(intake?.validation_scores ?? null, null, 2)}`;
 }
+
 
 function draftsBlock(steps: any[], forSeat?: Seat) {
   return SEATS
@@ -165,13 +213,31 @@ Revise ONLY the contested parts. Preserve agreed parts verbatim.`;
 
 async function queueRound1(admin: any, run: any) {
   const intake = await loadIntake(admin, run.project_id);
+  const project = await loadProjectMeta(admin, run.project_id);
+  const isImport = !!project?.is_import;
   let system: string;
   let userContent: string;
+
   if (run.kind === "design") {
     const plan = await loadLockedPlan(admin, run.project_id);
     system =
       "Round 1 of the Design Council. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best design direction for this app. You MUST include: concept/mood; palette as specific HSL values; type pairing with specific font names; spacing and shape language; ONE distinctive signature element (a structural design move — non-negotiable, this is the point); and motion rules. Be specific, opinionated, and premium. Avoid generic AI-slop aesthetics.";
-    userContent = `${intakeBlock(intake)}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nWrite your Round 1 design direction now.`;
+    if (isImport && !plan) {
+      const sample = await loadRepoSample(admin, project, 10);
+      userContent = `${intakeBlock(intake)}\n\nCODE FILES FROM THE OWNER'S REPO (frontend-biased sample)\n${formatFiles(sample.files)}\n\nThis is an existing app — critique what's there and propose a design direction that elevates it. Write your Round 1 design direction now.`;
+    } else {
+      userContent = `${intakeBlock(intake)}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nWrite your Round 1 design direction now.`;
+    }
+  } else if (run.kind === "plan" && isImport) {
+    system =
+      "Round 1 of the board's improvement deliberation. This app already exists — the owner has brought it to the board. You are drafting INDEPENDENTLY. Produce a PRIORITIZED IMPROVEMENT PLAN: what's broken, what's missing, what to build next, ranked by impact. Be specific, opinionated, and concrete about the code you can see. Do not restart the app from scratch.";
+    const sample = await loadRepoSample(admin, project, 15);
+    const audit = await latestAuditSummary(admin, run.project_id);
+    const treeBlock = sample.fileTree.length ? sample.fileTree.join("\n") : "(no repo linked)";
+    const auditBlock = audit?.summary
+      ? `LATEST A-Z AUDIT SUMMARY\n${JSON.stringify(audit.summary, null, 2)}`
+      : "LATEST A-Z AUDIT SUMMARY\n(no A-Z audit yet)";
+    userContent = `${intakeBlock(intake)}\n\nREPO FILE TREE (top ${sample.fileTree.length})\n${treeBlock}\n\nKEY FILES\n${formatFiles(sample.files)}\n\n${auditBlock}\n\nWrite your Round 1 prioritized improvement plan now.`;
   } else {
     system =
       "Round 1 of the board's deliberation. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best version of the app plan: concept, target user, core features (MVP-first, ruthlessly cut), the data the app stores, and what you'd cut. Be specific, concise, and opinionated.";
@@ -193,6 +259,7 @@ async function queueRound1(admin: any, run: any) {
   }));
   await admin.from("run_steps").insert(rows);
 }
+
 
 async function queueRound2(admin: any, run: any, steps: any[]) {
   const intake = await loadIntake(admin, run.project_id);
@@ -1160,8 +1227,17 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
           status: "pending",
         });
       }
-      await admin.from("projects").update({ status: "done" }).eq("id", audit.project_id);
+      // Imports continue into improvement work — do NOT mark 'done'.
+      const { data: proj } = await admin
+        .from("projects")
+        .select("is_import")
+        .eq("id", audit.project_id)
+        .maybeSingle();
+      if (!proj?.is_import) {
+        await admin.from("projects").update({ status: "done" }).eq("id", audit.project_id);
+      }
     }
+
     await admin
       .from("boardroom_runs")
       .update({ status: "consensus", consensus: { ...(run.consensus ?? {}), verdict: "clean" } })
@@ -1464,14 +1540,26 @@ Deno.serve(async (req) => {
     }
     const { data: project } = await admin
       .from("projects")
-      .select("id, user_id")
+      .select("id, user_id, is_import, github_repo")
       .eq("id", projectId)
       .maybeSingle();
     if (!project || project.user_id !== userId) return j(404, { error: "Project not found" });
 
     if (kind === "design" || kind === "batches") {
       const locked = await loadLockedPlan(admin, projectId);
-      if (!locked) return j(400, { error: kind === "design" ? "The board locks the plan before it debates the look." : "The board locks the plan before it sequences the build." });
+      if (!locked) {
+        if (kind === "design" && project.is_import) {
+          // Imports may design without a locked plan: need either a linked repo
+          // or a description in the intake.
+          const intake = await loadIntake(admin, projectId);
+          const hasDesc = !!intake?.answers?.description;
+          if (!project.github_repo && !hasDesc) {
+            return j(400, { error: "Link your repo or describe the app so the board can see it." });
+          }
+        } else {
+          return j(400, { error: kind === "design" ? "The board locks the plan before it debates the look." : "The board locks the plan before it sequences the build." });
+        }
+      }
     }
     if (kind === "batches") {
       const { count } = await admin
@@ -1480,6 +1568,7 @@ Deno.serve(async (req) => {
         .eq("project_id", projectId);
       if ((count ?? 0) > 0) return j(400, { error: "This project already has a build sequence." });
     }
+
 
     let consensusMeta: any = null;
     if (kind === "change_request") {

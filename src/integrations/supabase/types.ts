@@ -636,6 +636,7 @@ export type Database = {
           current_batch_no: number
           github_repo: string | null
           id: string
+          is_import: boolean
           lovable_project_url: string | null
           name: string
           status: string
@@ -646,6 +647,7 @@ export type Database = {
           current_batch_no?: number
           github_repo?: string | null
           id?: string
+          is_import?: boolean
           lovable_project_url?: string | null
           name: string
           status?: string
@@ -656,6 +658,7 @@ export type Database = {
           current_batch_no?: number
           github_repo?: string | null
           id?: string
+          is_import?: boolean
           lovable_project_url?: string | null
           name?: string
           status?: string

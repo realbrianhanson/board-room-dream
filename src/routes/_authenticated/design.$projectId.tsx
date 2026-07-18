@@ -16,7 +16,7 @@ const CONVENE_BLOCKED: Record<string, string> = {
   killed: "This idea was killed.",
 };
 
-type Project = { id: string; name: string; user_id: string; status: string };
+type Project = { id: string; name: string; user_id: string; status: string; is_import: boolean; github_repo: string | null };
 type PlanVersion = {
   id: string;
   version: number;
@@ -53,7 +53,7 @@ function DesignStudioPage() {
       setUid(u.user?.id ?? null);
       const { data: p } = await supabase
         .from("projects")
-        .select("id, name, user_id, status")
+        .select("id, name, user_id, status, is_import, github_repo")
         .eq("id", projectId)
         .maybeSingle();
       setProject((p as Project) ?? null);
@@ -63,6 +63,7 @@ function DesignStudioPage() {
         .eq("project_id", projectId)
         .eq("kind", "plan");
       setHasPlan((count ?? 0) > 0);
+
       await loadLocked();
     })();
   }, [projectId, loadLocked]);
@@ -126,7 +127,7 @@ function DesignStudioPage() {
         <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">The Design Council</p>
       </div>
 
-      {!hasPlan ? (
+      {!hasPlan && !project.is_import ? (
         <div className="rounded-xl border border-dashed border-border bg-surface-1/40 px-8 py-20 text-center">
           <Palette className="mx-auto h-6 w-6 text-muted-foreground" />
           <p className="mt-4 font-display text-2xl text-foreground">The board locks the plan before it debates the look.</p>
@@ -140,6 +141,7 @@ function DesignStudioPage() {
           </Link>
         </div>
       ) : (
+
         <>
           <BoardroomSession
             projectId={projectId}
