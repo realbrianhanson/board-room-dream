@@ -20,6 +20,7 @@ import { Route as AuthenticatedDashboardRouteImport } from './routes/_authentica
 import { Route as AuthenticatedCohortRouteImport } from './routes/_authenticated/cohort'
 import { Route as AuthenticatedBoardroomRouteImport } from './routes/_authenticated/boardroom'
 import { Route as AuthenticatedAuditsRouteImport } from './routes/_authenticated/audits'
+import { Route as AuthenticatedPlanProjectIdRouteImport } from './routes/_authenticated/plan.$projectId'
 import { Route as AuthenticatedIntakeIntakeIdRouteImport } from './routes/_authenticated/intake.$intakeId'
 import { Route as AuthenticatedDebugRunsRouteImport } from './routes/_authenticated/debug.runs'
 import { Route as AuthenticatedBoardroomProjectIdRouteImport } from './routes/_authenticated/boardroom.$projectId'
@@ -78,6 +79,12 @@ const AuthenticatedAuditsRoute = AuthenticatedAuditsRouteImport.update({
   path: '/audits',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedPlanProjectIdRoute =
+  AuthenticatedPlanProjectIdRouteImport.update({
+    id: '/plan/$projectId',
+    path: '/plan/$projectId',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedIntakeIntakeIdRoute =
   AuthenticatedIntakeIntakeIdRouteImport.update({
     id: '/intake/$intakeId',
@@ -110,6 +117,7 @@ export interface FileRoutesByFullPath {
   '/boardroom/$projectId': typeof AuthenticatedBoardroomProjectIdRoute
   '/debug/runs': typeof AuthenticatedDebugRunsRoute
   '/intake/$intakeId': typeof AuthenticatedIntakeIntakeIdRoute
+  '/plan/$projectId': typeof AuthenticatedPlanProjectIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -125,6 +133,7 @@ export interface FileRoutesByTo {
   '/boardroom/$projectId': typeof AuthenticatedBoardroomProjectIdRoute
   '/debug/runs': typeof AuthenticatedDebugRunsRoute
   '/intake/$intakeId': typeof AuthenticatedIntakeIntakeIdRoute
+  '/plan/$projectId': typeof AuthenticatedPlanProjectIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -142,6 +151,7 @@ export interface FileRoutesById {
   '/_authenticated/boardroom/$projectId': typeof AuthenticatedBoardroomProjectIdRoute
   '/_authenticated/debug/runs': typeof AuthenticatedDebugRunsRoute
   '/_authenticated/intake/$intakeId': typeof AuthenticatedIntakeIntakeIdRoute
+  '/_authenticated/plan/$projectId': typeof AuthenticatedPlanProjectIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -159,6 +169,7 @@ export interface FileRouteTypes {
     | '/boardroom/$projectId'
     | '/debug/runs'
     | '/intake/$intakeId'
+    | '/plan/$projectId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -174,6 +185,7 @@ export interface FileRouteTypes {
     | '/boardroom/$projectId'
     | '/debug/runs'
     | '/intake/$intakeId'
+    | '/plan/$projectId'
   id:
     | '__root__'
     | '/'
@@ -190,6 +202,7 @@ export interface FileRouteTypes {
     | '/_authenticated/boardroom/$projectId'
     | '/_authenticated/debug/runs'
     | '/_authenticated/intake/$intakeId'
+    | '/_authenticated/plan/$projectId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -277,6 +290,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAuditsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/plan/$projectId': {
+      id: '/_authenticated/plan/$projectId'
+      path: '/plan/$projectId'
+      fullPath: '/plan/$projectId'
+      preLoaderRoute: typeof AuthenticatedPlanProjectIdRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/intake/$intakeId': {
       id: '/_authenticated/intake/$intakeId'
       path: '/intake/$intakeId'
@@ -326,6 +346,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
   AuthenticatedDebugRunsRoute: typeof AuthenticatedDebugRunsRoute
   AuthenticatedIntakeIntakeIdRoute: typeof AuthenticatedIntakeIntakeIdRoute
+  AuthenticatedPlanProjectIdRoute: typeof AuthenticatedPlanProjectIdRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
@@ -339,6 +360,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
   AuthenticatedDebugRunsRoute: AuthenticatedDebugRunsRoute,
   AuthenticatedIntakeIntakeIdRoute: AuthenticatedIntakeIntakeIdRoute,
+  AuthenticatedPlanProjectIdRoute: AuthenticatedPlanProjectIdRoute,
 }
 
 const AuthenticatedRouteRouteWithChildren =
