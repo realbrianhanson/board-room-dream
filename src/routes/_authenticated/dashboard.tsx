@@ -242,6 +242,10 @@ async function resume(
       return;
     }
   }
+  if (status === "locked") {
+    navigate({ to: "/plan/$projectId", params: { projectId } });
+    return;
+  }
   navigate({ to: "/boardroom/$projectId", params: { projectId } });
 }
 
