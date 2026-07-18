@@ -1,1 +1,4 @@
 project_id = "raiyybdrizlmtbvehzaj"
+
+[functions.key-vault]
+verify_jwt = false
