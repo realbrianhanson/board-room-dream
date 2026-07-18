@@ -216,6 +216,9 @@ function CohortPage() {
               : "You don't instruct any cohorts yet."}
           </p>
         </div>
+        {cohorts.length > 0 && (
+          <CohortCapEditor cohorts={cohorts} onSaved={load} />
+        )}
       </div>
 
       {/* Alerts strip */}
