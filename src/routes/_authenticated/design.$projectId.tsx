@@ -53,7 +53,7 @@ function DesignStudioPage() {
       setUid(u.user?.id ?? null);
       const { data: p } = await supabase
         .from("projects")
-        .select("id, name, user_id, status")
+        .select("id, name, user_id, status, is_import, github_repo")
         .eq("id", projectId)
         .maybeSingle();
       setProject((p as Project) ?? null);
@@ -63,6 +63,7 @@ function DesignStudioPage() {
         .eq("project_id", projectId)
         .eq("kind", "plan");
       setHasPlan((count ?? 0) > 0);
+
       await loadLocked();
     })();
   }, [projectId, loadLocked]);
