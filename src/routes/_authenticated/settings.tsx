@@ -559,6 +559,20 @@ function SettingsPage() {
         <GitHubCard isAdmin={isAdmin} />
       </div>
 
+      <div className="mt-14 border-t border-border pt-10">
+        <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+          Spend
+        </span>
+        <h2 className="mt-3 font-display text-2xl text-foreground">The meter.</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Every board call is logged. Resets at 00:00 UTC.
+        </p>
+        <div className="mt-6">
+          <SpendPanel />
+        </div>
+      </div>
+
+
       {isAdmin && (
         <>
           <div className="mt-14 border-t border-border pt-10">
