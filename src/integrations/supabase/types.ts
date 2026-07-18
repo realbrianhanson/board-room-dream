@@ -14,6 +14,57 @@ export type Database = {
   }
   public: {
     Tables: {
+      api_keys: {
+        Row: {
+          created_at: string
+          encrypted_key: string
+          id: string
+          last4: string | null
+          provider: string
+          status: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          encrypted_key: string
+          id?: string
+          last4?: string | null
+          provider: string
+          status?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          encrypted_key?: string
+          id?: string
+          last4?: string | null
+          provider?: string
+          status?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      app_settings: {
+        Row: {
+          key: string
+          updated_at: string
+          value: Json
+          version: number
+        }
+        Insert: {
+          key: string
+          updated_at?: string
+          value: Json
+          version?: number
+        }
+        Update: {
+          key?: string
+          updated_at?: string
+          value?: Json
+          version?: number
+        }
+        Relationships: []
+      }
       cohorts: {
         Row: {
           id: string
@@ -35,6 +86,39 @@ export type Database = {
           join_code?: string
           name?: string
           starts_at?: string | null
+        }
+        Relationships: []
+      }
+      model_registry: {
+        Row: {
+          display_name: string | null
+          enabled: boolean
+          max_cost_per_run: number
+          model_id: string
+          role_prompt: string | null
+          seat: string
+          updated_at: string
+          use_latest_alias: boolean
+        }
+        Insert: {
+          display_name?: string | null
+          enabled?: boolean
+          max_cost_per_run?: number
+          model_id: string
+          role_prompt?: string | null
+          seat: string
+          updated_at?: string
+          use_latest_alias?: boolean
+        }
+        Update: {
+          display_name?: string | null
+          enabled?: boolean
+          max_cost_per_run?: number
+          model_id?: string
+          role_prompt?: string | null
+          seat?: string
+          updated_at?: string
+          use_latest_alias?: boolean
         }
         Relationships: []
       }
@@ -72,6 +156,7 @@ export type Database = {
         Returns: boolean
       }
       is_admin: { Args: { _uid: string }; Returns: boolean }
+      join_cohort: { Args: { code: string }; Returns: string }
       user_cohort: { Args: { _uid: string }; Returns: string }
     }
     Enums: {
