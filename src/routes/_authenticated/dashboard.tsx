@@ -15,6 +15,7 @@ type Project = {
   current_batch_no: number;
   created_at: string;
   has_design?: boolean;
+  has_batches?: boolean;
 };
 
 const NEXT_ACTION: Record<string, string> = {
@@ -31,6 +32,9 @@ const NEXT_ACTION: Record<string, string> = {
 
 function nextActionLabel(p: Project): string {
   if (p.status === "locked" && !p.has_design) return "Convene the Design Council";
+  if (p.status === "locked" && p.has_design && !p.has_batches) return "Generate your build sequence";
+  if (p.status === "building" && p.current_batch_no > 0) return `Continue the Runway — Batch ${p.current_batch_no}`;
+  if (p.status === "building") return "Continue the Runway";
   return NEXT_ACTION[p.status] ?? "Open";
 }
 
@@ -102,15 +106,16 @@ function DashboardPage() {
     const rows = (data ?? []) as Project[];
     const lockedIds = rows.filter((r) => r.status === "locked").map((r) => r.id);
     let designSet = new Set<string>();
+    let batchSet = new Set<string>();
     if (lockedIds.length) {
-      const { data: pvs } = await supabase
-        .from("plan_versions")
-        .select("project_id")
-        .eq("kind", "design")
-        .in("project_id", lockedIds);
+      const [{ data: pvs }, { data: bs }] = await Promise.all([
+        supabase.from("plan_versions").select("project_id").eq("kind", "design").in("project_id", lockedIds),
+        supabase.from("batches").select("project_id").in("project_id", lockedIds),
+      ]);
       designSet = new Set((pvs ?? []).map((r: any) => r.project_id));
+      batchSet = new Set((bs ?? []).map((r: any) => r.project_id));
     }
-    setProjects(rows.map((r) => ({ ...r, has_design: designSet.has(r.id) })));
+    setProjects(rows.map((r) => ({ ...r, has_design: designSet.has(r.id), has_batches: batchSet.has(r.id) })));
   }
   useEffect(() => {
     load();
@@ -260,18 +265,23 @@ async function resume(
     }
   }
   if (status === "locked") {
-    const { data: design } = await supabase
-      .from("plan_versions")
-      .select("id")
-      .eq("project_id", projectId)
-      .eq("kind", "design")
-      .limit(1)
-      .maybeSingle();
+    const [{ data: design }, { data: batch }] = await Promise.all([
+      supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "design").limit(1).maybeSingle(),
+      supabase.from("batches").select("id").eq("project_id", projectId).limit(1).maybeSingle(),
+    ]);
     if (!design) {
       navigate({ to: "/design/$projectId", params: { projectId } });
       return;
     }
+    if (!batch) {
+      navigate({ to: "/runway/$projectId", params: { projectId } });
+      return;
+    }
     navigate({ to: "/plan/$projectId", params: { projectId } });
+    return;
+  }
+  if (status === "building" || status === "auditing") {
+    navigate({ to: "/runway/$projectId", params: { projectId } });
     return;
   }
   navigate({ to: "/boardroom/$projectId", params: { projectId } });

@@ -434,6 +434,75 @@ If rejected, amended_* may be empty strings / empty array.`;
   });
 }
 
+async function queueBatchesStep(admin: any, run: any) {
+  const plan = await loadLockedPlan(admin, run.project_id);
+  const { data: design } = await admin
+    .from("plan_versions")
+    .select("content_md")
+    .eq("project_id", run.project_id)
+    .eq("kind", "design")
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const designSection = design?.content_md
+    ? `LOCKED DESIGN BRIEF\n\n${design.content_md}\n\nBatch 1 MUST install these design tokens (CSS variables, Tailwind config, font imports) BEFORE any feature work.`
+    : `NO LOCKED DESIGN BRIEF — do not fabricate one. The student will convene the Design Council later.`;
+
+  const system = `You are the Chair, sequencing this student's build for their Lovable project. Produce 6-14 dependency-safe, single-concern build batches that turn the locked plan + PRD into a shippable app.
+
+Rules for EVERY batch:
+- Numbered items with EXACT scope — no wishlists.
+- Ends with the sentence: "Keep everything else identical."
+- Code batches (channel 'lovable' or 'supabase') also end with: "Typecheck when done."
+- Channel 'supabase' = pure database/schema/RLS/edge-function work.
+- Channel 'human' = things only the student can do in external consoles (Stripe, DNS, OAuth apps, App Store, domain purchase) — write plain-language numbered steps, no code, no typecheck line.
+- Channel 'lovable' = frontend + integration work the student will paste into Lovable.
+- Sequence so nothing depends on a later batch. Auth/data foundations early. Polish/SEO/analytics late.
+- Every prompt_md follows this skeleton:
+  """
+  Batch N — <one-line batch name>. Numbered items only, no scope creep.
+
+  1. <item>
+  2. <item>
+  ...
+
+  Keep everything else identical.
+  Typecheck when done.  ← omit for channel 'human'
+  """
+
+Return ONLY valid JSON:
+{
+  "batches": [
+    { "batch_no": 1, "title": "Foundation & shell", "channel": "lovable"|"supabase"|"human", "prompt_md": "Batch 1 — ...\\n\\n1. ...\\n\\nKeep everything else identical.\\nTypecheck when done." }
+  ]
+}
+
+Constraints: 6-14 batches, unique ascending integer batch_no starting at 1, every prompt_md non-empty and following the skeleton exactly.`;
+
+  const featuresBlock = Array.isArray(plan?.features) && plan!.features.length
+    ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
+    : "(none listed)";
+
+  const user = `LOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nProduce the JSON now.`;
+
+  await admin.from("run_steps").insert({
+    run_id: run.id,
+    user_id: run.user_id,
+    step_key: "batches_chair",
+    round: 1,
+    seat: "chair",
+    status: "queued",
+    request: {
+      json_output: true,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    },
+  });
+}
+
 async function createInitialSteps(admin: any, run: any) {
   if (run.kind === "test") {
     await admin.from("run_steps").insert({
@@ -453,6 +522,10 @@ async function createInitialSteps(admin: any, run: any) {
   }
   if (run.kind === "plan" || run.kind === "design") {
     await queueRound1(admin, run);
+    return;
+  }
+  if (run.kind === "batches") {
+    await queueBatchesStep(admin, run);
     return;
   }
   if (run.kind === "change_request") {
@@ -554,10 +627,27 @@ function validateStepJson(stepKey: string, parsed: any, kind: string = "plan"): 
     }
     return null;
   }
+  if (stepKey === "batches_chair") {
+    if (!parsed || !Array.isArray(parsed.batches)) return "Missing batches array.";
+    const b = parsed.batches;
+    if (b.length < 6 || b.length > 14) return "batches must contain 6-14 items.";
+    let prev = 0;
+    const seen = new Set<number>();
+    for (const item of b) {
+      if (!item || typeof item !== "object") return "Each batch must be an object.";
+      const n = Number(item.batch_no);
+      if (!Number.isFinite(n) || n <= prev) return "batch_no must be unique and strictly ascending.";
+      if (seen.has(n)) return "batch_no values must be unique.";
+      seen.add(n);
+      prev = n;
+      if (typeof item.title !== "string" || !item.title.trim()) return "Each batch needs a title.";
+      if (!["lovable", "supabase", "human"].includes(item.channel)) return "Each batch.channel must be lovable, supabase, or human.";
+      if (typeof item.prompt_md !== "string" || !item.prompt_md.trim()) return "Each batch needs a non-empty prompt_md.";
+    }
+    return null;
+  }
   return null;
 }
-
-// ============================== Step claim / execute ==============================
 
 async function claimOneStep(admin: any, runId: string) {
   const { data: candidate } = await admin
@@ -878,6 +968,41 @@ async function finalizeChangeRequest(admin: any, run: any, steps: any[]) {
 
 // ============================== Round advancement ==============================
 
+async function finalizeBatches(admin: any, run: any, batchesJson: any[]) {
+  const { data: plan } = await admin
+    .from("plan_versions")
+    .select("id")
+    .eq("project_id", run.project_id)
+    .eq("kind", "plan")
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const rows = batchesJson.map((b: any) => ({
+    project_id: run.project_id,
+    user_id: run.user_id,
+    plan_version_id: plan?.id ?? null,
+    batch_no: Number(b.batch_no),
+    title: String(b.title),
+    channel: String(b.channel),
+    prompt_md: String(b.prompt_md),
+    status: "pending",
+    is_fix: false,
+  }));
+  const { error: insErr } = await admin.from("batches").insert(rows);
+  if (insErr) {
+    await admin
+      .from("boardroom_runs")
+      .update({ status: "failed", error: `Failed to insert batches: ${insErr.message}` })
+      .eq("id", run.id);
+    return;
+  }
+  await admin.from("projects").update({ status: "building", current_batch_no: 1 }).eq("id", run.project_id);
+  await admin
+    .from("boardroom_runs")
+    .update({ status: "completed", consensus: { batches_inserted: rows.length }, updated_at: new Date().toISOString() })
+    .eq("id", run.id);
+}
+
 async function loadAllSteps(admin: any, runId: string) {
   const { data } = await admin
     .from("run_steps")
@@ -936,6 +1061,19 @@ async function afterStepComplete(admin: any, runIn: any) {
       if (cr) await queueChangeRequestVerdict(admin, run, cr, plan ?? {}, steps);
       fireSelfTick();
       return;
+    }
+    return;
+  }
+
+  if (run.kind === "batches") {
+    const step = steps.find((x: any) => x.step_key === "batches_chair");
+    if (step?.status === "completed" && step.response_json && !step.response_json.invalid) {
+      await finalizeBatches(admin, run, step.response_json.batches ?? []);
+    } else {
+      await admin
+        .from("boardroom_runs")
+        .update({ status: "failed", error: step?.response_json?.validation_error ?? "batches_chair did not produce a valid response" })
+        .eq("id", run.id);
     }
     return;
   }
@@ -1089,7 +1227,7 @@ Deno.serve(async (req) => {
     const kind: string = body?.kind;
     const changeRequestId: string | undefined = body?.change_request_id;
     if (!projectId || !kind) return j(400, { error: "Missing project_id or kind" });
-    if (!["test", "plan", "features", "design", "change_request", "audit"].includes(kind)) {
+    if (!["test", "plan", "features", "design", "change_request", "audit", "batches"].includes(kind)) {
       return j(400, { error: "Invalid kind" });
     }
     const { data: project } = await admin
@@ -1099,9 +1237,16 @@ Deno.serve(async (req) => {
       .maybeSingle();
     if (!project || project.user_id !== userId) return j(404, { error: "Project not found" });
 
-    if (kind === "design") {
+    if (kind === "design" || kind === "batches") {
       const locked = await loadLockedPlan(admin, projectId);
-      if (!locked) return j(400, { error: "The board locks the plan before it debates the look." });
+      if (!locked) return j(400, { error: kind === "design" ? "The board locks the plan before it debates the look." : "The board locks the plan before it sequences the build." });
+    }
+    if (kind === "batches") {
+      const { count } = await admin
+        .from("batches")
+        .select("id", { count: "exact", head: true })
+        .eq("project_id", projectId);
+      if ((count ?? 0) > 0) return j(400, { error: "This project already has a build sequence." });
     }
 
     let consensusMeta: any = null;
@@ -1125,7 +1270,7 @@ Deno.serve(async (req) => {
       .eq("key", "constitution")
       .maybeSingle();
 
-    const budget = kind === "test" ? 0.25 : kind === "change_request" ? 3.0 : 10.0;
+    const budget = kind === "test" ? 0.25 : kind === "change_request" ? 3.0 : kind === "batches" ? 3.0 : 10.0;
     const { data: run, error: rerr } = await admin
       .from("boardroom_runs")
       .insert({
