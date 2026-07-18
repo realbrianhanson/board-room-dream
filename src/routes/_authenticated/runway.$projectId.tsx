@@ -725,28 +725,27 @@ function BatchCard({
                     </button>
                   )}
                   {batch.status === "built" && (
-                    <>
-                      <span className="inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-muted-foreground">
-                        Code audit arrives in a later batch
-                      </span>
-                      <button
-                        onClick={() => onAdvance("passed")}
-                        className="inline-flex items-center gap-2 rounded-md border border-[hsl(160_45%_48%/0.5)] bg-[hsl(160_45%_28%/0.3)] px-4 py-2 text-sm text-foreground transition-colors hover:brightness-110"
-                      >
-                        <Check className="h-4 w-4" /> Mark passed
-                      </button>
-                    </>
-                  )}
-                  {batch.status === "fix_needed" && (
                     <button
-                      onClick={() => onAdvance("passed")}
+                      onClick={onOpenAudit}
                       className="inline-flex items-center gap-2 rounded-md border border-[hsl(160_45%_48%/0.5)] bg-[hsl(160_45%_28%/0.3)] px-4 py-2 text-sm text-foreground transition-colors hover:brightness-110"
                     >
-                      <Check className="h-4 w-4" /> Mark passed
+                      <Gavel className="h-4 w-4" /> Run the audit
                     </button>
+                  )}
+                  {batch.status === "auditing" && (
+                    <span className="inline-flex items-center gap-2 rounded-md border border-[hsl(160_45%_48%/0.4)] bg-[hsl(160_45%_28%/0.15)] px-3 py-2 font-mono text-[11px] uppercase tracking-[0.22em] text-[hsl(160_45%_70%)]">
+                      <span className="h-2 w-2 animate-pulse rounded-full bg-[hsl(160_45%_60%)]" />
+                      The board is reading your code…
+                    </span>
+                  )}
+                  {batch.status === "fix_needed" && fixBatch && (
+                    <span className="inline-flex items-center gap-2 rounded-md border border-[hsl(8_60%_55%/0.4)] bg-[hsl(8_60%_25%/0.2)] px-3 py-2 font-mono text-[11px] uppercase tracking-[0.22em] text-[hsl(8_60%_75%)]">
+                      Fix batch {fixBatch.batch_no} is waiting
+                    </span>
                   )}
                 </>
               )}
+
 
               <button
                 onClick={onOpenRollback}
