@@ -349,3 +349,73 @@ function CohortPage() {
     </div>
   );
 }
+
+function CohortCapEditor({ cohorts, onSaved }: { cohorts: CohortRow[]; onSaved: () => void }) {
+  const [selectedId, setSelectedId] = useState<string>(cohorts[0]?.id ?? "");
+  const selected = cohorts.find((c) => c.id === selectedId) ?? cohorts[0];
+  const [value, setValue] = useState<string>(selected?.daily_cap_usd == null ? "" : String(selected.daily_cap_usd));
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setValue(selected?.daily_cap_usd == null ? "" : String(selected.daily_cap_usd));
+  }, [selected?.id, selected?.daily_cap_usd]);
+
+  async function save() {
+    if (!selected) return;
+    setSaving(true);
+    const parsed = value.trim() === "" ? null : Number(value);
+    if (parsed !== null && (!Number.isFinite(parsed) || parsed <= 0)) {
+      toast.error("Enter a positive number, or leave blank to use the workspace default.");
+      setSaving(false);
+      return;
+    }
+    const { error } = await supabase
+      .from("cohorts")
+      .update({ daily_cap_usd: parsed })
+      .eq("id", selected.id);
+    if (error) toast.error(error.message);
+    else {
+      toast.success(parsed == null ? "Reverted to workspace default" : `Cap set to $${parsed.toFixed(2)}`);
+      onSaved();
+    }
+    setSaving(false);
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-2 rounded-xl border border-border/40 bg-surface-1 p-4">
+      <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Daily cap</span>
+      <div className="flex flex-wrap items-center gap-2">
+        {cohorts.length > 1 && (
+          <select
+            value={selectedId}
+            onChange={(e) => setSelectedId(e.target.value)}
+            className="rounded-md border border-border bg-surface-2 px-2 py-1.5 text-xs text-foreground outline-none focus:border-primary"
+          >
+            {cohorts.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        )}
+        <div className="flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-1.5">
+          <span className="font-mono text-xs text-muted-foreground">$</span>
+          <input
+            type="number"
+            step="0.01"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder="default"
+            className="w-20 bg-transparent font-mono text-xs text-foreground outline-none"
+          />
+        </div>
+        <button
+          onClick={save}
+          disabled={saving}
+          className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+        >
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+      <span className="font-mono text-[10px] text-muted-foreground">Leave blank to use the workspace default</span>
+    </div>
+  );
+}
