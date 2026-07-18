@@ -89,6 +89,44 @@ export type Database = {
         }
         Relationships: []
       }
+      intakes: {
+        Row: {
+          answers: Json
+          created_at: string
+          id: string
+          project_id: string
+          user_id: string
+          validation_scores: Json | null
+          verdict: string | null
+        }
+        Insert: {
+          answers?: Json
+          created_at?: string
+          id?: string
+          project_id: string
+          user_id: string
+          validation_scores?: Json | null
+          verdict?: string | null
+        }
+        Update: {
+          answers?: Json
+          created_at?: string
+          id?: string
+          project_id?: string
+          user_id?: string
+          validation_scores?: Json | null
+          verdict?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "intakes_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       model_registry: {
         Row: {
           display_name: string | null
@@ -143,6 +181,39 @@ export type Database = {
           id?: string
           onboarded_at?: string
           role?: string
+        }
+        Relationships: []
+      }
+      projects: {
+        Row: {
+          created_at: string
+          current_batch_no: number
+          github_repo: string | null
+          id: string
+          lovable_project_url: string | null
+          name: string
+          status: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          current_batch_no?: number
+          github_repo?: string | null
+          id?: string
+          lovable_project_url?: string | null
+          name: string
+          status?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          current_batch_no?: number
+          github_repo?: string | null
+          id?: string
+          lovable_project_url?: string | null
+          name?: string
+          status?: string
+          user_id?: string
         }
         Relationships: []
       }
