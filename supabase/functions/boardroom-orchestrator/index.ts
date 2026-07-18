@@ -1162,8 +1162,17 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
           status: "pending",
         });
       }
-      await admin.from("projects").update({ status: "done" }).eq("id", audit.project_id);
+      // Imports continue into improvement work — do NOT mark 'done'.
+      const { data: proj } = await admin
+        .from("projects")
+        .select("is_import")
+        .eq("id", audit.project_id)
+        .maybeSingle();
+      if (!proj?.is_import) {
+        await admin.from("projects").update({ status: "done" }).eq("id", audit.project_id);
+      }
     }
+
     await admin
       .from("boardroom_runs")
       .update({ status: "consensus", consensus: { ...(run.consensus ?? {}), verdict: "clean" } })
