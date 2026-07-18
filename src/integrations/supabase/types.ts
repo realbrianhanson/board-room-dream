@@ -65,6 +65,79 @@ export type Database = {
         }
         Relationships: []
       }
+      batches: {
+        Row: {
+          batch_no: number
+          built_at: string | null
+          channel: string
+          created_at: string
+          id: string
+          is_fix: boolean
+          parent_batch_id: string | null
+          plan_version_id: string | null
+          project_id: string
+          prompt_md: string
+          sent_at: string | null
+          status: string
+          title: string
+          user_id: string
+        }
+        Insert: {
+          batch_no: number
+          built_at?: string | null
+          channel?: string
+          created_at?: string
+          id?: string
+          is_fix?: boolean
+          parent_batch_id?: string | null
+          plan_version_id?: string | null
+          project_id: string
+          prompt_md: string
+          sent_at?: string | null
+          status?: string
+          title: string
+          user_id: string
+        }
+        Update: {
+          batch_no?: number
+          built_at?: string | null
+          channel?: string
+          created_at?: string
+          id?: string
+          is_fix?: boolean
+          parent_batch_id?: string | null
+          plan_version_id?: string | null
+          project_id?: string
+          prompt_md?: string
+          sent_at?: string | null
+          status?: string
+          title?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "batches_parent_batch_id_fkey"
+            columns: ["parent_batch_id"]
+            isOneToOne: false
+            referencedRelation: "batches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "batches_plan_version_id_fkey"
+            columns: ["plan_version_id"]
+            isOneToOne: false
+            referencedRelation: "plan_versions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "batches_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       boardroom_runs: {
         Row: {
           budget_usd: number
