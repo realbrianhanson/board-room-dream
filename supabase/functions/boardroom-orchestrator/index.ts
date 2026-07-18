@@ -145,7 +145,7 @@ function priorRoundFailureBlock(steps: any[], previousLoop: number) {
   for (const v of votes as any[]) {
     const jj = v.response_json ?? {};
     (jj.blocking_objections ?? []).forEach((b: string) => blocking.push(`- [${v.seat}] ${b}`));
-    for (const k of RUBRIC) {
+    for (const k of [...PLAN_RUBRIC, ...DESIGN_RUBRIC]) {
       const n = Number(jj?.scores?.[k]);
       if (Number.isFinite(n) && n < 8) lowScores.push(`- [${v.seat}] ${k}: ${n}`);
     }
