@@ -796,13 +796,27 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      instructs_cohort: {
-        Args: { _cohort: string; _uid: string }
-        Returns: boolean
+      admin_model_registry: {
+        Args: never
+        Returns: {
+          display_name: string | null
+          enabled: boolean
+          fallback_model_id: string | null
+          max_cost_per_run: number
+          model_id: string
+          role_prompt: string | null
+          seat: string
+          updated_at: string
+          use_latest_alias: boolean
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "model_registry"
+          isOneToOne: false
+          isSetofReturn: true
+        }
       }
-      is_admin: { Args: { _uid: string }; Returns: boolean }
       join_cohort: { Args: { code: string }; Returns: string }
-      user_cohort: { Args: { _uid: string }; Returns: string }
     }
     Enums: {
       [_ in never]: never
