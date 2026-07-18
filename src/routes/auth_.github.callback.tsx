@@ -1,8 +1,10 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
+import { Check } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { consumeGithubReturnTo } from "@/lib/github-connect";
 
 export const Route = createFileRoute("/auth_/github/callback")({
   component: GitHubCallbackPage,
@@ -56,9 +58,13 @@ function GitHubCallbackPage() {
         setState({ kind: "error", error: fnError });
         return;
       }
-      toast.success("GitHub connected.");
+      const returnTo = consumeGithubReturnTo();
+      if (returnTo) {
+        toast.success("GitHub connected.");
+        window.location.replace(returnTo);
+        return;
+      }
       setState({ kind: "success" });
-      navigate({ to: "/settings" });
     })();
   }, [navigate]);
 
@@ -88,12 +94,34 @@ function GitHubCallbackPage() {
     );
   }
 
+  if (state.kind === "success") {
+    return (
+      <div className="mx-auto flex min-h-[60vh] max-w-md flex-col items-center justify-center px-6">
+        <div className="w-full rounded-xl border border-[hsl(160_45%_42%/0.4)] bg-surface-1 p-6 shadow-lg">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full border border-[hsl(160_45%_42%/0.4)] bg-[hsl(160_45%_42%/0.12)]">
+            <Check className="h-5 w-5 text-[hsl(160_45%_62%)]" />
+          </div>
+          <h1 className="mt-4 font-display text-2xl text-foreground">GitHub connected.</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            The board can now read your repos for audits.
+          </p>
+          <div className="mt-6 flex gap-3">
+            <Button asChild>
+              <Link to="/dashboard">Back to dashboard</Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link to="/settings">Settings</Link>
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto flex min-h-[60vh] max-w-md flex-col items-center justify-center px-6 text-center">
       <div className="mb-4 h-8 w-8 animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
-      <p className="font-display text-xl text-foreground">
-        {state.kind === "working" ? state.message : "Done. Redirecting…"}
-      </p>
+      <p className="font-display text-xl text-foreground">{state.message}</p>
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { SpendPanel } from "@/components/spend-panel";
+import { startGithubConnect } from "@/lib/github-connect";
 
 export const Route = createFileRoute("/_authenticated/settings")({
   component: SettingsPage,
@@ -250,15 +251,15 @@ function GitHubCard({ isAdmin }: { isAdmin: boolean }) {
   useEffect(() => { refresh(); }, []);
 
   async function connect() {
-    if (window.self !== window.top) {
-      setIframeNotice(true);
-      return;
-    }
-    setIframeNotice(false);
     setBusy(true);
     try {
-      const data = (await callGh("start", { origin: window.location.origin })) as { url: string };
-      window.location.href = data.url;
+      const result = await startGithubConnect({ returnTo: "/settings" });
+      if (result === "embedded") {
+        setIframeNotice(true);
+        setBusy(false);
+        return;
+      }
+      setIframeNotice(false);
     } catch (e) {
       toast.error((e as Error).message);
       setBusy(false);

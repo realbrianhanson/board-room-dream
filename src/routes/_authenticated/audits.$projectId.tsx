@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { ArrowRight, Check, ScrollText, ShieldCheck } from "lucide-react";
 import { CodeSourcePicker } from "@/components/code-source-picker";
+import { startGithubConnect } from "@/lib/github-connect";
 
 export const Route = createFileRoute("/_authenticated/audits/$projectId")({
   component: AuditCenterPage,
@@ -254,12 +255,21 @@ function AuditCenterPage() {
                   {showPaste ? "Cancel paste" : "Paste code instead"}
                 </button>
                 {!ghRepo && (
-                  <Link
-                    to="/settings"
+                  <button
+                    onClick={async () => {
+                      try {
+                        const r = await startGithubConnect();
+                        if (r === "embedded") {
+                          toast("Open the app in its own browser tab to connect GitHub.");
+                        }
+                      } catch (e) {
+                        toast.error((e as Error).message);
+                      }
+                    }}
                     className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground hover:text-foreground"
                   >
                     Connect GitHub →
-                  </Link>
+                  </button>
                 )}
               </div>
             )}
