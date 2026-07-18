@@ -793,16 +793,42 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      v_default_daily_cap: {
+        Row: {
+          value: Json | null
+        }
+        Insert: {
+          value?: Json | null
+        }
+        Update: {
+          value?: Json | null
+        }
+        Relationships: []
+      }
+      v_seats: {
+        Row: {
+          display_name: string | null
+          enabled: boolean | null
+          model_id: string | null
+          seat: string | null
+        }
+        Insert: {
+          display_name?: string | null
+          enabled?: boolean | null
+          model_id?: string | null
+          seat?: string | null
+        }
+        Update: {
+          display_name?: string | null
+          enabled?: boolean | null
+          model_id?: string | null
+          seat?: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
-      instructs_cohort: {
-        Args: { _cohort: string; _uid: string }
-        Returns: boolean
-      }
-      is_admin: { Args: { _uid: string }; Returns: boolean }
       join_cohort: { Args: { code: string }; Returns: string }
-      user_cohort: { Args: { _uid: string }; Returns: string }
     }
     Enums: {
       [_ in never]: never
