@@ -355,7 +355,7 @@ function ModelRegistryEditor() {
     setLoading(true);
     const { data, error } = await supabase
       .from("model_registry")
-      .select("seat, model_id, display_name, role_prompt, enabled, max_cost_per_run")
+      .select("seat, model_id, display_name, role_prompt, enabled, max_cost_per_run, fallback_model_id")
       .order("seat");
     if (error) toast.error(error.message);
     else setSeats((data ?? []) as Seat[]);
@@ -379,6 +379,7 @@ function ModelRegistryEditor() {
         role_prompt: seat.role_prompt,
         enabled: seat.enabled,
         max_cost_per_run: seat.max_cost_per_run,
+        fallback_model_id: seat.fallback_model_id,
       })
       .eq("seat", seat.seat);
     if (error) toast.error(error.message);
@@ -437,6 +438,15 @@ function ModelRegistryEditor() {
                 step="0.01"
                 value={s.max_cost_per_run}
                 onChange={(e) => update(s.seat, { max_cost_per_run: Number(e.target.value) })}
+                className="w-full rounded-md border border-border bg-surface-1 px-3 py-2 font-mono text-sm text-foreground outline-none focus:border-primary"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">Refusal fallback model</label>
+              <input
+                value={s.fallback_model_id ?? ""}
+                onChange={(e) => update(s.seat, { fallback_model_id: e.target.value || null })}
+                placeholder="moonshotai/kimi-k3"
                 className="w-full rounded-md border border-border bg-surface-1 px-3 py-2 font-mono text-sm text-foreground outline-none focus:border-primary"
               />
             </div>
