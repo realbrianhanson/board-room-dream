@@ -353,12 +353,12 @@ function ModelRegistryEditor() {
 
   async function load() {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("model_registry")
-      .select("seat, model_id, display_name, role_prompt, enabled, max_cost_per_run, fallback_model_id")
-      .order("seat");
+    const { data, error } = await supabase.rpc("admin_model_registry");
     if (error) toast.error(error.message);
-    else setSeats((data ?? []) as Seat[]);
+    else {
+      const rows = ((data ?? []) as Seat[]).slice().sort((a, b) => a.seat.localeCompare(b.seat));
+      setSeats(rows);
+    }
     setLoading(false);
   }
   useEffect(() => {
