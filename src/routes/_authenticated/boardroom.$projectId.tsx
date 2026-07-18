@@ -718,6 +718,7 @@ function SeatAvatar({ seat, state, size = 64 }: { seat: SeatView; state: string;
 function RollCall({
   seats,
   consensusFill,
+  runStatus,
   round,
   completed,
   total,
@@ -725,11 +726,14 @@ function RollCall({
 }: {
   seats: SeatView[];
   consensusFill: number;
+  runStatus: string | undefined;
   round: number;
   completed: number;
   total: number;
   consensusRingRef: React.RefObject<HTMLDivElement | null>;
 }) {
+  const chairRuled = runStatus === "chair_ruled";
+  void chairRuled;
   const r = 14;
   const c = 2 * Math.PI * r;
   return (
