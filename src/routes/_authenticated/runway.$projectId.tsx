@@ -31,7 +31,10 @@ type Project = {
   status: string;
   lovable_project_url: string | null;
   current_batch_no: number;
+  is_import?: boolean;
+  github_repo?: string | null;
 };
+
 
 type Batch = {
   id: string;
