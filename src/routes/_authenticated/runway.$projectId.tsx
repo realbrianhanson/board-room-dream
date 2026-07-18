@@ -960,13 +960,22 @@ function GitHubRepoCard({ projectId, isOwner }: { projectId: string; isOwner: bo
           </>
         ) : gh.status === "invalid" ? (
           <>
-            <p className="mt-2 text-sm text-[hsl(8_60%_75%)]">Your GitHub token expired. Reconnect in Settings.</p>
-            <Link
-              to="/settings"
+            <p className="mt-2 text-sm text-[hsl(8_60%_75%)]">Your GitHub token expired. Reconnect to keep audits running.</p>
+            <button
+              onClick={async () => {
+                try {
+                  const r = await startGithubConnect();
+                  if (r === "embedded") {
+                    toast("Open the app in its own browser tab to reconnect GitHub.");
+                  }
+                } catch (e) {
+                  toast.error((e as Error).message);
+                }
+              }}
               className="mt-3 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
             >
               Reconnect GitHub
-            </Link>
+            </button>
           </>
         ) : (
           <>
