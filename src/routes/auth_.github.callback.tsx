@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 
-export const Route = createFileRoute("/auth/github/callback")({
+export const Route = createFileRoute("/auth_/github/callback")({
   component: GitHubCallbackPage,
 });
 
