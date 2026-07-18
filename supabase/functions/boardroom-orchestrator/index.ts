@@ -1099,6 +1099,11 @@ Deno.serve(async (req) => {
       .maybeSingle();
     if (!project || project.user_id !== userId) return j(404, { error: "Project not found" });
 
+    if (kind === "design") {
+      const locked = await loadLockedPlan(admin, projectId);
+      if (!locked) return j(400, { error: "The board locks the plan before it debates the look." });
+    }
+
     let consensusMeta: any = null;
     if (kind === "change_request") {
       if (!changeRequestId) return j(400, { error: "Missing change_request_id" });
