@@ -90,7 +90,7 @@ function BoardroomProjectPage() {
   const loadSteps = useCallback(async (runId: string) => {
     const { data } = await supabase
       .from("run_steps")
-      .select("id, run_id, step_key, round, seat, status, response_text, error, cost_usd, created_at, completed_at")
+      .select("id, run_id, step_key, round, seat, status, response_text, response_json, error, cost_usd, created_at, completed_at")
       .eq("run_id", runId)
       .order("created_at", { ascending: true });
     setSteps((data ?? []) as Step[]);
