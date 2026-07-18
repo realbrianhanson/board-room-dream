@@ -347,6 +347,7 @@ export type Database = {
           is_chair_ruled: boolean
           kind: string
           locked_at: string
+          prd_md: string | null
           project_id: string
           source_run_id: string | null
           user_id: string
@@ -361,6 +362,7 @@ export type Database = {
           is_chair_ruled?: boolean
           kind?: string
           locked_at?: string
+          prd_md?: string | null
           project_id: string
           source_run_id?: string | null
           user_id: string
@@ -375,6 +377,7 @@ export type Database = {
           is_chair_ruled?: boolean
           kind?: string
           locked_at?: string
+          prd_md?: string | null
           project_id?: string
           source_run_id?: string | null
           user_id?: string

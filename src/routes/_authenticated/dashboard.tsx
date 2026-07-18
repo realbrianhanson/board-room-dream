@@ -20,7 +20,7 @@ const NEXT_ACTION: Record<string, string> = {
   intake: "Finish the intake",
   validated: "Enter the boardroom",
   boardroom: "Continue the debate",
-  locked: "Start building",
+  locked: "Review your locked plan",
   building: "Ship the next batch",
   auditing: "Review findings",
   polishing: "Approve the polish",
@@ -241,6 +241,10 @@ async function resume(
       navigate({ to: "/intake/$intakeId", params: { intakeId: data.id } });
       return;
     }
+  }
+  if (status === "locked") {
+    navigate({ to: "/plan/$projectId", params: { projectId } });
+    return;
   }
   navigate({ to: "/boardroom/$projectId", params: { projectId } });
 }

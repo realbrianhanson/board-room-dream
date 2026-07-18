@@ -796,6 +796,9 @@ function stepRoundLabel(step: Step): string {
   if (step.step_key.startsWith("r3_synthesis_")) return `Round 3 — Synthesis (loop ${loop})`;
   if (step.step_key.startsWith("r4_vote_")) return `Round 4 — The vote (loop ${loop})`;
   if (step.step_key === "r_final_ruling_chair") return "Final ruling — Chair rules";
+  if (step.step_key === "r5_blueprint_chair") return "Blueprint — The Chair drafts the documents";
+  if (step.step_key.startsWith("cr_exam_")) return "Change request — Cross-examination";
+  if (step.step_key === "cr_verdict_chair") return "Change request — Chair's verdict";
   return `Round ${step.round}`;
 }
 
