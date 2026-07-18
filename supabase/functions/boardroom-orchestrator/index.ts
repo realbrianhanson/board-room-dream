@@ -940,7 +940,7 @@ async function afterStepComplete(admin: any, runIn: any) {
     return;
   }
 
-  if (run.kind !== "plan") {
+  if (run.kind !== "plan" && run.kind !== "design") {
     await admin
       .from("boardroom_runs")
       .update({ status: "paused", consensus: { awaiting: "future_batch" } })
