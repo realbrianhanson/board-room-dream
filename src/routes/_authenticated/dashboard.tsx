@@ -265,18 +265,23 @@ async function resume(
     }
   }
   if (status === "locked") {
-    const { data: design } = await supabase
-      .from("plan_versions")
-      .select("id")
-      .eq("project_id", projectId)
-      .eq("kind", "design")
-      .limit(1)
-      .maybeSingle();
+    const [{ data: design }, { data: batch }] = await Promise.all([
+      supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "design").limit(1).maybeSingle(),
+      supabase.from("batches").select("id").eq("project_id", projectId).limit(1).maybeSingle(),
+    ]);
     if (!design) {
       navigate({ to: "/design/$projectId", params: { projectId } });
       return;
     }
+    if (!batch) {
+      navigate({ to: "/runway/$projectId", params: { projectId } });
+      return;
+    }
     navigate({ to: "/plan/$projectId", params: { projectId } });
+    return;
+  }
+  if (status === "building" || status === "auditing") {
+    navigate({ to: "/runway/$projectId", params: { projectId } });
     return;
   }
   navigate({ to: "/boardroom/$projectId", params: { projectId } });
