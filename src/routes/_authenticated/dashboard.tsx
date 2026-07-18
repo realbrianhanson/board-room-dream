@@ -99,7 +99,18 @@ function DashboardPage() {
       setProjects([]);
       return;
     }
-    setProjects((data ?? []) as Project[]);
+    const rows = (data ?? []) as Project[];
+    const lockedIds = rows.filter((r) => r.status === "locked").map((r) => r.id);
+    let designSet = new Set<string>();
+    if (lockedIds.length) {
+      const { data: pvs } = await supabase
+        .from("plan_versions")
+        .select("project_id")
+        .eq("kind", "design")
+        .in("project_id", lockedIds);
+      designSet = new Set((pvs ?? []).map((r: any) => r.project_id));
+    }
+    setProjects(rows.map((r) => ({ ...r, has_design: designSet.has(r.id) })));
   }
   useEffect(() => {
     load();
