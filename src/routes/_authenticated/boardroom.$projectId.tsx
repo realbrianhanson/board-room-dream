@@ -1069,7 +1069,7 @@ function StatusPill({ run }: { run: Run | null }) {
       label: "In session",
       cls: "border-[hsl(38_65%_55%/0.4)] text-[hsl(38_65%_70%)]",
     },
-    paused: { label: "Awaiting protocol", cls: "border-border text-muted-foreground" },
+    paused: { label: "Paused", cls: "border-border text-muted-foreground" },
     paused_budget: {
       label: "Paused · budget",
       cls: "border-[hsl(8_60%_45%/0.4)] text-[hsl(8_60%_65%)]",
