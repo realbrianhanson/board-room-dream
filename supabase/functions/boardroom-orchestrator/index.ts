@@ -213,13 +213,31 @@ Revise ONLY the contested parts. Preserve agreed parts verbatim.`;
 
 async function queueRound1(admin: any, run: any) {
   const intake = await loadIntake(admin, run.project_id);
+  const project = await loadProjectMeta(admin, run.project_id);
+  const isImport = !!project?.is_import;
   let system: string;
   let userContent: string;
+
   if (run.kind === "design") {
     const plan = await loadLockedPlan(admin, run.project_id);
     system =
       "Round 1 of the Design Council. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best design direction for this app. You MUST include: concept/mood; palette as specific HSL values; type pairing with specific font names; spacing and shape language; ONE distinctive signature element (a structural design move — non-negotiable, this is the point); and motion rules. Be specific, opinionated, and premium. Avoid generic AI-slop aesthetics.";
-    userContent = `${intakeBlock(intake)}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nWrite your Round 1 design direction now.`;
+    if (isImport && !plan) {
+      const sample = await loadRepoSample(admin, project, 10);
+      userContent = `${intakeBlock(intake)}\n\nCODE FILES FROM THE OWNER'S REPO (frontend-biased sample)\n${formatFiles(sample.files)}\n\nThis is an existing app — critique what's there and propose a design direction that elevates it. Write your Round 1 design direction now.`;
+    } else {
+      userContent = `${intakeBlock(intake)}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nWrite your Round 1 design direction now.`;
+    }
+  } else if (run.kind === "plan" && isImport) {
+    system =
+      "Round 1 of the board's improvement deliberation. This app already exists — the owner has brought it to the board. You are drafting INDEPENDENTLY. Produce a PRIORITIZED IMPROVEMENT PLAN: what's broken, what's missing, what to build next, ranked by impact. Be specific, opinionated, and concrete about the code you can see. Do not restart the app from scratch.";
+    const sample = await loadRepoSample(admin, project, 15);
+    const audit = await latestAuditSummary(admin, run.project_id);
+    const treeBlock = sample.fileTree.length ? sample.fileTree.join("\n") : "(no repo linked)";
+    const auditBlock = audit?.summary
+      ? `LATEST A-Z AUDIT SUMMARY\n${JSON.stringify(audit.summary, null, 2)}`
+      : "LATEST A-Z AUDIT SUMMARY\n(no A-Z audit yet)";
+    userContent = `${intakeBlock(intake)}\n\nREPO FILE TREE (top ${sample.fileTree.length})\n${treeBlock}\n\nKEY FILES\n${formatFiles(sample.files)}\n\n${auditBlock}\n\nWrite your Round 1 prioritized improvement plan now.`;
   } else {
     system =
       "Round 1 of the board's deliberation. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best version of the app plan: concept, target user, core features (MVP-first, ruthlessly cut), the data the app stores, and what you'd cut. Be specific, concise, and opinionated.";
@@ -241,6 +259,7 @@ async function queueRound1(admin: any, run: any) {
   }));
   await admin.from("run_steps").insert(rows);
 }
+
 
 async function queueRound2(admin: any, run: any, steps: any[]) {
   const intake = await loadIntake(admin, run.project_id);
