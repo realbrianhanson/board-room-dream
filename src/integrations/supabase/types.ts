@@ -450,6 +450,7 @@ export type Database = {
       }
       cohorts: {
         Row: {
+          daily_cap_usd: number | null
           id: string
           instructor_id: string | null
           join_code: string
@@ -457,6 +458,7 @@ export type Database = {
           starts_at: string | null
         }
         Insert: {
+          daily_cap_usd?: number | null
           id?: string
           instructor_id?: string | null
           join_code: string
@@ -464,6 +466,7 @@ export type Database = {
           starts_at?: string | null
         }
         Update: {
+          daily_cap_usd?: number | null
           id?: string
           instructor_id?: string | null
           join_code?: string
@@ -568,6 +571,7 @@ export type Database = {
         Row: {
           display_name: string | null
           enabled: boolean
+          fallback_model_id: string | null
           max_cost_per_run: number
           model_id: string
           role_prompt: string | null
@@ -578,6 +582,7 @@ export type Database = {
         Insert: {
           display_name?: string | null
           enabled?: boolean
+          fallback_model_id?: string | null
           max_cost_per_run?: number
           model_id: string
           role_prompt?: string | null
@@ -588,6 +593,7 @@ export type Database = {
         Update: {
           display_name?: string | null
           enabled?: boolean
+          fallback_model_id?: string | null
           max_cost_per_run?: number
           model_id?: string
           role_prompt?: string | null
