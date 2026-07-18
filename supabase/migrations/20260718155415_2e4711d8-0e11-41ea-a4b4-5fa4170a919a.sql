@@ -1,0 +1,1 @@
+ALTER TABLE public.plan_versions ADD COLUMN IF NOT EXISTS prd_md text;
