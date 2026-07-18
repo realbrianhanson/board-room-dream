@@ -139,7 +139,7 @@ function RunwayPage() {
 
   const loadAll = useCallback(async () => {
     const [{ data: p }, { data: pv }, { data: dv }, { data: bs }, { data: rs }, { data: au }, { data: fi }] = await Promise.all([
-      supabase.from("projects").select("id, name, user_id, status, lovable_project_url, current_batch_no, github_repo").eq("id", projectId).maybeSingle(),
+      supabase.from("projects").select("id, name, user_id, status, lovable_project_url, current_batch_no, github_repo, is_import").eq("id", projectId).maybeSingle(),
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "plan").limit(1),
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "design").limit(1),
       supabase.from("batches").select("*").eq("project_id", projectId).order("batch_no", { ascending: true }),
