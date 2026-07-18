@@ -40,10 +40,20 @@ export const Route = createFileRoute("/_authenticated")({
       .from("profiles")
       .select("id, role, cohort_id, display_name")
       .maybeSingle();
-    return { profile: profile as ProfileRow | null };
+    let alertCount = 0;
+    const role = (profile as ProfileRow | null)?.role;
+    if (role === "instructor" || role === "admin") {
+      const { count } = await supabase
+        .from("alerts")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "open");
+      alertCount = count ?? 0;
+    }
+    return { profile: profile as ProfileRow | null, alertCount };
   },
   component: AuthenticatedShell,
 });
+
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
