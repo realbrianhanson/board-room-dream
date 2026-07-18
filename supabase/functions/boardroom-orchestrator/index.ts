@@ -517,7 +517,7 @@ function validateStepJson(stepKey: string, parsed: any, kind: string = "plan"): 
   if (stepKey.startsWith("r4_vote_")) {
     const scores = parsed.scores;
     if (!scores || typeof scores !== "object") return "Missing scores object.";
-    for (const k of RUBRIC) {
+    for (const k of rubricForKind(kind)) {
       const n = scores[k];
       if (!Number.isInteger(n) || n < 1 || n > 10) return `Score ${k} must be an integer 1-10.`;
     }
