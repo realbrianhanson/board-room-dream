@@ -243,6 +243,17 @@ async function resume(
     }
   }
   if (status === "locked") {
+    const { data: design } = await supabase
+      .from("plan_versions")
+      .select("id")
+      .eq("project_id", projectId)
+      .eq("kind", "design")
+      .limit(1)
+      .maybeSingle();
+    if (!design) {
+      navigate({ to: "/design/$projectId", params: { projectId } });
+      return;
+    }
     navigate({ to: "/plan/$projectId", params: { projectId } });
     return;
   }
