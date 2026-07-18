@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { ArrowRight, Check, ScrollText, ShieldCheck } from "lucide-react";
+import { CodeSourcePicker } from "@/components/code-source-picker";
 
 export const Route = createFileRoute("/_authenticated/audits/$projectId")({
   component: AuditCenterPage,
