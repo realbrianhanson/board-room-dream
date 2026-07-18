@@ -741,6 +741,17 @@ function RollCall({
 
 // ============================== Transcript ==============================
 
+function stepRoundLabel(step: Step): string {
+  if (step.step_key.startsWith("r1_")) return "Round 1 — Independent drafts";
+  if (step.step_key.startsWith("r2_exam_")) return "Round 2 — Cross-examination";
+  const loopMatch = /_loop(\d+)/.exec(step.step_key);
+  const loop = loopMatch ? Number(loopMatch[1]) : 0;
+  if (step.step_key.startsWith("r3_synthesis_")) return `Round 3 — Synthesis (loop ${loop})`;
+  if (step.step_key.startsWith("r4_vote_")) return `Round 4 — The vote (loop ${loop})`;
+  if (step.step_key === "r_final_ruling_chair") return "Final ruling — Chair rules";
+  return `Round ${step.round}`;
+}
+
 function TranscriptCard({
   step,
   isOwner,
@@ -751,8 +762,7 @@ function TranscriptCard({
   onRetry: () => void;
 }) {
   const meta = SEAT_META[step.seat];
-  const roundLabel =
-    step.round === 1 ? "Round 1 — Independent drafts" : `Round ${step.round}`;
+  const roundLabel = stepRoundLabel(step);
   const failed = step.status === "failed";
   return (
     <div
@@ -800,17 +810,220 @@ function TranscriptCard({
               </button>
             )}
           </div>
-        ) : step.response_text ? (
-          <div
-            className="prose prose-invert max-w-[65ch] text-sm leading-[1.7] text-foreground/90"
-            style={{ fontFamily: "var(--font-sans)" }}
-          >
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{step.response_text}</ReactMarkdown>
-          </div>
         ) : (
-          <p className="text-sm text-muted-foreground">No output.</p>
+          <StepBody step={step} />
         )}
       </div>
+    </div>
+  );
+}
+
+function StepBody({ step }: { step: Step }) {
+  const json = step.response_json;
+  const invalid = json && typeof json === "object" && json.invalid === true;
+
+  if (invalid) {
+    return (
+      <div className="rounded-md border border-[hsl(8_60%_45%/0.35)] bg-[hsl(8_60%_45%/0.06)] p-3 font-mono text-[11px] text-[hsl(8_60%_75%)]">
+        Response failed structured validation. Raw output preserved.
+      </div>
+    );
+  }
+
+  if (step.step_key.startsWith("r2_exam_") && json) {
+    return <Round2Body json={json} />;
+  }
+  if (step.step_key.startsWith("r3_synthesis_") && json) {
+    return <Round3Body json={json} />;
+  }
+  if (step.step_key.startsWith("r4_vote_") && json) {
+    return <Round4Body json={json} />;
+  }
+  if (step.step_key === "r_final_ruling_chair" && json) {
+    return <FinalRulingBody json={json} />;
+  }
+
+  if (step.response_text) {
+    return (
+      <div className="prose prose-invert max-w-[65ch] text-sm leading-[1.7] text-foreground/90">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{step.response_text}</ReactMarkdown>
+      </div>
+    );
+  }
+  return <p className="text-sm text-muted-foreground">No output.</p>;
+}
+
+function severityStyle(sev: string) {
+  if (sev === "blocking") return "border-l-[hsl(8_60%_55%)] text-[hsl(8_60%_80%)]";
+  if (sev === "major") return "border-l-[hsl(38_65%_55%)] text-[hsl(38_65%_75%)]";
+  return "border-l-[hsl(40_10%_45%)] text-muted-foreground";
+}
+
+function Round2Body({ json }: { json: any }) {
+  const objections: any[] = Array.isArray(json.objections) ? json.objections : [];
+  const steals: any[] = Array.isArray(json.steals) ? json.steals : [];
+  return (
+    <div className="space-y-3">
+      <div className="space-y-2">
+        {objections.map((o, i) => (
+          <div
+            key={i}
+            className={`rounded-md border border-border border-l-2 bg-surface-2/40 px-3 py-2 text-sm ${severityStyle(String(o.severity ?? ""))}`}
+          >
+            <p className="font-mono text-[10px] uppercase tracking-widest">
+              → {String(o.target_seat ?? "?")} · {String(o.severity ?? "minor")}
+            </p>
+            <p className="mt-1 text-foreground/90">{String(o.text ?? "")}</p>
+          </div>
+        ))}
+      </div>
+      {steals.length > 0 && (
+        <div className="space-y-1">
+          {steals.map((s, i) => (
+            <p key={i} className="font-mono text-[11px] text-[hsl(160_45%_62%)]">
+              STEAL: <span className="text-foreground/90">{String(s.idea ?? "")}</span>
+              <span className="text-muted-foreground"> — from {String(s.from_seat ?? "?")}</span>
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Round3Body({ json }: { json: any }) {
+  const md = String(json.candidate_md ?? "");
+  const log: any[] = Array.isArray(json.decision_log) ? json.decision_log : [];
+  const steals: any[] = Array.isArray(json.steals_adopted) ? json.steals_adopted : [];
+  return (
+    <div className="space-y-4">
+      <div className="prose prose-invert max-w-[65ch] text-sm leading-[1.7] text-foreground/90">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
+      </div>
+      {steals.length > 0 && (
+        <div className="space-y-1">
+          {steals.map((s, i) => (
+            <p key={i} className="font-mono text-[11px] text-[hsl(160_45%_62%)]">
+              STEAL ADOPTED: <span className="text-foreground/90">{String(s)}</span>
+            </p>
+          ))}
+        </div>
+      )}
+      <details className="rounded-md border border-border bg-surface-2/30 px-3 py-2 text-sm">
+        <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+          Decision log ({log.length})
+        </summary>
+        <div className="mt-3 space-y-2">
+          {log.map((d, i) => (
+            <div key={i} className="rounded border border-border/60 bg-surface-1 p-2">
+              <p className="font-mono text-[10px] uppercase tracking-widest">
+                {String(d.from_seat ?? "?")} ·{" "}
+                <span
+                  className={
+                    d.decision === "accepted"
+                      ? "text-[hsl(160_45%_62%)]"
+                      : "text-[hsl(8_60%_70%)]"
+                  }
+                >
+                  {String(d.decision ?? "?")}
+                </span>
+              </p>
+              <p className="mt-1 text-foreground/90">{String(d.objection ?? "")}</p>
+              {d.reason && (
+                <p className="mt-1 text-xs text-muted-foreground">{String(d.reason)}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function Round4Body({ json }: { json: any }) {
+  const scores = (json.scores ?? {}) as Record<string, number>;
+  const blocking: string[] = Array.isArray(json.blocking_objections) ? json.blocking_objections : [];
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+        {RUBRIC.map((k) => {
+          const n = scores[k];
+          const good = typeof n === "number" && n >= 8;
+          return (
+            <div
+              key={k}
+              className={`flex items-center justify-between rounded-md border px-3 py-2 font-mono text-[11px] ${
+                good
+                  ? "border-[hsl(160_45%_42%/0.4)] text-[hsl(160_45%_62%)]"
+                  : "border-[hsl(8_60%_45%/0.4)] text-[hsl(8_60%_70%)]"
+              }`}
+            >
+              <span className="uppercase tracking-widest text-muted-foreground">
+                {k.replace(/_/g, " ")}
+              </span>
+              <span className="text-lg text-foreground">{typeof n === "number" ? n : "—"}</span>
+            </div>
+          );
+        })}
+      </div>
+      {blocking.length > 0 && (
+        <div className="space-y-1">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-[hsl(8_60%_70%)]">
+            Blocking objections
+          </p>
+          {blocking.map((b, i) => (
+            <p key={i} className="text-sm text-foreground/90">
+              — {b}
+            </p>
+          ))}
+        </div>
+      )}
+      {json.comment && (
+        <p className="text-sm italic text-muted-foreground">{String(json.comment)}</p>
+      )}
+    </div>
+  );
+}
+
+function FinalRulingBody({ json }: { json: any }) {
+  const md = String(json.final_md ?? "");
+  const note = String(json.ruling_note ?? "");
+  const ledger: any[] = Array.isArray(json.dissent_ledger) ? json.dissent_ledger : [];
+  return (
+    <div className="space-y-4">
+      {note && (
+        <div className="rounded-md border border-[hsl(38_65%_55%/0.35)] bg-[hsl(38_65%_55%/0.06)] p-3 text-sm text-foreground/90">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-[hsl(38_65%_70%)]">
+            Chair's ruling
+          </p>
+          <p className="mt-1">{note}</p>
+        </div>
+      )}
+      <div className="prose prose-invert max-w-[65ch] text-sm leading-[1.7] text-foreground/90">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{md}</ReactMarkdown>
+      </div>
+      {ledger.length > 0 && (
+        <details className="rounded-md border border-border bg-surface-2/30 px-3 py-2 text-sm">
+          <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+            Dissent ledger ({ledger.length})
+          </summary>
+          <div className="mt-3 space-y-2">
+            {ledger.map((d, i) => (
+              <div key={i} className="rounded border border-border/60 bg-surface-1 p-2">
+                <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                  {String(d.seat ?? "?")}
+                </p>
+                <p className="mt-1 text-foreground/90">{String(d.objection ?? "")}</p>
+                {d.chair_response && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Chair: {String(d.chair_response)}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   );
 }
