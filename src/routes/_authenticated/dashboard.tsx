@@ -33,10 +33,14 @@ const NEXT_ACTION: Record<string, string> = {
 function nextActionLabel(p: Project): string {
   if (p.status === "locked" && !p.has_design) return "Convene the Design Council";
   if (p.status === "locked" && p.has_design && !p.has_batches) return "Generate your build sequence";
+  if ((p as any).has_fix_needed) return `The board found issues — Batch ${(p as any).fix_batch_no} waiting`;
+  if (p.status === "auditing" && (p as any).all_passed && !(p as any).has_final_audit) return "Run the A–Z audit";
+  if (p.status === "done") return "Passed A–Z. Ship it.";
   if (p.status === "building" && p.current_batch_no > 0) return `Continue the Runway — Batch ${p.current_batch_no}`;
   if (p.status === "building") return "Continue the Runway";
   return NEXT_ACTION[p.status] ?? "Open";
 }
+
 
 const STATUS_COLOR: Record<string, string> = {
   intake: "hsl(40 10% 62%)",
