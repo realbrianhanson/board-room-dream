@@ -14,6 +14,7 @@ type Project = {
   status: string;
   current_batch_no: number;
   created_at: string;
+  has_design?: boolean;
 };
 
 const NEXT_ACTION: Record<string, string> = {
@@ -27,6 +28,11 @@ const NEXT_ACTION: Record<string, string> = {
   done: "Publish",
   killed: "Revise the idea",
 };
+
+function nextActionLabel(p: Project): string {
+  if (p.status === "locked" && !p.has_design) return "Convene the Design Council";
+  return NEXT_ACTION[p.status] ?? "Open";
+}
 
 const STATUS_COLOR: Record<string, string> = {
   intake: "hsl(40 10% 62%)",
@@ -93,7 +99,18 @@ function DashboardPage() {
       setProjects([]);
       return;
     }
-    setProjects((data ?? []) as Project[]);
+    const rows = (data ?? []) as Project[];
+    const lockedIds = rows.filter((r) => r.status === "locked").map((r) => r.id);
+    let designSet = new Set<string>();
+    if (lockedIds.length) {
+      const { data: pvs } = await supabase
+        .from("plan_versions")
+        .select("project_id")
+        .eq("kind", "design")
+        .in("project_id", lockedIds);
+      designSet = new Set((pvs ?? []).map((r: any) => r.project_id));
+    }
+    setProjects(rows.map((r) => ({ ...r, has_design: designSet.has(r.id) })));
   }
   useEffect(() => {
     load();
@@ -243,6 +260,17 @@ async function resume(
     }
   }
   if (status === "locked") {
+    const { data: design } = await supabase
+      .from("plan_versions")
+      .select("id")
+      .eq("project_id", projectId)
+      .eq("kind", "design")
+      .limit(1)
+      .maybeSingle();
+    if (!design) {
+      navigate({ to: "/design/$projectId", params: { projectId } });
+      return;
+    }
     navigate({ to: "/plan/$projectId", params: { projectId } });
     return;
   }
@@ -275,7 +303,7 @@ function ProjectCard({
         Created {new Date(project.created_at).toLocaleDateString()}
       </p>
       <span className="mt-3 inline-flex items-center gap-1.5 text-xs text-foreground/80 group-hover:text-primary">
-        {NEXT_ACTION[project.status] ?? "Open"}
+        {nextActionLabel(project)}
         <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
       </span>
     </button>

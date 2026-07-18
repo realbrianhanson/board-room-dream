@@ -30,7 +30,7 @@ const SEAT_LABEL: Record<Seat, string> = {
   inspector: "The Inspector",
 };
 
-const RUBRIC = [
+const PLAN_RUBRIC = [
   "painful_problem",
   "reachable_buyer",
   "monetization_path",
@@ -38,6 +38,29 @@ const RUBRIC = [
   "differentiation",
   "wow_factor",
 ] as const;
+const DESIGN_RUBRIC = [
+  "distinctiveness",
+  "premium_feel",
+  "usability",
+  "buildable_in_lovable",
+  "coherence",
+  "signature_element",
+] as const;
+function rubricForKind(kind: string): readonly string[] {
+  return kind === "design" ? DESIGN_RUBRIC : PLAN_RUBRIC;
+}
+
+async function loadLockedPlan(admin: any, projectId: string) {
+  const { data } = await admin
+    .from("plan_versions")
+    .select("content_md, prd_md, features")
+    .eq("project_id", projectId)
+    .eq("kind", "plan")
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data ?? null;
+}
 
 function j(status: number, body: any) {
   return new Response(JSON.stringify(body), {
@@ -122,7 +145,7 @@ function priorRoundFailureBlock(steps: any[], previousLoop: number) {
   for (const v of votes as any[]) {
     const jj = v.response_json ?? {};
     (jj.blocking_objections ?? []).forEach((b: string) => blocking.push(`- [${v.seat}] ${b}`));
-    for (const k of RUBRIC) {
+    for (const k of [...PLAN_RUBRIC, ...DESIGN_RUBRIC]) {
       const n = Number(jj?.scores?.[k]);
       if (Number.isFinite(n) && n < 8) lowScores.push(`- [${v.seat}] ${k}: ${n}`);
     }
@@ -142,9 +165,18 @@ Revise ONLY the contested parts. Preserve agreed parts verbatim.`;
 
 async function queueRound1(admin: any, run: any) {
   const intake = await loadIntake(admin, run.project_id);
-  const user = `${intakeBlock(intake)}\n\nWrite your Round 1 draft now.`;
-  const system =
-    "Round 1 of the board's deliberation. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best version of the app plan: concept, target user, core features (MVP-first, ruthlessly cut), the data the app stores, and what you'd cut. Be specific, concise, and opinionated.";
+  let system: string;
+  let userContent: string;
+  if (run.kind === "design") {
+    const plan = await loadLockedPlan(admin, run.project_id);
+    system =
+      "Round 1 of the Design Council. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best design direction for this app. You MUST include: concept/mood; palette as specific HSL values; type pairing with specific font names; spacing and shape language; ONE distinctive signature element (a structural design move — non-negotiable, this is the point); and motion rules. Be specific, opinionated, and premium. Avoid generic AI-slop aesthetics.";
+    userContent = `${intakeBlock(intake)}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nWrite your Round 1 design direction now.`;
+  } else {
+    system =
+      "Round 1 of the board's deliberation. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best version of the app plan: concept, target user, core features (MVP-first, ruthlessly cut), the data the app stores, and what you'd cut. Be specific, concise, and opinionated.";
+    userContent = `${intakeBlock(intake)}\n\nWrite your Round 1 draft now.`;
+  }
   const rows = SEATS.map((seat) => ({
     run_id: run.id,
     user_id: run.user_id,
@@ -155,7 +187,7 @@ async function queueRound1(admin: any, run: any) {
     request: {
       messages: [
         { role: "system", content: system },
-        { role: "user", content: user },
+        { role: "user", content: userContent },
       ],
     },
   }));
@@ -196,15 +228,25 @@ Requirements: at least ONE objection targeting EACH of the three other seats, at
 
 async function queueRound3(admin: any, run: any, steps: any[], loop: number) {
   const intake = await loadIntake(admin, run.project_id);
-  const system = `Round 3 — Chair synthesis${loop > 0 ? ` (loop ${loop}, revising after a failed vote)` : ""}. You are the Chair. Weld the four drafts and the objections into ONE candidate plan.
-
-${loop > 0 ? "Revise ONLY the contested parts from the previous vote. Preserve agreed parts verbatim. " : ""}Return ONLY valid JSON matching this shape:
-{
+  const isDesign = run.kind === "design";
+  const plan = isDesign ? await loadLockedPlan(admin, run.project_id) : null;
+  const planShape = `{
   "candidate_md": "Full markdown plan: concept, target user, MVP features, data stored, cuts.",
   "decision_log": [ { "from_seat": "...", "objection": "...", "decision": "accepted"|"rejected", "reason": "..." } ],
   "steals_adopted": [ "..." ]
 }`;
-  const parts: string[] = [intakeBlock(intake), draftsBlock(steps), objectionsAndStealsBlock(steps)];
+  const designShape = `{
+  "candidate_md": "Full markdown design brief — a paste-ready design system prompt with these EXACT H2 sections in this exact order:\\n## Direction\\n## Tokens (CSS variables, HSL)\\n## Type\\n## Spacing & shape\\n## Signature element\\n## Motion\\n## Component rules",
+  "decision_log": [ { "from_seat": "...", "objection": "...", "decision": "accepted"|"rejected", "reason": "..." } ],
+  "steals_adopted": [ "..." ]
+}`;
+  const system = `Round 3 — Chair synthesis${loop > 0 ? ` (loop ${loop}, revising after a failed vote)` : ""}. You are the Chair. Weld the four ${isDesign ? "design directions" : "drafts"} and the objections into ONE candidate ${isDesign ? "design brief" : "plan"}.
+
+${loop > 0 ? "Revise ONLY the contested parts from the previous vote. Preserve agreed parts verbatim. " : ""}Return ONLY valid JSON matching this shape:
+${isDesign ? designShape : planShape}${isDesign ? "\n\nEvery H2 header must appear exactly as written. Be specific: exact HSL values, real font names, concrete component rules." : ""}`;
+  const parts: string[] = [intakeBlock(intake)];
+  if (isDesign && plan) parts.push(`LOCKED PLAN\n\n${plan.content_md ?? ""}\n\nPRD\n\n${plan.prd_md ?? "(none)"}`);
+  parts.push(draftsBlock(steps), objectionsAndStealsBlock(steps));
   if (loop > 0) parts.push(priorRoundFailureBlock(steps, loop - 1));
   const user = `${parts.join("\n\n")}\n\nProduce your JSON now.`;
   await admin.from("run_steps").insert({
@@ -227,27 +269,24 @@ ${loop > 0 ? "Revise ONLY the contested parts from the previous vote. Preserve a
 async function queueRound4(admin: any, run: any, steps: any[], loop: number) {
   const synth = steps.find((x) => x.step_key === `r3_synthesis_chair_loop${loop}` && x.status === "completed");
   const candidateMd = String(synth?.response_json?.candidate_md ?? synth?.response_text ?? "");
+  const rubric = rubricForKind(run.kind);
+  const scoresShape = rubric.map((k) => `    "${k}": 1-10`).join(",\n");
   const rows = SEATS.map((seat) => {
     const myR2 = steps.find((x) => x.step_key === `r2_exam_${seat}` && x.status === "completed");
     const myObjections = myR2?.response_json?.objections ?? [];
-    const system = `Round 4 — Scored vote${loop > 0 ? ` (loop ${loop})` : ""}. Vote on the candidate plan against your Round-2 objections.
+    const system = `Round 4 — Scored vote${loop > 0 ? ` (loop ${loop})` : ""}. Vote on the candidate ${run.kind === "design" ? "design brief" : "plan"} against your Round-2 objections.
 
 Return ONLY valid JSON matching this shape:
 {
   "scores": {
-    "painful_problem": 1-10,
-    "reachable_buyer": 1-10,
-    "monetization_path": 1-10,
-    "buildable_scope": 1-10,
-    "differentiation": 1-10,
-    "wow_factor": 1-10
+${scoresShape}
   },
   "blocking_objections": [ "..." ],
   "comment": "One paragraph."
 }
 
 Every score must be an integer 1-10. State which of your own Round-2 objections are RESOLVED by this candidate and which still STAND (add the still-standing ones to blocking_objections if they are dealbreakers).`;
-    const user = `CANDIDATE PLAN\n\n${candidateMd}\n\nYOUR ROUND-2 OBJECTIONS\n${JSON.stringify(myObjections, null, 2)}\n\nProduce your JSON now.`;
+    const user = `CANDIDATE\n\n${candidateMd}\n\nYOUR ROUND-2 OBJECTIONS\n${JSON.stringify(myObjections, null, 2)}\n\nProduce your JSON now.`;
     return {
       run_id: run.id,
       user_id: run.user_id,
@@ -412,7 +451,7 @@ async function createInitialSteps(admin: any, run: any) {
     });
     return;
   }
-  if (run.kind === "plan") {
+  if (run.kind === "plan" || run.kind === "design") {
     await queueRound1(admin, run);
     return;
   }
@@ -450,7 +489,7 @@ async function createInitialSteps(admin: any, run: any) {
 
 // ============================== Validation ==============================
 
-function validateStepJson(stepKey: string, parsed: any): string | null {
+function validateStepJson(stepKey: string, parsed: any, kind: string = "plan"): string | null {
   if (!parsed || typeof parsed !== "object") return "Response is not a JSON object.";
   if (stepKey.startsWith("r2_exam_")) {
     const seat = stepKey.replace("r2_exam_", "");
@@ -478,7 +517,7 @@ function validateStepJson(stepKey: string, parsed: any): string | null {
   if (stepKey.startsWith("r4_vote_")) {
     const scores = parsed.scores;
     if (!scores || typeof scores !== "object") return "Missing scores object.";
-    for (const k of RUBRIC) {
+    for (const k of rubricForKind(kind)) {
       const n = scores[k];
       if (!Number.isInteger(n) || n < 1 || n > 10) return `Score ${k} must be an integer 1-10.`;
     }
@@ -570,7 +609,7 @@ async function executeStep(admin: any, run: any, step: any) {
         } catch {
           candidate = null;
         }
-        const err = candidate ? validateStepJson(step.step_key, candidate) : "Response was not parseable JSON.";
+        const err = candidate ? validateStepJson(step.step_key, candidate, run.kind) : "Response was not parseable JSON.";
         if (!err) {
           parsed = candidate;
           break;
@@ -639,15 +678,16 @@ async function executeStep(admin: any, run: any, step: any) {
 
 // ============================== Consensus / locking ==============================
 
-function checkConsensus(voteSteps: any[]): { pass: boolean; scores: any } {
+function checkConsensus(voteSteps: any[], kind: string = "plan"): { pass: boolean; scores: any } {
   const scoreSets: Record<string, any> = {};
   let pass = true;
   if (voteSteps.length < 4) return { pass: false, scores: {} };
+  const rubric = rubricForKind(kind);
   for (const v of voteSteps) {
     const j = v.response_json ?? {};
     scoreSets[v.seat] = { scores: j.scores ?? null, blocking_objections: j.blocking_objections ?? [] };
     if (!j.scores) { pass = false; continue; }
-    for (const k of RUBRIC) {
+    for (const k of rubric) {
       const n = Number(j.scores[k]);
       if (!Number.isFinite(n) || n < 8) pass = false;
     }
@@ -662,11 +702,12 @@ async function lockPlanAndQueueBlueprint(
   steps: any[],
   mode: "consensus" | "chair_ruled",
 ) {
+  const planKind = run.kind === "design" ? "design" : "plan";
   const { data: existing } = await admin
     .from("plan_versions")
     .select("version")
     .eq("project_id", run.project_id)
-    .eq("kind", "plan")
+    .eq("kind", planKind)
     .order("version", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -703,14 +744,14 @@ async function lockPlanAndQueueBlueprint(
     return m ? Number(m[1]) : -1;
   }));
   const latestVotes = voteSteps.filter((v: any) => v.step_key.endsWith(`_loop${latestLoop}`));
-  const { scores } = checkConsensus(latestVotes);
+  const { scores } = checkConsensus(latestVotes, run.kind);
 
   const { data: inserted } = await admin
     .from("plan_versions")
     .insert({
       project_id: run.project_id,
       user_id: run.user_id,
-      kind: "plan",
+      kind: planKind,
       version: nextVersion,
       content_md: contentMd,
       decision_log: decisionLog,
@@ -720,6 +761,22 @@ async function lockPlanAndQueueBlueprint(
     })
     .select("id")
     .single();
+
+  if (run.kind === "design") {
+    // Design runs skip the blueprint step — the candidate IS the deliverable.
+    // Project status is left untouched by design runs.
+    const finalStatus = mode === "chair_ruled" ? "chair_ruled" : "consensus";
+    await admin
+      .from("boardroom_runs")
+      .update({
+        status: finalStatus,
+        consensus: { scores, plan_version_id: inserted?.id ?? null },
+        dissent_ledger: dissentLedger,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", run.id);
+    return;
+  }
 
   await admin.from("projects").update({ status: "locked" }).eq("id", run.project_id);
 
@@ -883,7 +940,7 @@ async function afterStepComplete(admin: any, runIn: any) {
     return;
   }
 
-  if (run.kind !== "plan") {
+  if (run.kind !== "plan" && run.kind !== "design") {
     await admin
       .from("boardroom_runs")
       .update({ status: "paused", consensus: { awaiting: "future_batch" } })
@@ -928,7 +985,7 @@ async function afterStepComplete(admin: any, runIn: any) {
     const votes = steps.filter(
       (x: any) => x.step_key.startsWith("r4_vote_") && x.step_key.endsWith(`_loop${loop}`) && x.status === "completed",
     );
-    const { pass } = checkConsensus(votes);
+    const { pass } = checkConsensus(votes, run.kind);
     if (pass) {
       await lockPlanAndQueueBlueprint(admin, run, steps, "consensus");
       fireSelfTick();
@@ -1041,6 +1098,11 @@ Deno.serve(async (req) => {
       .eq("id", projectId)
       .maybeSingle();
     if (!project || project.user_id !== userId) return j(404, { error: "Project not found" });
+
+    if (kind === "design") {
+      const locked = await loadLockedPlan(admin, projectId);
+      if (!locked) return j(400, { error: "The board locks the plan before it debates the look." });
+    }
 
     let consensusMeta: any = null;
     if (kind === "change_request") {
