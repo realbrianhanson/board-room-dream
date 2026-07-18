@@ -311,15 +311,27 @@ function RunwayPage() {
 
       {/* State A: no locked plan */}
       {!hasPlan && (
-        <EmptyState
-          icon={<Lock className="h-6 w-6 text-muted-foreground" />}
-          title="The board locks the plan before it sequences the build."
-          subtitle="Take this project through the Boardroom first."
-          actionTo="/boardroom/$projectId"
-          actionParams={{ projectId }}
-          actionLabel="To the Boardroom"
-        />
+        project?.is_import ? (
+          <EmptyState
+            icon={<Lock className="h-6 w-6 text-muted-foreground" />}
+            title="The board plans imports in the Boardroom."
+            subtitle="Run the A–Z audit first, then convene the improvement board to lock what to build next."
+            actionTo="/boardroom/$projectId"
+            actionParams={{ projectId }}
+            actionLabel="To the Boardroom"
+          />
+        ) : (
+          <EmptyState
+            icon={<Lock className="h-6 w-6 text-muted-foreground" />}
+            title="The board locks the plan before it sequences the build."
+            subtitle="Take this project through the Boardroom first."
+            actionTo="/boardroom/$projectId"
+            actionParams={{ projectId }}
+            actionLabel="To the Boardroom"
+          />
+        )
       )}
+
 
       {/* State B: locked plan, no batches, no run */}
       {hasPlan && total === 0 && !runInFlight && (
