@@ -490,7 +490,21 @@ function DashboardPage() {
         ) : (
           <div className="grid gap-4 md:grid-cols-2">
             {projects.map((p) => (
-              <ProjectCard key={p.id} project={p} onOpen={(id) => resume(id, p, navigate)} />
+              <ProjectCard
+                key={p.id}
+                project={p}
+                onOpen={(id) => resume(id, p, navigate)}
+                onDelete={async (id) => {
+                  if (!confirm(`Delete "${p.name}"? This removes all its runs, plans, batches, and audits. This cannot be undone.`)) return;
+                  const { error } = await supabase.from("projects").delete().eq("id", id);
+                  if (error) {
+                    toast.error(error.message);
+                    return;
+                  }
+                  toast.success("Project deleted.");
+                  setProjects((prev) => (prev ?? []).filter((x) => x.id !== id));
+                }}
+              />
             ))}
           </div>
         )}
