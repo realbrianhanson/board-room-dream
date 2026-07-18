@@ -19,20 +19,8 @@ function OnboardingPage() {
     try {
       const trimmed = code.trim();
       if (!trimmed) throw new Error("Enter a cohort code.");
-      const { data: cohort, error: findErr } = await supabase
-        .from("cohorts")
-        .select("id")
-        .eq("join_code", trimmed)
-        .maybeSingle();
-      if (findErr) throw findErr;
-      if (!cohort) throw new Error("That code doesn't match a cohort.");
-      const { data: user } = await supabase.auth.getUser();
-      if (!user.user) throw new Error("Not signed in.");
-      const { error: updErr } = await supabase
-        .from("profiles")
-        .update({ cohort_id: cohort.id })
-        .eq("id", user.user.id);
-      if (updErr) throw updErr;
+      const { error: rpcErr } = await supabase.rpc("join_cohort", { code: trimmed });
+      if (rpcErr) throw new Error(rpcErr.message.replace(/^.*Invalid cohort code.*$/i, "That code doesn't match a cohort."));
       localStorage.removeItem("boardroom.cohort_skipped");
       navigate({ to: "/dashboard" });
     } catch (err) {
