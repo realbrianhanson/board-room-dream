@@ -14,6 +14,60 @@ export type Database = {
   }
   public: {
     Tables: {
+      alerts: {
+        Row: {
+          cohort_id: string | null
+          created_at: string
+          detail: Json | null
+          id: string
+          kind: string
+          project_id: string | null
+          resolved_at: string | null
+          snoozed_until: string | null
+          status: string
+          user_id: string
+        }
+        Insert: {
+          cohort_id?: string | null
+          created_at?: string
+          detail?: Json | null
+          id?: string
+          kind: string
+          project_id?: string | null
+          resolved_at?: string | null
+          snoozed_until?: string | null
+          status?: string
+          user_id: string
+        }
+        Update: {
+          cohort_id?: string | null
+          created_at?: string
+          detail?: Json | null
+          id?: string
+          kind?: string
+          project_id?: string | null
+          resolved_at?: string | null
+          snoozed_until?: string | null
+          status?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "alerts_cohort_id_fkey"
+            columns: ["cohort_id"]
+            isOneToOne: false
+            referencedRelation: "cohorts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "alerts_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       api_keys: {
         Row: {
           created_at: string

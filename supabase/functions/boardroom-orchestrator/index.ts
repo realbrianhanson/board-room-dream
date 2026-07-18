@@ -90,6 +90,39 @@ function fireSelfTick(body: any = {}) {
   }).catch(() => {});
 }
 
+// Idempotent alert insert: skip if there's an OPEN alert for (project, kind).
+async function insertAlert(
+  admin: any,
+  args: { user_id: string; project_id: string; kind: "stuck_48h" | "audit_loop" | "spend_cap" | "never_locked"; detail?: any },
+) {
+  try {
+    const { data: proj } = await admin
+      .from("profiles")
+      .select("cohort_id")
+      .eq("id", args.user_id)
+      .maybeSingle();
+    const cohort_id = proj?.cohort_id ?? null;
+    const { data: existing } = await admin
+      .from("alerts")
+      .select("id")
+      .eq("project_id", args.project_id)
+      .eq("kind", args.kind)
+      .eq("status", "open")
+      .limit(1);
+    if ((existing ?? []).length) return;
+    await admin.from("alerts").insert({
+      cohort_id,
+      user_id: args.user_id,
+      project_id: args.project_id,
+      kind: args.kind,
+      detail: args.detail ?? null,
+    });
+  } catch (_e) { /* alerts must never break the run */ }
+}
+
+
+
+
 // ============================== Prompt builders ==============================
 
 async function loadIntake(admin: any, projectId: string) {
@@ -804,6 +837,14 @@ async function executeStep(admin: any, run: any, step: any) {
       if (e instanceof BudgetExceeded) {
         await admin.from("run_steps").update({ status: "queued", error: "budget" }).eq("id", step.id);
         await admin.from("boardroom_runs").update({ status: "paused_budget" }).eq("id", run.id);
+        if (run.project_id && run.user_id) {
+          await insertAlert(admin, {
+            user_id: run.user_id,
+            project_id: run.project_id,
+            kind: "spend_cap",
+            detail: { run_kind: run.kind, spent_usd: Number(run.spent_usd ?? 0), budget_usd: Number(run.budget_usd ?? 0) },
+          });
+        }
         return;
       }
       if (e instanceof NoUserKey || e instanceof SeatUnavailable) {
@@ -1299,6 +1340,22 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
       })),
     );
   }
+
+  // Loop-2+ with unresolved findings → needs human eyes.
+  if (Number(audit.loop_no ?? 1) >= 2 && findings.length && audit.project_id) {
+    let batchTitle = "";
+    if (audit.batch_id) {
+      const { data: b } = await admin.from("batches").select("title").eq("id", audit.batch_id).maybeSingle();
+      batchTitle = b?.title ?? "";
+    }
+    await insertAlert(admin, {
+      user_id: audit.user_id,
+      project_id: audit.project_id,
+      kind: "audit_loop",
+      detail: { batch_title: batchTitle, loop_no: Number(audit.loop_no ?? 1), counts: summary.counts },
+    });
+  }
+
 
   await admin
     .from("boardroom_runs")
