@@ -489,7 +489,7 @@ async function createInitialSteps(admin: any, run: any) {
 
 // ============================== Validation ==============================
 
-function validateStepJson(stepKey: string, parsed: any): string | null {
+function validateStepJson(stepKey: string, parsed: any, kind: string = "plan"): string | null {
   if (!parsed || typeof parsed !== "object") return "Response is not a JSON object.";
   if (stepKey.startsWith("r2_exam_")) {
     const seat = stepKey.replace("r2_exam_", "");
