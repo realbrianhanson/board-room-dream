@@ -89,7 +89,7 @@ function PlanWorkspacePage() {
         .eq("project_id", projectId)
         .eq("kind", "plan")
         .order("version", { ascending: false });
-      const list = ((pvs ?? []) as unknown as PlanVersion[]) ?? [];
+      const list = (pvs ?? []) as unknown as PlanVersion[];
       if (!cancelled) {
         setVersions(list);
         setSelectedVersionId(list[0]?.id ?? null);
@@ -126,7 +126,7 @@ function PlanWorkspacePage() {
             .eq("kind", "plan")
             .order("version", { ascending: false });
           setVersions((prev) => {
-            const next = ((pvs ?? []) as unknown as PlanVersion[]) ?? [];
+            const next = (pvs ?? []) as unknown as PlanVersion[];
             // Keep selection on latest when user hasn't picked a specific older one, or if id vanished
             const latestId = next[0]?.id ?? null;
             setSelectedVersionId((currentId) => {
