@@ -300,6 +300,101 @@ Return ONLY valid JSON matching this shape:
   });
 }
 
+async function queueBlueprint(admin: any, run: any, contentMd: string, intake: any) {
+  const system = `Blueprint — you are the Chair drafting the implementation documents for the locked plan. Turn the plan into a precise PRD and a features list.
+
+Return ONLY valid JSON matching this shape:
+{
+  "prd_md": "Full markdown PRD with these exact H2 sections in this exact order: ## User types\\n## Jobs to be done\\n## Data model (tables and columns)\\n## Pages\\n## Edge functions\\n## Integrations\\n## Out of scope for v1",
+  "features": [ { "name": "...", "description": "...", "priority": "mvp" | "later" } ]
+}
+
+Every section header must appear exactly as written. Be specific: name concrete tables, columns, page routes, and edge functions.`;
+  const user = `${intakeBlock(intake)}\n\nLOCKED PLAN\n\n${contentMd}\n\nProduce your JSON now.`;
+  await admin.from("run_steps").insert({
+    run_id: run.id,
+    user_id: run.user_id,
+    step_key: "r5_blueprint_chair",
+    round: 5,
+    seat: "chair",
+    status: "queued",
+    request: {
+      json_output: true,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    },
+  });
+}
+
+async function queueChangeRequestExam(admin: any, run: any, cr: any, plan: any) {
+  const system = `Change Request review. The board has already locked a plan. A change is being proposed. Decide your stance.
+
+Return ONLY valid JSON matching this shape:
+{
+  "stance": "approve" | "approve_with_amendments" | "reject",
+  "reasoning": "One paragraph.",
+  "amendments": [ "..." ]
+}`;
+  const rows = SEATS.map((seat) => ({
+    run_id: run.id,
+    user_id: run.user_id,
+    step_key: `cr_exam_${seat}`,
+    round: 1,
+    seat,
+    status: "queued",
+    request: {
+      json_output: true,
+      messages: [
+        { role: "system", content: system },
+        {
+          role: "user",
+          content: `LOCKED PLAN\n\n${plan.content_md ?? ""}\n\nPRD\n\n${plan.prd_md ?? "(none)"}\n\nREQUESTED CHANGE\n\n${cr.description}\n\nProduce your JSON now.`,
+        },
+      ],
+    },
+  }));
+  await admin.from("run_steps").insert(rows);
+}
+
+async function queueChangeRequestVerdict(admin: any, run: any, cr: any, plan: any, steps: any[]) {
+  const stances = SEATS.map((s) => {
+    const step = steps.find((x) => x.step_key === `cr_exam_${s}` && x.status === "completed");
+    return `--- ${SEAT_LABEL[s]} ---\n${JSON.stringify(step?.response_json ?? { missing: true }, null, 2)}`;
+  }).join("\n\n");
+  const system = `Change Request verdict. You are the Chair. Rule on the change based on the four seats' stances.
+
+Return ONLY valid JSON matching this shape:
+{
+  "verdict": "approved" | "rejected",
+  "rationale": "One paragraph.",
+  "amended_plan_md": "Full markdown of the AMENDED plan (required when approved).",
+  "amended_prd_md": "Full markdown of the AMENDED PRD, same H2 sections as the original (required when approved).",
+  "amended_features": [ { "name": "...", "description": "...", "priority": "mvp"|"later" } ]
+}
+
+If rejected, amended_* may be empty strings / empty array.`;
+  await admin.from("run_steps").insert({
+    run_id: run.id,
+    user_id: run.user_id,
+    step_key: "cr_verdict_chair",
+    round: 2,
+    seat: "chair",
+    status: "queued",
+    request: {
+      json_output: true,
+      messages: [
+        { role: "system", content: system },
+        {
+          role: "user",
+          content: `LOCKED PLAN\n\n${plan.content_md ?? ""}\n\nCURRENT PRD\n\n${plan.prd_md ?? "(none)"}\n\nREQUESTED CHANGE\n\n${cr.description}\n\nSEAT STANCES\n\n${stances}\n\nProduce your JSON now.`,
+        },
+      ],
+    },
+  });
+}
+
 async function createInitialSteps(admin: any, run: any) {
   if (run.kind === "test") {
     await admin.from("run_steps").insert({
@@ -319,6 +414,33 @@ async function createInitialSteps(admin: any, run: any) {
   }
   if (run.kind === "plan") {
     await queueRound1(admin, run);
+    return;
+  }
+  if (run.kind === "change_request") {
+    const { data: cr } = await admin
+      .from("change_requests")
+      .select("*")
+      .eq("id", run.change_request_id ?? "")
+      .maybeSingle();
+    // fallback: read from run metadata stored on the run itself via consensus jsonb
+    const crId = cr?.id ?? run.consensus?.change_request_id;
+    const { data: crRow } = crId
+      ? await admin.from("change_requests").select("*").eq("id", crId).maybeSingle()
+      : { data: null };
+    const activeCr = cr ?? crRow;
+    if (!activeCr) {
+      await admin.from("boardroom_runs").update({ status: "failed", error: "Change request not found" }).eq("id", run.id);
+      return;
+    }
+    const { data: plan } = await admin
+      .from("plan_versions")
+      .select("content_md, prd_md")
+      .eq("project_id", run.project_id)
+      .eq("kind", "plan")
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    await queueChangeRequestExam(admin, run, activeCr, plan ?? {});
     return;
   }
   await admin
