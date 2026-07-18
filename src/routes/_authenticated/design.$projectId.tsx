@@ -150,8 +150,8 @@ function DesignStudioPage() {
             conveneBlockedByStatus={CONVENE_BLOCKED}
             emptyTitle="The council awaits."
             emptySubtitle="Convene the four seats and let them agree on a house style worth building."
-            onRunLoaded={(r) => setActiveRunId(r?.id ?? null)}
           />
+
 
           {locked && (
             <section className="mt-12 rounded-xl border border-border bg-surface-1 p-8">
