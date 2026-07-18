@@ -412,13 +412,19 @@ function BoardroomProjectPage() {
         />
       </div>
 
-      {/* Interstitial when awaiting Batch 6 */}
-      {awaitingProtocol && (
-        <div className="mt-10 rounded-xl border border-border bg-surface-1/70 p-6 text-center">
-          <p className="font-display text-xl text-foreground">Round 1 complete.</p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            The cross-examination convenes in the next build batch. The four independent drafts remain readable below.
+      {/* Lock card when consensus reached or chair-ruled */}
+      {locked && project && (
+        <div className="mt-10 rounded-xl border border-[hsl(38_65%_55%/0.4)] bg-[hsl(38_65%_55%/0.06)] p-6 text-center">
+          <p className="font-display text-2xl text-foreground">
+            {run?.status === "consensus" ? "The plan is locked." : "The Chair has ruled."}
           </p>
+          <Link
+            to="/plan/$projectId"
+            params={{ projectId: project.id }}
+            className="mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:brightness-110"
+          >
+            View the Locked Plan →
+          </Link>
         </div>
       )}
 
