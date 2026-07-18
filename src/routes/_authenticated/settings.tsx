@@ -555,7 +555,7 @@ function SettingsPage() {
 
       <div className="mt-10 space-y-6">
         <OpenRouterCard />
-        <GitHubCard />
+        <GitHubCard isAdmin={isAdmin} />
       </div>
 
       {isAdmin && (
