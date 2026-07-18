@@ -347,14 +347,21 @@ Deno.serve(async (req) => {
       const pastedCode = source === "paste" ? String(body?.pasted_code ?? "") : null;
       const project = await ownProject(projectId);
       if (!project) return j(404, { error: "Project not found" });
-      // Require all non-final batches passed.
       const { data: batches } = await admin
         .from("batches")
         .select("id, status")
         .eq("project_id", projectId);
-      if (!batches?.length) return j(400, { error: "No batches to audit" });
-      const unresolved = batches.filter((b: any) => !["passed", "skipped"].includes(b.status));
-      if (unresolved.length) return j(400, { error: "All batches must be passed or skipped before the A-Z audit" });
+      const noBatches = !batches?.length;
+      if (project.is_import && noBatches) {
+        // Imports without a build sequence are immediately eligible.
+        if (source === "github" && !project.github_repo) {
+          return j(400, { error: "Link your repo or paste your code first." });
+        }
+      } else {
+        if (noBatches) return j(400, { error: "No batches to audit" });
+        const unresolved = batches!.filter((b: any) => !["passed", "skipped"].includes(b.status));
+        if (unresolved.length) return j(400, { error: "All batches must be passed or skipped before the A-Z audit" });
+      }
 
       const res = await beginAudit({
         admin, userId, project, batchId: null,
@@ -363,6 +370,7 @@ Deno.serve(async (req) => {
       if ("error" in res) return j(400, { error: res.error });
       return j(200, res);
     }
+
 
     return j(400, { error: "Unknown action" });
   } catch (e) {
