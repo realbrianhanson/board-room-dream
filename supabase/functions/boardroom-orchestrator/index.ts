@@ -985,7 +985,7 @@ async function afterStepComplete(admin: any, runIn: any) {
     const votes = steps.filter(
       (x: any) => x.step_key.startsWith("r4_vote_") && x.step_key.endsWith(`_loop${loop}`) && x.status === "completed",
     );
-    const { pass } = checkConsensus(votes);
+    const { pass } = checkConsensus(votes, run.kind);
     if (pass) {
       await lockPlanAndQueueBlueprint(admin, run, steps, "consensus");
       fireSelfTick();
