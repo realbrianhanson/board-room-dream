@@ -388,6 +388,8 @@ function BoardroomProjectPage() {
             step: stepBySeat.get(s),
           }))}
           consensusFill={consensusFill}
+          segments={segments}
+          runStatus={run?.status}
           consensusRingRef={consensusPulseRef}
           round={run?.round_no ?? 1}
           completed={completedR1}
@@ -405,12 +407,14 @@ function BoardroomProjectPage() {
             step: stepBySeat.get(s),
           }))}
           consensusFill={consensusFill}
+          runStatus={run?.status}
           round={run?.round_no ?? 1}
           completed={completedR1}
           total={totalR1}
           consensusRingRef={consensusPulseRef}
         />
       </div>
+
 
       {/* Lock card when consensus reached or chair-ruled */}
       {locked && project && (
