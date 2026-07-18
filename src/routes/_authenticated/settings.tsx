@@ -16,6 +16,7 @@ type Seat = {
   role_prompt: string | null;
   enabled: boolean;
   max_cost_per_run: number;
+  fallback_model_id: string | null;
 };
 
 async function callVault(action: string, payload: Record<string, unknown> = {}) {
