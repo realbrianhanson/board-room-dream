@@ -323,7 +323,7 @@ function BoardroomProjectPage() {
   }
 
   const overBudget = run && Number(run.spent_usd) >= Number(run.budget_usd) * 0.8;
-  const awaitingProtocol = run?.status === "paused" && run.consensus?.awaiting === "batch6_protocol";
+  const locked = run?.status === "consensus" || run?.status === "chair_ruled";
 
   return (
     <div className="mx-auto w-full max-w-6xl px-6 py-10 md:py-14">
