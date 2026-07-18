@@ -227,9 +227,60 @@ function AuditCenterPage() {
           <h2 className="font-display text-xl text-foreground">Final A–Z audit</h2>
         </div>
         {!finalAudit ? (
-          <p className="mt-3 text-sm text-muted-foreground">
-            Eligible once every batch has passed or been skipped. Start it from the Runway.
-          </p>
+          <div className="mt-3 space-y-3">
+            {isImport ? (
+              <p className="text-sm text-muted-foreground">
+                Eligible now — link your repo (or paste your code below) and the board reads it end-to-end.
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Eligible once every batch has passed or been skipped. Start it from the Runway.
+              </p>
+            )}
+            {isImport && (
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => startFinalAudit("github")}
+                  disabled={starting || !ghRepo}
+                  className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+                >
+                  {starting ? "Opening the audit…" : ghRepo ? "Run the A–Z audit" : "Link a repo first"}
+                </button>
+                <button
+                  onClick={() => setShowPaste((v) => !v)}
+                  className="rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground hover:border-primary/40"
+                >
+                  {showPaste ? "Cancel paste" : "Paste code instead"}
+                </button>
+                {!ghRepo && (
+                  <Link
+                    to="/settings"
+                    className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground hover:text-foreground"
+                  >
+                    Connect GitHub →
+                  </Link>
+                )}
+              </div>
+            )}
+            {isImport && showPaste && (
+              <div className="rounded-lg border border-border bg-surface-1 p-4">
+                <textarea
+                  value={pasted}
+                  onChange={(e) => setPasted(e.target.value)}
+                  placeholder="Paste the key files here — up to ~200KB."
+                  rows={10}
+                  className="w-full resize-y rounded-md border border-border bg-surface-2 px-3 py-2 font-mono text-[12px] text-foreground outline-none focus:border-primary"
+                />
+                <button
+                  onClick={() => startFinalAudit("paste")}
+                  disabled={starting || !pasted.trim()}
+                  className="mt-3 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+                >
+                  {starting ? "Opening the audit…" : "Run the A–Z audit on this code"}
+                </button>
+              </div>
+            )}
+          </div>
         ) : (
           <div className="mt-4 rounded-lg border border-border bg-surface-1 p-5">
             <div className="flex flex-wrap items-center gap-2">
@@ -245,20 +296,26 @@ function AuditCenterPage() {
               </span>
             </div>
             {finalAudit.summary?.text && <p className="mt-3 text-sm text-foreground/85">{finalAudit.summary.text}</p>}
-            {finalAudit.status === "clean" && (
+            {finalAudit.status === "clean" && !isImport && (
               <p className="mt-3 inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.22em] text-[hsl(160_45%_70%)]">
                 <Check className="h-4 w-4" /> Passed A–Z. Ship it.
               </p>
             )}
+            {finalAudit.status === "clean" && isImport && (
+              <p className="mt-3 text-sm text-foreground/85">
+                Clean read. Convene the improvement board to plan what to build next.
+              </p>
+            )}
             <Link
-              to="/runway/$projectId"
+              to={isImport ? "/boardroom/$projectId" : "/runway/$projectId"}
               params={{ projectId }}
               className="mt-4 inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground hover:border-primary/40"
             >
-              Back to the Runway <ArrowRight className="h-3.5 w-3.5" />
+              {isImport ? "To the Boardroom" : "Back to the Runway"} <ArrowRight className="h-3.5 w-3.5" />
             </Link>
           </div>
         )}
+
       </section>
     </div>
   );
