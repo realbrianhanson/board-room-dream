@@ -33,7 +33,7 @@ function DesignStudioPage() {
   const [locked, setLocked] = useState<PlanVersion | null>(null);
   const [uid, setUid] = useState<string | null>(null);
   const [reconvening, setReconvening] = useState(false);
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  
 
   const loadLocked = useCallback(async () => {
     const { data } = await supabase
