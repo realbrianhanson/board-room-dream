@@ -14,13 +14,65 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      cohorts: {
+        Row: {
+          id: string
+          instructor_id: string | null
+          join_code: string
+          name: string
+          starts_at: string | null
+        }
+        Insert: {
+          id?: string
+          instructor_id?: string | null
+          join_code: string
+          name: string
+          starts_at?: string | null
+        }
+        Update: {
+          id?: string
+          instructor_id?: string | null
+          join_code?: string
+          name?: string
+          starts_at?: string | null
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          cohort_id: string | null
+          display_name: string | null
+          id: string
+          onboarded_at: string
+          role: string
+        }
+        Insert: {
+          cohort_id?: string | null
+          display_name?: string | null
+          id: string
+          onboarded_at?: string
+          role?: string
+        }
+        Update: {
+          cohort_id?: string | null
+          display_name?: string | null
+          id?: string
+          onboarded_at?: string
+          role?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      instructs_cohort: {
+        Args: { _cohort: string; _uid: string }
+        Returns: boolean
+      }
+      is_admin: { Args: { _uid: string }; Returns: boolean }
+      user_cohort: { Args: { _uid: string }; Returns: string }
     }
     Enums: {
       [_ in never]: never
