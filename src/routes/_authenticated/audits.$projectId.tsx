@@ -255,12 +255,21 @@ function AuditCenterPage() {
                   {showPaste ? "Cancel paste" : "Paste code instead"}
                 </button>
                 {!ghRepo && (
-                  <Link
-                    to="/settings"
+                  <button
+                    onClick={async () => {
+                      try {
+                        const r = await startGithubConnect();
+                        if (r === "embedded") {
+                          toast("Open the app in its own browser tab to connect GitHub.");
+                        }
+                      } catch (e) {
+                        toast.error((e as Error).message);
+                      }
+                    }}
                     className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground hover:text-foreground"
                   >
                     Connect GitHub →
-                  </Link>
+                  </button>
                 )}
               </div>
             )}
