@@ -1022,3 +1022,181 @@ function GitHubRepoCard({ projectId, isOwner }: { projectId: string; isOwner: bo
   );
 }
 
+const SEV_STYLE: Record<FindingRow["severity"], string> = {
+  P0: "border-[hsl(8_60%_55%/0.55)] bg-[hsl(8_60%_25%/0.35)] text-[hsl(8_60%_82%)]",
+  P1: "border-[hsl(8_60%_55%/0.35)] bg-[hsl(8_60%_25%/0.2)] text-[hsl(8_60%_78%)]",
+  P2: "border-primary/35 bg-primary/10 text-[hsl(38_65%_75%)]",
+  P3: "border-border bg-surface-2 text-muted-foreground",
+};
+
+function FindingChips({ findings }: { findings: FindingRow[] }) {
+  const counts: Record<FindingRow["severity"], number> = { P0: 0, P1: 0, P2: 0, P3: 0 };
+  for (const f of findings) if (f.status !== "dismissed" && f.status !== "resolved") counts[f.severity]++;
+  return (
+    <>
+      {(["P0", "P1", "P2", "P3"] as const).map((s) =>
+        counts[s] > 0 ? (
+          <span
+            key={s}
+            className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${SEV_STYLE[s]}`}
+          >
+            {counts[s]} {s}
+          </span>
+        ) : null,
+      )}
+    </>
+  );
+}
+
+function FinalAuditCard({
+  isOwner, audit, findings, projectId, onOpen,
+}: {
+  isOwner: boolean;
+  audit: AuditRow | null;
+  findings: FindingRow[];
+  projectId: string;
+  onOpen: () => void;
+}) {
+  const running = audit?.status === "running";
+  const clean = audit?.status === "clean";
+  const flagged = audit?.status === "findings";
+  return (
+    <div className="rounded-xl border border-primary/30 bg-surface-1 p-6">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(38_65%_70%)]">Final A–Z audit</p>
+          <h3 className="mt-2 font-display text-2xl text-foreground">The board reads the whole app.</h3>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+            Every batch has passed. One last review of the entire codebase against the plan, the PRD, and the security checklist.
+          </p>
+        </div>
+        <ShieldCheck className="h-6 w-6 text-[hsl(38_65%_70%)]" />
+      </div>
+      {running && (
+        <p className="mt-4 inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.22em] text-[hsl(160_45%_70%)]">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-[hsl(160_45%_60%)]" />
+          Reading the app…
+        </p>
+      )}
+      {clean && (
+        <p className="mt-4 font-mono text-[11px] uppercase tracking-[0.22em] text-[hsl(160_45%_70%)]">
+          Passed A–Z. Ship it.
+        </p>
+      )}
+      {flagged && findings.length > 0 && (
+        <div className="mt-4 flex flex-wrap items-center gap-1.5">
+          <FindingChips findings={findings} />
+        </div>
+      )}
+      <div className="mt-5 flex flex-wrap gap-2">
+        {isOwner && !running && !clean && (
+          <button
+            onClick={onOpen}
+            className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
+          >
+            <Gavel className="h-4 w-4" /> {audit ? "Run the audit again" : "Run the A–Z audit"}
+          </button>
+        )}
+        <Link
+          to="/audits/$projectId"
+          params={{ projectId }}
+          className="inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground transition-colors hover:border-primary/40"
+        >
+          <ScrollText className="h-4 w-4" /> Open the audit center
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function AuditModal({
+  modal, ghRepo, starting, onClose, onSubmit,
+}: {
+  modal:
+    | { kind: "batch"; batch: Batch; mode: "start" | "reaudit" }
+    | { kind: "final_az" };
+  ghRepo: string | null;
+  starting: boolean;
+  onClose: () => void;
+  onSubmit: (source: "github" | "paste", pasted: string | null) => void;
+}) {
+  const [source, setSource] = useState<"github" | "paste">(ghRepo ? "github" : "paste");
+  const [pasted, setPasted] = useState("");
+  const title =
+    modal.kind === "final_az"
+      ? "Run the A–Z audit"
+      : modal.mode === "reaudit"
+      ? `Re-audit Batch ${modal.batch.batch_no}`
+      : `Audit Batch ${modal.batch.batch_no}`;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 p-6" onClick={onClose}>
+      <div className="w-full max-w-xl rounded-xl border border-border bg-surface-1 p-6" onClick={(e) => e.stopPropagation()}>
+        <button onClick={onClose} className="absolute right-3 top-3 rounded-md p-1 text-muted-foreground hover:text-foreground" aria-label="Close">
+          <X className="h-4 w-4" />
+        </button>
+        <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(38_65%_70%)]">The board reviews code</p>
+        <h3 className="mt-2 font-display text-2xl text-foreground">{title}</h3>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => setSource("github")}
+            disabled={!ghRepo}
+            className={`rounded-lg border p-4 text-left transition-colors ${
+              source === "github"
+                ? "border-primary/60 bg-primary/10"
+                : "border-border bg-surface-2 hover:border-primary/40"
+            } disabled:opacity-50 disabled:hover:border-border`}
+          >
+            <div className="flex items-center gap-2">
+              <Github className="h-4 w-4" />
+              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground">From GitHub</span>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {ghRepo ? `Read the current HEAD of ${ghRepo}` : "Link a repo above first"}
+            </p>
+          </button>
+          <button
+            type="button"
+            onClick={() => setSource("paste")}
+            className={`rounded-lg border p-4 text-left transition-colors ${
+              source === "paste"
+                ? "border-primary/60 bg-primary/10"
+                : "border-border bg-surface-2 hover:border-primary/40"
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <ScrollText className="h-4 w-4" />
+              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground">Paste code</span>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">Up to ~200KB of pasted source</p>
+          </button>
+        </div>
+
+        {source === "paste" && (
+          <textarea
+            value={pasted}
+            onChange={(e) => setPasted(e.target.value)}
+            placeholder="Paste the relevant source files here…"
+            rows={10}
+            className="mt-4 w-full rounded-lg border border-border bg-background p-3 font-mono text-[12px] leading-relaxed text-foreground/90 outline-none focus:border-primary"
+          />
+        )}
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground">
+            Cancel
+          </button>
+          <button
+            disabled={starting || (source === "paste" && !pasted.trim()) || (source === "github" && !ghRepo)}
+            onClick={() => onSubmit(source, source === "paste" ? pasted : null)}
+            className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-50"
+          >
+            <Gavel className="h-4 w-4" /> {starting ? "Convening…" : "Convene the board"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
