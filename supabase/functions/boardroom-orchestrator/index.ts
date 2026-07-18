@@ -103,8 +103,53 @@ async function loadIntake(admin: any, projectId: string) {
   return data ?? { answers: {}, validation_scores: null };
 }
 
+async function loadProjectMeta(admin: any, projectId: string) {
+  const { data } = await admin
+    .from("projects")
+    .select("id, user_id, is_import, github_repo")
+    .eq("id", projectId)
+    .maybeSingle();
+  return data ?? null;
+}
+
+async function loadRepoSample(admin: any, project: any, maxFiles: number) {
+  if (!project?.github_repo) return { files: [], fileTree: [] as string[] };
+  const token = await ghToken(admin, project.user_id);
+  if (!token) return { files: [], fileTree: [] as string[] };
+  try {
+    const res = await assembleFromGithub(token, project.github_repo, {
+      maxFiles,
+      maxFileBytes: 100 * 1024,
+      maxTotalBytes: 300 * 1024,
+      preferKeyFiles: true,
+    });
+    return { files: res.files, fileTree: res.fileTree };
+  } catch {
+    return { files: [], fileTree: [] as string[] };
+  }
+}
+
+async function latestAuditSummary(admin: any, projectId: string) {
+  const { data } = await admin
+    .from("audits")
+    .select("id, kind, status, summary, completed_at")
+    .eq("project_id", projectId)
+    .eq("kind", "final_az")
+    .not("summary", "is", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data ?? null;
+}
+
 function intakeBlock(intake: any) {
   const a = intake?.answers ?? {};
+  if (a?.imported) {
+    const goals = Array.isArray(a.goals) ? a.goals.join(", ") : "";
+    return `IMPORT INTAKE (owner already built this app)
+Description: ${a.description ?? ""}
+Goals for the board: ${goals || "(none stated)"}`;
+  }
   return `INTAKE ANSWERS
 Idea: ${a.idea ?? ""}
 Buyer: ${a.buyer ?? ""}
@@ -115,6 +160,7 @@ Inspiration: ${a.inspiration ?? ""}
 VALIDATION SCORES
 ${JSON.stringify(intake?.validation_scores ?? null, null, 2)}`;
 }
+
 
 function draftsBlock(steps: any[], forSeat?: Seat) {
   return SEATS
