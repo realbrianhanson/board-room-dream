@@ -269,27 +269,24 @@ ${isDesign ? designShape : planShape}${isDesign ? "\n\nEvery H2 header must appe
 async function queueRound4(admin: any, run: any, steps: any[], loop: number) {
   const synth = steps.find((x) => x.step_key === `r3_synthesis_chair_loop${loop}` && x.status === "completed");
   const candidateMd = String(synth?.response_json?.candidate_md ?? synth?.response_text ?? "");
+  const rubric = rubricForKind(run.kind);
+  const scoresShape = rubric.map((k) => `    "${k}": 1-10`).join(",\n");
   const rows = SEATS.map((seat) => {
     const myR2 = steps.find((x) => x.step_key === `r2_exam_${seat}` && x.status === "completed");
     const myObjections = myR2?.response_json?.objections ?? [];
-    const system = `Round 4 — Scored vote${loop > 0 ? ` (loop ${loop})` : ""}. Vote on the candidate plan against your Round-2 objections.
+    const system = `Round 4 — Scored vote${loop > 0 ? ` (loop ${loop})` : ""}. Vote on the candidate ${run.kind === "design" ? "design brief" : "plan"} against your Round-2 objections.
 
 Return ONLY valid JSON matching this shape:
 {
   "scores": {
-    "painful_problem": 1-10,
-    "reachable_buyer": 1-10,
-    "monetization_path": 1-10,
-    "buildable_scope": 1-10,
-    "differentiation": 1-10,
-    "wow_factor": 1-10
+${scoresShape}
   },
   "blocking_objections": [ "..." ],
   "comment": "One paragraph."
 }
 
 Every score must be an integer 1-10. State which of your own Round-2 objections are RESOLVED by this candidate and which still STAND (add the still-standing ones to blocking_objections if they are dealbreakers).`;
-    const user = `CANDIDATE PLAN\n\n${candidateMd}\n\nYOUR ROUND-2 OBJECTIONS\n${JSON.stringify(myObjections, null, 2)}\n\nProduce your JSON now.`;
+    const user = `CANDIDATE\n\n${candidateMd}\n\nYOUR ROUND-2 OBJECTIONS\n${JSON.stringify(myObjections, null, 2)}\n\nProduce your JSON now.`;
     return {
       run_id: run.id,
       user_id: run.user_id,
