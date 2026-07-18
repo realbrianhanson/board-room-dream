@@ -89,6 +89,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:title", content: "BOARDROOM — Your AI board of directors" },
+      { name: "twitter:description", content: "Four frontier AI models sit as a board of directors and take your idea from concept to shipped, audited code." },
+      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/6bc1f9e5-2f53-4179-a24e-d19261b25aa5/id-preview-db101d11--887503f1-4c18-4b48-87f8-05674e6d8964.lovable.app-1784399490838.png" },
+      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/6bc1f9e5-2f53-4179-a24e-d19261b25aa5/id-preview-db101d11--887503f1-4c18-4b48-87f8-05674e6d8964.lovable.app-1784399490838.png" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
