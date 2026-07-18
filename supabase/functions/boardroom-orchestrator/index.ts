@@ -30,7 +30,7 @@ const SEAT_LABEL: Record<Seat, string> = {
   inspector: "The Inspector",
 };
 
-const RUBRIC = [
+const PLAN_RUBRIC = [
   "painful_problem",
   "reachable_buyer",
   "monetization_path",
@@ -38,6 +38,29 @@ const RUBRIC = [
   "differentiation",
   "wow_factor",
 ] as const;
+const DESIGN_RUBRIC = [
+  "distinctiveness",
+  "premium_feel",
+  "usability",
+  "buildable_in_lovable",
+  "coherence",
+  "signature_element",
+] as const;
+function rubricForKind(kind: string): readonly string[] {
+  return kind === "design" ? DESIGN_RUBRIC : PLAN_RUBRIC;
+}
+
+async function loadLockedPlan(admin: any, projectId: string) {
+  const { data } = await admin
+    .from("plan_versions")
+    .select("content_md, prd_md, features")
+    .eq("project_id", projectId)
+    .eq("kind", "plan")
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data ?? null;
+}
 
 function j(status: number, body: any) {
   return new Response(JSON.stringify(body), {
