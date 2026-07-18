@@ -181,16 +181,30 @@ function AuthPage() {
           </form>
 
           {mode === "password" && (
-            <p className="mt-6 text-center text-xs text-muted-foreground">
-              {isSignup ? "Already have a seat?" : "New to the boardroom?"}{" "}
-              <button
-                type="button"
-                onClick={() => setIsSignup((v) => !v)}
-                className="text-primary transition-colors hover:brightness-125"
-              >
-                {isSignup ? "Sign in" : "Create an account"}
-              </button>
-            </p>
+            <>
+              {!isSignup && (
+                <div className="mt-4 text-center">
+                  <button
+                    type="button"
+                    onClick={handleForgotPassword}
+                    disabled={loading}
+                    className="text-xs text-muted-foreground transition-colors hover:text-primary disabled:opacity-60"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+              )}
+              <p className="mt-6 text-center text-xs text-muted-foreground">
+                {isSignup ? "Already have a seat?" : "New to the boardroom?"}{" "}
+                <button
+                  type="button"
+                  onClick={() => setIsSignup((v) => !v)}
+                  className="text-primary transition-colors hover:brightness-125"
+                >
+                  {isSignup ? "Sign in" : "Create an account"}
+                </button>
+              </p>
+            </>
           )}
         </div>
       </div>
