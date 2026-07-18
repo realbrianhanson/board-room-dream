@@ -15,6 +15,7 @@ type Project = {
   current_batch_no: number;
   created_at: string;
   has_design?: boolean;
+  has_batches?: boolean;
 };
 
 const NEXT_ACTION: Record<string, string> = {
@@ -31,6 +32,9 @@ const NEXT_ACTION: Record<string, string> = {
 
 function nextActionLabel(p: Project): string {
   if (p.status === "locked" && !p.has_design) return "Convene the Design Council";
+  if (p.status === "locked" && p.has_design && !p.has_batches) return "Generate your build sequence";
+  if (p.status === "building" && p.current_batch_no > 0) return `Continue the Runway — Batch ${p.current_batch_no}`;
+  if (p.status === "building") return "Continue the Runway";
   return NEXT_ACTION[p.status] ?? "Open";
 }
 
