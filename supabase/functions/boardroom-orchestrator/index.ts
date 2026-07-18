@@ -7,6 +7,8 @@ import {
   NoUserKey,
   SeatUnavailable,
 } from "../_shared/openrouter-proxy.ts";
+import { assembleFromGithub, formatFiles, ghToken } from "../_shared/github-payload.ts";
+
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
