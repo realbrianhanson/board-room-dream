@@ -587,7 +587,8 @@ function EmptyState({
 
 function BatchCard({
   batch, active, locked, activeBatchNo, isOwner, lovableUrl,
-  onCopyPrompt, onAdvance, onOpenRollback, onRequestSkip,
+  latestAudit, auditFindings, fixBatch, ghRepo,
+  onCopyPrompt, onAdvance, onOpenRollback, onRequestSkip, onOpenAudit,
 }: {
   batch: Batch;
   active: boolean;
@@ -595,11 +596,17 @@ function BatchCard({
   activeBatchNo: number | null;
   isOwner: boolean;
   lovableUrl: string | null;
+  latestAudit: AuditRow | null;
+  auditFindings: FindingRow[];
+  fixBatch: Batch | null;
+  ghRepo: string | null;
   onCopyPrompt: () => void;
   onAdvance: (next: Batch["status"]) => void;
   onOpenRollback: () => void;
   onRequestSkip: () => void;
+  onOpenAudit: () => void;
 }) {
+
   const ch = CHANNEL_STYLE[batch.channel];
   const st = STATUS_STYLE[batch.status];
   const isPassed = batch.status === "passed";
