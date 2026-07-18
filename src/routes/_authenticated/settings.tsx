@@ -212,20 +212,134 @@ function OpenRouterCard() {
   );
 }
 
-function GitHubCard() {
+type GhStatus = {
+  configured: boolean;
+  connected: boolean;
+  last4: string | null;
+  status: "valid" | "invalid" | null;
+};
+
+async function callGh(action: string, payload: Record<string, unknown> = {}) {
+  const { data: session } = await supabase.auth.getSession();
+  const token = session.session?.access_token;
+  if (!token) throw new Error("Not signed in");
+  const { data, error } = await supabase.functions.invoke("github-oauth", {
+    body: { action, ...payload },
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (error) throw error;
+  if ((data as { error?: string })?.error) throw new Error((data as { error: string }).error);
+  return data;
+}
+
+function GitHubCard({ isAdmin }: { isAdmin: boolean }) {
+  const [state, setState] = useState<GhStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function refresh() {
+    try {
+      const data = (await callGh("status")) as GhStatus;
+      setState(data);
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+  useEffect(() => { refresh(); }, []);
+
+  async function connect() {
+    setBusy(true);
+    try {
+      const data = (await callGh("start", { origin: window.location.origin })) as { url: string };
+      window.location.href = data.url;
+    } catch (e) {
+      toast.error((e as Error).message);
+      setBusy(false);
+    }
+  }
+
+  async function disconnect() {
+    if (!confirm("Disconnect GitHub?")) return;
+    setBusy(true);
+    try {
+      await callGh("disconnect");
+      toast.success("Disconnected.");
+      await refresh();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const chip = state?.status === "valid"
+    ? "border-[hsl(160_45%_42%/0.4)] bg-[hsl(160_45%_42%/0.12)] text-[hsl(160_45%_62%)]"
+    : state?.status === "invalid"
+    ? "border-[hsl(8_60%_45%/0.4)] bg-[hsl(8_60%_45%/0.12)] text-[hsl(8_60%_65%)]"
+    : "border-border bg-surface-2 text-muted-foreground";
+
   return (
-    <section className="rounded-xl border border-border bg-surface-1 p-6 opacity-80">
+    <section className="rounded-xl border border-border bg-surface-1 p-6">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h3 className="font-display text-xl text-foreground">GitHub</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Ships in a later batch. The board will read your repo to audit real code against the plan.
+            The board reads your repo to audit real code against the plan. Read-only.
           </p>
         </div>
-        <span className="rounded-full border border-border bg-surface-2 px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-          Later
-        </span>
+        {state?.connected && (
+          <span className={`rounded-full border px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-widest ${chip}`}>
+            {state.status ?? "unknown"}
+          </span>
+        )}
       </div>
+
+      {!state ? (
+        <div className="mt-6 h-16 animate-pulse rounded-md bg-surface-2" />
+      ) : !state.configured ? (
+        <div className="mt-6 rounded-md border border-dashed border-border bg-surface-2 p-4 text-sm text-muted-foreground">
+          GitHub connection isn't configured yet — the program admin sets two backend secrets to enable it.
+          {isAdmin && (
+            <p className="mt-2 font-mono text-[11px] text-foreground/70">
+              Add <span className="text-foreground">GITHUB_CLIENT_ID</span> and <span className="text-foreground">GITHUB_CLIENT_SECRET</span> in Project Settings → Secrets.
+            </p>
+          )}
+        </div>
+      ) : !state.connected ? (
+        <div className="mt-6">
+          <button
+            onClick={connect}
+            disabled={busy}
+            className="rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+          >
+            {busy ? "Redirecting…" : "Connect GitHub"}
+          </button>
+        </div>
+      ) : (
+        <div className="mt-6 space-y-4">
+          <div className="flex items-center gap-3 rounded-md border border-border bg-surface-2 px-4 py-3">
+            <span className="font-mono text-xs text-muted-foreground">ghp_…</span>
+            <span className="font-mono text-sm text-foreground">{state.last4}</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {state.status === "invalid" && (
+              <button
+                onClick={connect}
+                disabled={busy}
+                className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+              >
+                Reconnect
+              </button>
+            )}
+            <button
+              onClick={disconnect}
+              disabled={busy}
+              className="rounded-md border border-[hsl(8_60%_45%/0.4)] px-4 py-2 text-sm text-[hsl(8_60%_65%)] transition-colors hover:bg-[hsl(8_60%_45%/0.12)] disabled:opacity-50"
+            >
+              Disconnect
+            </button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -441,7 +555,7 @@ function SettingsPage() {
 
       <div className="mt-10 space-y-6">
         <OpenRouterCard />
-        <GitHubCard />
+        <GitHubCard isAdmin={isAdmin} />
       </div>
 
       {isAdmin && (
