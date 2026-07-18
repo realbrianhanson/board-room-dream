@@ -1017,6 +1017,220 @@ async function getRun(admin: any, runId: string) {
   return data;
 }
 
+// ============================== Audit helpers ==============================
+
+async function queueAuditChairMerge(admin: any, run: any, steps: any[]) {
+  const seatOutput = (seat: string) => {
+    const st = steps.find((x: any) => x.step_key === `audit_${seat}` && x.status === "completed");
+    return `--- ${seat.toUpperCase()} ---\n${JSON.stringify(st?.response_json ?? { missing: true }, null, 2)}`;
+  };
+  const combined = ["inspector", "contrarian", "strategist"].map(seatOutput).join("\n\n");
+  const isFinal = run.consensus?.audit_kind === "final_az";
+  const system = `You are the Chair. Three seats independently reviewed the student's code. Merge, dedupe, and assign FINAL severities.
+
+Severities:
+- P0: broken build, data loss risk, auth/RLS bypass, secret exposure.
+- P1: contract miss (batch/PRD says X, code does Y), critical UX flow broken, insecure default.
+- P2: notable UX / copy / design-brief drift, minor a11y, small refactor.
+- P3: nits and polish suggestions.
+
+Return ONLY valid JSON:
+{
+  "verdict": "clean" | "findings",
+  "summary": "one paragraph",
+  "findings": [ { "seat": "inspector"|"contrarian"|"strategist", "severity": "P0"|"P1"|"P2"|"P3", "file_path": "path/or/empty", "title": "...", "description": "..." } ],
+  "fix_prompt_md": "Full Lovable-ready fix batch prompt (REQUIRED if any P0-P2 exists). Follow the batch skeleton: 'Batch N.M — <name>. Numbered items only, no scope creep.\\n\\n1. ...\\n\\nKeep everything else identical.\\nTypecheck when done.'"${isFinal ? `,
+  "final_qa_prompt_md": "Human QA batch prompt (channel 'human'). Numbered checks the student runs by hand.",
+  "test_script": ["step 1", "step 2", "..."]` : ""}
+}
+
+If verdict is "clean", findings is [] and fix_prompt_md is "".`;
+
+  await admin.from("run_steps").insert({
+    run_id: run.id,
+    user_id: run.user_id,
+    step_key: "audit_chair_merge",
+    round: 2,
+    seat: "chair",
+    status: "queued",
+    request: {
+      json_output: true,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: `THREE SEAT REPORTS\n\n${combined}\n\nProduce your JSON now.` },
+      ],
+    },
+  });
+}
+
+async function finalizeAudit(admin: any, run: any, steps: any[]) {
+  const chair = steps.find((x: any) => x.step_key === "audit_chair_merge");
+  const parsed = chair?.response_json ?? {};
+  const auditId: string | undefined = run.consensus?.audit_id;
+  if (!auditId) {
+    await admin.from("boardroom_runs").update({ status: "failed", error: "audit_id missing" }).eq("id", run.id);
+    return;
+  }
+  const { data: audit } = await admin.from("audits").select("*").eq("id", auditId).maybeSingle();
+  if (!audit) {
+    await admin.from("boardroom_runs").update({ status: "failed", error: "audit row missing" }).eq("id", run.id);
+    return;
+  }
+
+  const verdict = parsed?.verdict === "clean" ? "clean" : "findings";
+  const rawFindings = Array.isArray(parsed?.findings) ? parsed.findings : [];
+  const findings = rawFindings.filter((f: any) => f && typeof f.title === "string" && f.title.trim());
+
+  const filesAnalyzed = Number(run.consensus?.files_analyzed ?? 0) || null;
+
+  const summary = {
+    verdict,
+    text: String(parsed?.summary ?? ""),
+    counts: {
+      P0: findings.filter((f: any) => f.severity === "P0").length,
+      P1: findings.filter((f: any) => f.severity === "P1").length,
+      P2: findings.filter((f: any) => f.severity === "P2").length,
+      P3: findings.filter((f: any) => f.severity === "P3").length,
+    },
+  };
+
+  const isFinal = audit.kind === "final_az";
+
+  if (verdict === "clean") {
+    // Resolve any prior open findings for this batch.
+    if (audit.batch_id) {
+      await admin
+        .from("audit_findings")
+        .update({ status: "resolved" })
+        .eq("user_id", audit.user_id)
+        .in("status", ["open", "fix_drafted"])
+        .in("audit_id", (
+          await admin.from("audits").select("id").eq("batch_id", audit.batch_id)
+        ).data?.map((r: any) => r.id) ?? []);
+    }
+    await admin
+      .from("audits")
+      .update({ status: "clean", summary, files_analyzed: filesAnalyzed, completed_at: new Date().toISOString() })
+      .eq("id", auditId);
+    if (audit.batch_id) {
+      await admin.from("batches").update({ status: "passed" }).eq("id", audit.batch_id);
+      // If this batch is a fix, also pass the parent.
+      const { data: fixBatch } = await admin
+        .from("batches")
+        .select("parent_batch_id")
+        .eq("id", audit.batch_id)
+        .maybeSingle();
+      if (fixBatch?.parent_batch_id) {
+        await admin.from("batches").update({ status: "passed" }).eq("id", fixBatch.parent_batch_id);
+        // Resolve prior open findings on the parent's audits too.
+        const { data: parentAudits } = await admin
+          .from("audits")
+          .select("id")
+          .eq("batch_id", fixBatch.parent_batch_id);
+        const parentIds = (parentAudits ?? []).map((r: any) => r.id);
+        if (parentIds.length) {
+          await admin
+            .from("audit_findings")
+            .update({ status: "resolved" })
+            .in("audit_id", parentIds)
+            .in("status", ["open", "fix_drafted"]);
+        }
+      }
+    }
+
+    if (isFinal) {
+      // Append a final human QA batch to the runway.
+      const qa = String(parsed?.final_qa_prompt_md ?? "").trim();
+      if (qa) {
+        const { data: last } = await admin
+          .from("batches")
+          .select("batch_no")
+          .eq("project_id", audit.project_id)
+          .order("batch_no", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const nextNo = Math.floor(Number(last?.batch_no ?? 0)) + 1;
+        await admin.from("batches").insert({
+          project_id: audit.project_id,
+          user_id: audit.user_id,
+          batch_no: nextNo,
+          title: "Final A-Z QA",
+          channel: "human",
+          prompt_md: qa,
+          status: "pending",
+        });
+      }
+      await admin.from("projects").update({ status: "done" }).eq("id", audit.project_id);
+    }
+    await admin
+      .from("boardroom_runs")
+      .update({ status: "consensus", consensus: { ...(run.consensus ?? {}), verdict: "clean" } })
+      .eq("id", run.id);
+    return;
+  }
+
+  // Findings path.
+  await admin
+    .from("audits")
+    .update({ status: "findings", summary, files_analyzed: filesAnalyzed, completed_at: new Date().toISOString() })
+    .eq("id", auditId);
+
+  let fixBatchId: string | null = null;
+  const fixPrompt = String(parsed?.fix_prompt_md ?? "").trim();
+  const hasSerious = findings.some((f: any) => ["P0", "P1", "P2"].includes(f.severity));
+
+  if (!isFinal && audit.batch_id && hasSerious && fixPrompt) {
+    const { data: parent } = await admin
+      .from("batches")
+      .select("batch_no, title")
+      .eq("id", audit.batch_id)
+      .maybeSingle();
+    if (parent) {
+      const parentNo = Math.floor(Number(parent.batch_no));
+      const fixNo = Number((parentNo + 0.1 * Number(audit.loop_no ?? 1)).toFixed(2));
+      const { data: inserted } = await admin
+        .from("batches")
+        .insert({
+          project_id: audit.project_id,
+          user_id: audit.user_id,
+          batch_no: fixNo,
+          title: `Fix — ${parent.title}`,
+          channel: "lovable",
+          prompt_md: fixPrompt,
+          status: "pending",
+          is_fix: true,
+          parent_batch_id: audit.batch_id,
+        })
+        .select("id")
+        .single();
+      fixBatchId = inserted?.id ?? null;
+    }
+    await admin.from("batches").update({ status: "fix_needed" }).eq("id", audit.batch_id);
+  }
+
+  if (findings.length) {
+    await admin.from("audit_findings").insert(
+      findings.map((f: any) => ({
+        audit_id: auditId,
+        user_id: audit.user_id,
+        seat: typeof f.seat === "string" ? f.seat : null,
+        severity: ["P0", "P1", "P2", "P3"].includes(f.severity) ? f.severity : "P2",
+        file_path: typeof f.file_path === "string" ? f.file_path : null,
+        title: String(f.title).slice(0, 500),
+        description: typeof f.description === "string" ? f.description : null,
+        fix_batch_id: fixBatchId,
+        status: fixBatchId ? "fix_drafted" : "open",
+      })),
+    );
+  }
+
+  await admin
+    .from("boardroom_runs")
+    .update({ status: "consensus", consensus: { ...(run.consensus ?? {}), verdict: "findings", fix_batch_id: fixBatchId } })
+    .eq("id", run.id);
+}
+
+
 async function afterStepComplete(admin: any, runIn: any) {
   const run = await getRun(admin, runIn.id);
   if (!run) return;
@@ -1065,6 +1279,23 @@ async function afterStepComplete(admin: any, runIn: any) {
     return;
   }
 
+  if (run.kind === "audit") {
+    const chair = steps.find((x: any) => x.step_key === "audit_chair_merge");
+    if (chair?.status === "completed") {
+      await finalizeAudit(admin, run, steps);
+      return;
+    }
+    if (chair) return; // waiting on chair
+    const parallelDone = ["inspector", "contrarian", "strategist"].every((s) =>
+      steps.some((x: any) => x.step_key === `audit_${s}` && x.status === "completed"),
+    );
+    if (parallelDone) {
+      await queueAuditChairMerge(admin, run, steps);
+      fireSelfTick();
+    }
+    return;
+  }
+
   if (run.kind === "batches") {
     const step = steps.find((x: any) => x.step_key === "batches_chair");
     if (step?.status === "completed" && step.response_json && !step.response_json.invalid) {
@@ -1077,6 +1308,7 @@ async function afterStepComplete(admin: any, runIn: any) {
     }
     return;
   }
+
 
   if (run.kind !== "plan" && run.kind !== "design") {
     await admin

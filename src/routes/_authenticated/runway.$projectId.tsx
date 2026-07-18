@@ -8,9 +8,13 @@ import {
   Check,
   Copy,
   ExternalLink,
+  Gavel,
+  Github,
   Lock,
   Palette,
   Rocket,
+  ScrollText,
+  ShieldCheck,
   SkipForward,
   X,
 } from "lucide-react";
@@ -18,6 +22,7 @@ import {
 export const Route = createFileRoute("/_authenticated/runway/$projectId")({
   component: RunwayPage,
 });
+
 
 type Project = {
   id: string;
@@ -85,6 +90,28 @@ function MiniRing({ fill, color = "hsl(38 65% 55%)", size = 22 }: { fill: number
   );
 }
 
+type AuditRow = {
+  id: string;
+  batch_id: string | null;
+  kind: "batch" | "final_az";
+  status: "running" | "clean" | "findings" | "failed";
+  loop_no: number;
+  source: "github" | "paste" | null;
+  head_sha: string | null;
+  files_analyzed: number | null;
+  summary: { counts?: Record<string, number>; text?: string } | null;
+  created_at: string;
+};
+
+type FindingRow = {
+  id: string;
+  audit_id: string;
+  severity: "P0" | "P1" | "P2" | "P3";
+  file_path: string | null;
+  title: string;
+  status: "open" | "fix_drafted" | "resolved" | "dismissed";
+};
+
 function RunwayPage() {
   const { projectId } = Route.useParams();
   const [uid, setUid] = useState<string | null>(null);
@@ -97,20 +124,34 @@ function RunwayPage() {
   const [urlEdit, setUrlEdit] = useState("");
   const [showRollback, setShowRollback] = useState(false);
   const [showSkipConfirm, setShowSkipConfirm] = useState<Batch | null>(null);
+  const [audits, setAudits] = useState<AuditRow[]>([]);
+  const [findings, setFindings] = useState<FindingRow[]>([]);
+  const [ghRepo, setGhRepo] = useState<string | null>(null);
+  const [auditModal, setAuditModal] = useState<
+    | { kind: "batch"; batch: Batch; mode: "start" | "reaudit" }
+    | { kind: "final_az" }
+    | null
+  >(null);
+  const [starting, setStarting] = useState(false);
 
   const loadAll = useCallback(async () => {
-    const [{ data: p }, { data: pv }, { data: dv }, { data: bs }, { data: rs }] = await Promise.all([
-      supabase.from("projects").select("id, name, user_id, status, lovable_project_url, current_batch_no").eq("id", projectId).maybeSingle(),
+    const [{ data: p }, { data: pv }, { data: dv }, { data: bs }, { data: rs }, { data: au }, { data: fi }] = await Promise.all([
+      supabase.from("projects").select("id, name, user_id, status, lovable_project_url, current_batch_no, github_repo").eq("id", projectId).maybeSingle(),
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "plan").limit(1),
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "design").limit(1),
       supabase.from("batches").select("*").eq("project_id", projectId).order("batch_no", { ascending: true }),
       supabase.from("boardroom_runs").select("id, kind, status, error").eq("project_id", projectId).eq("kind", "batches").order("created_at", { ascending: false }).limit(1),
+      supabase.from("audits").select("id, batch_id, kind, status, loop_no, source, head_sha, files_analyzed, summary, created_at").eq("project_id", projectId).order("created_at", { ascending: false }),
+      supabase.from("audit_findings").select("id, audit_id, severity, file_path, title, status").order("severity", { ascending: true }),
     ]);
     setProject((p as Project) ?? null);
+    setGhRepo((p as { github_repo: string | null } | null)?.github_repo ?? null);
     setHasPlan(((pv ?? []).length ?? 0) > 0);
     setHasDesign(((dv ?? []).length ?? 0) > 0);
     setBatches((bs ?? []) as Batch[]);
     setRun(((rs ?? [])[0] as Run) ?? null);
+    setAudits((au ?? []) as AuditRow[]);
+    setFindings((fi ?? []) as FindingRow[]);
     if (p && !urlEdit) setUrlEdit((p as Project).lovable_project_url ?? "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
@@ -126,6 +167,7 @@ function RunwayPage() {
       .channel(`runway:${projectId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "batches", filter: `project_id=eq.${projectId}` }, () => loadAll())
       .on("postgres_changes", { event: "*", schema: "public", table: "boardroom_runs", filter: `project_id=eq.${projectId}` }, () => loadAll())
+      .on("postgres_changes", { event: "*", schema: "public", table: "audits", filter: `project_id=eq.${projectId}` }, () => loadAll())
       .on("postgres_changes", { event: "UPDATE", schema: "public", table: "projects", filter: `id=eq.${projectId}` }, () => loadAll())
       .subscribe();
     return () => { supabase.removeChannel(ch); };
@@ -140,6 +182,50 @@ function RunwayPage() {
     () => (batches ?? []).findIndex((b) => !isTerminal(b.status)),
     [batches],
   );
+
+  const latestAuditByBatch = useMemo(() => {
+    const m = new Map<string, AuditRow>();
+    for (const a of audits) {
+      if (a.batch_id && !m.has(a.batch_id)) m.set(a.batch_id, a);
+    }
+    return m;
+  }, [audits]);
+
+  const findingsByAudit = useMemo(() => {
+    const m = new Map<string, FindingRow[]>();
+    for (const f of findings) {
+      const list = m.get(f.audit_id) ?? [];
+      list.push(f);
+      m.set(f.audit_id, list);
+    }
+    return m;
+  }, [findings]);
+
+  const finalAudit = useMemo(() => audits.find((a) => a.kind === "final_az") ?? null, [audits]);
+  const allBatchesResolved = total > 0 && (batches ?? []).every((b) => b.status === "passed" || b.status === "skipped");
+
+  async function startAuditCall(action: "start_batch_audit" | "start_reaudit" | "start_final_audit", payload: Record<string, unknown>) {
+    setStarting(true);
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const token = session.session?.access_token;
+      if (!token) throw new Error("Not signed in");
+      const { data, error } = await supabase.functions.invoke("audit-runner", {
+        body: { action, ...payload },
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (error) throw error;
+      if ((data as { error?: string })?.error) throw new Error((data as { error: string }).error);
+      toast.success("The board is reading your code…");
+      setAuditModal(null);
+      await loadAll();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setStarting(false);
+    }
+  }
+
 
   async function generate() {
     setGenerating(true);
@@ -347,23 +433,63 @@ function RunwayPage() {
 
 
 
-          {batches!.map((b, i) => (
-            <BatchCard
-              key={b.id}
-              batch={b}
-              active={i === activeIdx}
-              locked={activeIdx !== -1 && i > activeIdx}
-              activeBatchNo={activeIdx !== -1 ? (batches![activeIdx].batch_no) : null}
+          {batches!.map((b, i) => {
+            const latest = latestAuditByBatch.get(b.id) ?? null;
+            const auditFindings = latest ? (findingsByAudit.get(latest.id) ?? []) : [];
+            const fixBatch = b.is_fix ? null : (batches ?? []).find((x) => (x as any).parent_batch_id === b.id) ?? null;
+            return (
+              <BatchCard
+                key={b.id}
+                batch={b}
+                active={i === activeIdx}
+                locked={activeIdx !== -1 && i > activeIdx}
+                activeBatchNo={activeIdx !== -1 ? (batches![activeIdx].batch_no) : null}
+                isOwner={isOwner}
+                lovableUrl={project.lovable_project_url}
+                latestAudit={latest}
+                auditFindings={auditFindings}
+                fixBatch={fixBatch as Batch | null}
+                ghRepo={ghRepo}
+                onCopyPrompt={() => copy(b.prompt_md, "Paste it into Lovable and let it build.")}
+                onAdvance={(next) => advance(b, next)}
+                onOpenRollback={() => setShowRollback(true)}
+                onRequestSkip={() => setShowSkipConfirm(b)}
+                onOpenAudit={() => setAuditModal({ kind: "batch", batch: b, mode: b.is_fix ? "reaudit" : "start" })}
+              />
+            );
+          })}
+
+          {/* Final A-Z audit */}
+          {allBatchesResolved && (
+            <FinalAuditCard
               isOwner={isOwner}
-              lovableUrl={project.lovable_project_url}
-              onCopyPrompt={() => copy(b.prompt_md, "Paste it into Lovable and let it build.")}
-              onAdvance={(next) => advance(b, next)}
-              onOpenRollback={() => setShowRollback(true)}
-              onRequestSkip={() => setShowSkipConfirm(b)}
+              audit={finalAudit}
+              findings={finalAudit ? (findingsByAudit.get(finalAudit.id) ?? []) : []}
+              projectId={projectId}
+              onOpen={() => setAuditModal({ kind: "final_az" })}
             />
-          ))}
+          )}
         </div>
       )}
+
+      {/* Audit modal (source picker) */}
+      {auditModal && (
+        <AuditModal
+          modal={auditModal}
+          ghRepo={ghRepo}
+          starting={starting}
+          onClose={() => setAuditModal(null)}
+          onSubmit={(source, pasted) => {
+            if (auditModal.kind === "final_az") {
+              startAuditCall("start_final_audit", { project_id: projectId, source, pasted_code: pasted });
+            } else {
+              const action = auditModal.mode === "reaudit" ? "start_reaudit" : "start_batch_audit";
+              startAuditCall(action, { batch_id: auditModal.batch.id, source, pasted_code: pasted });
+            }
+          }}
+        />
+      )}
+
 
       {/* Rollback modal */}
       {showRollback && (
@@ -461,7 +587,8 @@ function EmptyState({
 
 function BatchCard({
   batch, active, locked, activeBatchNo, isOwner, lovableUrl,
-  onCopyPrompt, onAdvance, onOpenRollback, onRequestSkip,
+  latestAudit, auditFindings, fixBatch, ghRepo,
+  onCopyPrompt, onAdvance, onOpenRollback, onRequestSkip, onOpenAudit,
 }: {
   batch: Batch;
   active: boolean;
@@ -469,11 +596,17 @@ function BatchCard({
   activeBatchNo: number | null;
   isOwner: boolean;
   lovableUrl: string | null;
+  latestAudit: AuditRow | null;
+  auditFindings: FindingRow[];
+  fixBatch: Batch | null;
+  ghRepo: string | null;
   onCopyPrompt: () => void;
   onAdvance: (next: Batch["status"]) => void;
   onOpenRollback: () => void;
   onRequestSkip: () => void;
+  onOpenAudit: () => void;
 }) {
+
   const ch = CHANNEL_STYLE[batch.channel];
   const st = STATUS_STYLE[batch.status];
   const isPassed = batch.status === "passed";
@@ -520,9 +653,25 @@ function BatchCard({
               Finish Batch {activeBatchNo} first
             </p>
           )}
+          {latestAudit && auditFindings.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <FindingChips findings={auditFindings} />
+              {latestAudit.loop_no >= 2 && batch.status === "fix_needed" && (
+                <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-[hsl(8_60%_75%)]">
+                  · The board wants human eyes
+                </span>
+              )}
+            </div>
+          )}
+          {latestAudit && latestAudit.status === "clean" && isPassed && (
+            <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.24em] text-[hsl(160_45%_65%)]">
+              Passed the board · {latestAudit.files_analyzed ?? 0} files read
+            </p>
+          )}
         </div>
         {isPassed && <Check className="h-5 w-5 text-[hsl(160_45%_60%)]" />}
       </div>
+
 
       {active && (
         <div className="border-t border-border/60 p-5">
@@ -592,28 +741,27 @@ function BatchCard({
                     </button>
                   )}
                   {batch.status === "built" && (
-                    <>
-                      <span className="inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-muted-foreground">
-                        Code audit arrives in a later batch
-                      </span>
-                      <button
-                        onClick={() => onAdvance("passed")}
-                        className="inline-flex items-center gap-2 rounded-md border border-[hsl(160_45%_48%/0.5)] bg-[hsl(160_45%_28%/0.3)] px-4 py-2 text-sm text-foreground transition-colors hover:brightness-110"
-                      >
-                        <Check className="h-4 w-4" /> Mark passed
-                      </button>
-                    </>
-                  )}
-                  {batch.status === "fix_needed" && (
                     <button
-                      onClick={() => onAdvance("passed")}
+                      onClick={onOpenAudit}
                       className="inline-flex items-center gap-2 rounded-md border border-[hsl(160_45%_48%/0.5)] bg-[hsl(160_45%_28%/0.3)] px-4 py-2 text-sm text-foreground transition-colors hover:brightness-110"
                     >
-                      <Check className="h-4 w-4" /> Mark passed
+                      <Gavel className="h-4 w-4" /> Run the audit
                     </button>
+                  )}
+                  {batch.status === "auditing" && (
+                    <span className="inline-flex items-center gap-2 rounded-md border border-[hsl(160_45%_48%/0.4)] bg-[hsl(160_45%_28%/0.15)] px-3 py-2 font-mono text-[11px] uppercase tracking-[0.22em] text-[hsl(160_45%_70%)]">
+                      <span className="h-2 w-2 animate-pulse rounded-full bg-[hsl(160_45%_60%)]" />
+                      The board is reading your code…
+                    </span>
+                  )}
+                  {batch.status === "fix_needed" && fixBatch && (
+                    <span className="inline-flex items-center gap-2 rounded-md border border-[hsl(8_60%_55%/0.4)] bg-[hsl(8_60%_25%/0.2)] px-3 py-2 font-mono text-[11px] uppercase tracking-[0.22em] text-[hsl(8_60%_75%)]">
+                      Fix batch {fixBatch.batch_no} is waiting
+                    </span>
                   )}
                 </>
               )}
+
 
               <button
                 onClick={onOpenRollback}
@@ -871,6 +1019,184 @@ function GitHubRepoCard({ projectId, isOwner }: { projectId: string; isOwner: bo
         </div>
       )}
     </>
+  );
+}
+
+const SEV_STYLE: Record<FindingRow["severity"], string> = {
+  P0: "border-[hsl(8_60%_55%/0.55)] bg-[hsl(8_60%_25%/0.35)] text-[hsl(8_60%_82%)]",
+  P1: "border-[hsl(8_60%_55%/0.35)] bg-[hsl(8_60%_25%/0.2)] text-[hsl(8_60%_78%)]",
+  P2: "border-primary/35 bg-primary/10 text-[hsl(38_65%_75%)]",
+  P3: "border-border bg-surface-2 text-muted-foreground",
+};
+
+function FindingChips({ findings }: { findings: FindingRow[] }) {
+  const counts: Record<FindingRow["severity"], number> = { P0: 0, P1: 0, P2: 0, P3: 0 };
+  for (const f of findings) if (f.status !== "dismissed" && f.status !== "resolved") counts[f.severity]++;
+  return (
+    <>
+      {(["P0", "P1", "P2", "P3"] as const).map((s) =>
+        counts[s] > 0 ? (
+          <span
+            key={s}
+            className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${SEV_STYLE[s]}`}
+          >
+            {counts[s]} {s}
+          </span>
+        ) : null,
+      )}
+    </>
+  );
+}
+
+function FinalAuditCard({
+  isOwner, audit, findings, projectId, onOpen,
+}: {
+  isOwner: boolean;
+  audit: AuditRow | null;
+  findings: FindingRow[];
+  projectId: string;
+  onOpen: () => void;
+}) {
+  const running = audit?.status === "running";
+  const clean = audit?.status === "clean";
+  const flagged = audit?.status === "findings";
+  return (
+    <div className="rounded-xl border border-primary/30 bg-surface-1 p-6">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(38_65%_70%)]">Final A–Z audit</p>
+          <h3 className="mt-2 font-display text-2xl text-foreground">The board reads the whole app.</h3>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+            Every batch has passed. One last review of the entire codebase against the plan, the PRD, and the security checklist.
+          </p>
+        </div>
+        <ShieldCheck className="h-6 w-6 text-[hsl(38_65%_70%)]" />
+      </div>
+      {running && (
+        <p className="mt-4 inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.22em] text-[hsl(160_45%_70%)]">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-[hsl(160_45%_60%)]" />
+          Reading the app…
+        </p>
+      )}
+      {clean && (
+        <p className="mt-4 font-mono text-[11px] uppercase tracking-[0.22em] text-[hsl(160_45%_70%)]">
+          Passed A–Z. Ship it.
+        </p>
+      )}
+      {flagged && findings.length > 0 && (
+        <div className="mt-4 flex flex-wrap items-center gap-1.5">
+          <FindingChips findings={findings} />
+        </div>
+      )}
+      <div className="mt-5 flex flex-wrap gap-2">
+        {isOwner && !running && !clean && (
+          <button
+            onClick={onOpen}
+            className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
+          >
+            <Gavel className="h-4 w-4" /> {audit ? "Run the audit again" : "Run the A–Z audit"}
+          </button>
+        )}
+        <Link
+          to="/audits/$projectId"
+          params={{ projectId }}
+          className="inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground transition-colors hover:border-primary/40"
+        >
+          <ScrollText className="h-4 w-4" /> Open the audit center
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function AuditModal({
+  modal, ghRepo, starting, onClose, onSubmit,
+}: {
+  modal:
+    | { kind: "batch"; batch: Batch; mode: "start" | "reaudit" }
+    | { kind: "final_az" };
+  ghRepo: string | null;
+  starting: boolean;
+  onClose: () => void;
+  onSubmit: (source: "github" | "paste", pasted: string | null) => void;
+}) {
+  const [source, setSource] = useState<"github" | "paste">(ghRepo ? "github" : "paste");
+  const [pasted, setPasted] = useState("");
+  const title =
+    modal.kind === "final_az"
+      ? "Run the A–Z audit"
+      : modal.mode === "reaudit"
+      ? `Re-audit Batch ${modal.batch.batch_no}`
+      : `Audit Batch ${modal.batch.batch_no}`;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 p-6" onClick={onClose}>
+      <div className="w-full max-w-xl rounded-xl border border-border bg-surface-1 p-6" onClick={(e) => e.stopPropagation()}>
+        <button onClick={onClose} className="absolute right-3 top-3 rounded-md p-1 text-muted-foreground hover:text-foreground" aria-label="Close">
+          <X className="h-4 w-4" />
+        </button>
+        <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(38_65%_70%)]">The board reviews code</p>
+        <h3 className="mt-2 font-display text-2xl text-foreground">{title}</h3>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => setSource("github")}
+            disabled={!ghRepo}
+            className={`rounded-lg border p-4 text-left transition-colors ${
+              source === "github"
+                ? "border-primary/60 bg-primary/10"
+                : "border-border bg-surface-2 hover:border-primary/40"
+            } disabled:opacity-50 disabled:hover:border-border`}
+          >
+            <div className="flex items-center gap-2">
+              <Github className="h-4 w-4" />
+              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground">From GitHub</span>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {ghRepo ? `Read the current HEAD of ${ghRepo}` : "Link a repo above first"}
+            </p>
+          </button>
+          <button
+            type="button"
+            onClick={() => setSource("paste")}
+            className={`rounded-lg border p-4 text-left transition-colors ${
+              source === "paste"
+                ? "border-primary/60 bg-primary/10"
+                : "border-border bg-surface-2 hover:border-primary/40"
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <ScrollText className="h-4 w-4" />
+              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground">Paste code</span>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">Up to ~200KB of pasted source</p>
+          </button>
+        </div>
+
+        {source === "paste" && (
+          <textarea
+            value={pasted}
+            onChange={(e) => setPasted(e.target.value)}
+            placeholder="Paste the relevant source files here…"
+            rows={10}
+            className="mt-4 w-full rounded-lg border border-border bg-background p-3 font-mono text-[12px] leading-relaxed text-foreground/90 outline-none focus:border-primary"
+          />
+        )}
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground">
+            Cancel
+          </button>
+          <button
+            disabled={starting || (source === "paste" && !pasted.trim()) || (source === "github" && !ghRepo)}
+            onClick={() => onSubmit(source, source === "paste" ? pasted : null)}
+            className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-50"
+          >
+            <Gavel className="h-4 w-4" /> {starting ? "Convening…" : "Convene the board"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

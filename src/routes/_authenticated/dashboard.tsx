@@ -33,10 +33,14 @@ const NEXT_ACTION: Record<string, string> = {
 function nextActionLabel(p: Project): string {
   if (p.status === "locked" && !p.has_design) return "Convene the Design Council";
   if (p.status === "locked" && p.has_design && !p.has_batches) return "Generate your build sequence";
+  if ((p as any).has_fix_needed) return `The board found issues — Batch ${(p as any).fix_batch_no} waiting`;
+  if (p.status === "auditing" && (p as any).all_passed && !(p as any).has_final_audit) return "Run the A–Z audit";
+  if (p.status === "done") return "Passed A–Z. Ship it.";
   if (p.status === "building" && p.current_batch_no > 0) return `Continue the Runway — Batch ${p.current_batch_no}`;
   if (p.status === "building") return "Continue the Runway";
   return NEXT_ACTION[p.status] ?? "Open";
 }
+
 
 const STATUS_COLOR: Record<string, string> = {
   intake: "hsl(40 10% 62%)",
@@ -104,19 +108,48 @@ function DashboardPage() {
       return;
     }
     const rows = (data ?? []) as Project[];
-    const lockedIds = rows.filter((r) => r.status === "locked").map((r) => r.id);
+    const ids = rows.map((r) => r.id);
     let designSet = new Set<string>();
     let batchSet = new Set<string>();
-    if (lockedIds.length) {
-      const [{ data: pvs }, { data: bs }] = await Promise.all([
-        supabase.from("plan_versions").select("project_id").eq("kind", "design").in("project_id", lockedIds),
-        supabase.from("batches").select("project_id").in("project_id", lockedIds),
+    const fixInfo = new Map<string, number>();
+    const allPassedSet = new Set<string>();
+    let finalAuditSet = new Set<string>();
+    if (ids.length) {
+      const [{ data: pvs }, { data: bs }, { data: au }] = await Promise.all([
+        supabase.from("plan_versions").select("project_id").eq("kind", "design").in("project_id", ids),
+        supabase.from("batches").select("project_id, batch_no, status").in("project_id", ids),
+        supabase.from("audits").select("project_id, kind").in("project_id", ids).eq("kind", "final_az"),
       ]);
       designSet = new Set((pvs ?? []).map((r: any) => r.project_id));
-      batchSet = new Set((bs ?? []).map((r: any) => r.project_id));
+      const byProject = new Map<string, Array<{ batch_no: number; status: string }>>();
+      for (const r of (bs ?? []) as Array<{ project_id: string; batch_no: number; status: string }>) {
+        batchSet.add(r.project_id);
+        const list = byProject.get(r.project_id) ?? [];
+        list.push({ batch_no: r.batch_no, status: r.status });
+        byProject.set(r.project_id, list);
+      }
+      for (const [pid, list] of byProject) {
+        const fix = list.find((x) => x.status === "fix_needed");
+        if (fix) fixInfo.set(pid, fix.batch_no);
+        if (list.length > 0 && list.every((x) => x.status === "passed" || x.status === "skipped")) {
+          allPassedSet.add(pid);
+        }
+      }
+      finalAuditSet = new Set((au ?? []).map((r: any) => r.project_id));
     }
-    setProjects(rows.map((r) => ({ ...r, has_design: designSet.has(r.id), has_batches: batchSet.has(r.id) })));
+    setProjects(
+      rows.map((r) => ({
+        ...r,
+        has_design: designSet.has(r.id),
+        has_batches: batchSet.has(r.id),
+        has_fix_needed: fixInfo.has(r.id),
+        fix_batch_no: fixInfo.get(r.id),
+        all_passed: allPassedSet.has(r.id),
+        has_final_audit: finalAuditSet.has(r.id),
+      }) as Project),
+    );
   }
+
   useEffect(() => {
     load();
   }, []);
