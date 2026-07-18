@@ -433,23 +433,63 @@ function RunwayPage() {
 
 
 
-          {batches!.map((b, i) => (
-            <BatchCard
-              key={b.id}
-              batch={b}
-              active={i === activeIdx}
-              locked={activeIdx !== -1 && i > activeIdx}
-              activeBatchNo={activeIdx !== -1 ? (batches![activeIdx].batch_no) : null}
+          {batches!.map((b, i) => {
+            const latest = latestAuditByBatch.get(b.id) ?? null;
+            const auditFindings = latest ? (findingsByAudit.get(latest.id) ?? []) : [];
+            const fixBatch = b.is_fix ? null : (batches ?? []).find((x) => (x as any).parent_batch_id === b.id) ?? null;
+            return (
+              <BatchCard
+                key={b.id}
+                batch={b}
+                active={i === activeIdx}
+                locked={activeIdx !== -1 && i > activeIdx}
+                activeBatchNo={activeIdx !== -1 ? (batches![activeIdx].batch_no) : null}
+                isOwner={isOwner}
+                lovableUrl={project.lovable_project_url}
+                latestAudit={latest}
+                auditFindings={auditFindings}
+                fixBatch={fixBatch as Batch | null}
+                ghRepo={ghRepo}
+                onCopyPrompt={() => copy(b.prompt_md, "Paste it into Lovable and let it build.")}
+                onAdvance={(next) => advance(b, next)}
+                onOpenRollback={() => setShowRollback(true)}
+                onRequestSkip={() => setShowSkipConfirm(b)}
+                onOpenAudit={() => setAuditModal({ kind: "batch", batch: b, mode: b.is_fix ? "reaudit" : "start" })}
+              />
+            );
+          })}
+
+          {/* Final A-Z audit */}
+          {allBatchesResolved && (
+            <FinalAuditCard
               isOwner={isOwner}
-              lovableUrl={project.lovable_project_url}
-              onCopyPrompt={() => copy(b.prompt_md, "Paste it into Lovable and let it build.")}
-              onAdvance={(next) => advance(b, next)}
-              onOpenRollback={() => setShowRollback(true)}
-              onRequestSkip={() => setShowSkipConfirm(b)}
+              audit={finalAudit}
+              findings={finalAudit ? (findingsByAudit.get(finalAudit.id) ?? []) : []}
+              projectId={projectId}
+              onOpen={() => setAuditModal({ kind: "final_az" })}
             />
-          ))}
+          )}
         </div>
       )}
+
+      {/* Audit modal (source picker) */}
+      {auditModal && (
+        <AuditModal
+          modal={auditModal}
+          ghRepo={ghRepo}
+          starting={starting}
+          onClose={() => setAuditModal(null)}
+          onSubmit={(source, pasted) => {
+            if (auditModal.kind === "final_az") {
+              startAuditCall("start_final_audit", { project_id: projectId, source, pasted_code: pasted });
+            } else {
+              const action = auditModal.mode === "reaudit" ? "start_reaudit" : "start_batch_audit";
+              startAuditCall(action, { batch_id: auditModal.batch.id, source, pasted_code: pasted });
+            }
+          }}
+        />
+      )}
+
 
       {/* Rollback modal */}
       {showRollback && (
