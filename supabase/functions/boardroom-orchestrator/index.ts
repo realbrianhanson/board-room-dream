@@ -1475,14 +1475,26 @@ Deno.serve(async (req) => {
     }
     const { data: project } = await admin
       .from("projects")
-      .select("id, user_id")
+      .select("id, user_id, is_import, github_repo")
       .eq("id", projectId)
       .maybeSingle();
     if (!project || project.user_id !== userId) return j(404, { error: "Project not found" });
 
     if (kind === "design" || kind === "batches") {
       const locked = await loadLockedPlan(admin, projectId);
-      if (!locked) return j(400, { error: kind === "design" ? "The board locks the plan before it debates the look." : "The board locks the plan before it sequences the build." });
+      if (!locked) {
+        if (kind === "design" && project.is_import) {
+          // Imports may design without a locked plan: need either a linked repo
+          // or a description in the intake.
+          const intake = await loadIntake(admin, projectId);
+          const hasDesc = !!intake?.answers?.description;
+          if (!project.github_repo && !hasDesc) {
+            return j(400, { error: "Link your repo or describe the app so the board can see it." });
+          }
+        } else {
+          return j(400, { error: kind === "design" ? "The board locks the plan before it debates the look." : "The board locks the plan before it sequences the build." });
+        }
+      }
     }
     if (kind === "batches") {
       const { count } = await admin
@@ -1491,6 +1503,7 @@ Deno.serve(async (req) => {
         .eq("project_id", projectId);
       if ((count ?? 0) > 0) return j(400, { error: "This project already has a build sequence." });
     }
+
 
     let consensusMeta: any = null;
     if (kind === "change_request") {
