@@ -583,14 +583,24 @@ async function resume(
 function ProjectCard({
   project,
   onOpen,
+  onDelete,
 }: {
   project: Project;
   onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={() => onOpen(project.id)}
-      className="group flex flex-col items-start rounded-xl border border-border bg-surface-1 p-6 text-left transition-colors hover:border-primary/40 hover:bg-surface-2"
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen(project.id);
+        }
+      }}
+      className="group relative flex cursor-pointer flex-col items-start rounded-xl border border-border bg-surface-1 p-6 text-left transition-colors hover:border-primary/40 hover:bg-surface-2 focus:outline-none focus-visible:border-primary/60"
     >
       <div className="flex w-full items-start justify-between gap-3">
         <div className="min-w-0">
@@ -607,7 +617,20 @@ function ProjectCard({
             {project.current_batch_no > 0 && ` · batch ${project.current_batch_no}`}
           </p>
         </div>
-        <MiniRing status={project.status} />
+        <div className="flex items-center gap-2">
+          <MiniRing status={project.status} />
+          <button
+            type="button"
+            aria-label="Delete project"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(project.id);
+            }}
+            className="rounded-md border border-transparent p-1.5 text-muted-foreground opacity-0 transition-all hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive focus:opacity-100 group-hover:opacity-100"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
       <p className="mt-6 text-xs text-muted-foreground">
         Created {new Date(project.created_at).toLocaleDateString()}
@@ -616,6 +639,6 @@ function ProjectCard({
         {nextActionLabel(project)}
         <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
       </span>
-    </button>
+    </div>
   );
 }
