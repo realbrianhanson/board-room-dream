@@ -118,6 +118,9 @@ async function insertAlert(
       detail: args.detail ?? null,
     });
   } catch (_e) { /* alerts must never break the run */ }
+}
+
+
 
 
 // ============================== Prompt builders ==============================
