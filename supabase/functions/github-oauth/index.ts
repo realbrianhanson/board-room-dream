@@ -57,23 +57,28 @@ async function makeState(userId: string): Promise<string> {
   return b64url(new TextEncoder().encode(`${payload}|${sig}`));
 }
 
-async function verifyState(state: string, userId: string): Promise<boolean> {
+async function verifyState(
+  state: string,
+  userId: string,
+): Promise<{ ok: boolean; reason?: string; ageSec?: number }> {
   try {
     const decoded = new TextDecoder().decode(b64urlDecode(state));
     const parts = decoded.split("|");
-    if (parts.length !== 3) return false;
+    if (parts.length !== 3) return { ok: false, reason: "parts" };
     const [uid, ts, sig] = parts;
-    if (uid !== userId) return false;
-    const age = Date.now() - parseInt(ts, 10);
-    if (!isFinite(age) || age < 0 || age > 10 * 60 * 1000) return false;
+    if (uid !== userId) return { ok: false, reason: "uid_mismatch" };
+    const ageMs = Date.now() - parseInt(ts, 10);
+    const ageSec = Math.round(ageMs / 1000);
+    if (!isFinite(ageMs) || ageMs < 0 || ageMs > 10 * 60 * 1000) {
+      return { ok: false, reason: "age", ageSec };
+    }
     const expected = await hmac(`${uid}|${ts}`);
-    // constant-time-ish
-    if (expected.length !== sig.length) return false;
+    if (expected.length !== sig.length) return { ok: false, reason: "sig_len", ageSec };
     let diff = 0;
     for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ sig.charCodeAt(i);
-    return diff === 0;
-  } catch {
-    return false;
+    return diff === 0 ? { ok: true, ageSec } : { ok: false, reason: "sig_mismatch", ageSec };
+  } catch (e) {
+    return { ok: false, reason: `parse_error:${(e as Error).message}` };
   }
 }
 
@@ -101,6 +106,10 @@ Deno.serve(async (req) => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  console.log(
+    `[github-oauth] action=${action} user=${userId} client_id_prefix=${GITHUB_CLIENT_ID.slice(0, 6)} client_secret_present=${!!GITHUB_CLIENT_SECRET}`,
+  );
+
   try {
     if (action === "status") {
       const { data } = await admin
@@ -117,13 +126,21 @@ Deno.serve(async (req) => {
       });
     }
 
-    if (!configured) return j(400, { error: "GitHub OAuth is not configured" });
+    if (!configured) {
+      console.error("[github-oauth] not configured: missing client id/secret env");
+      return j(400, { error: "GitHub OAuth is not configured" });
+    }
 
     if (action === "start") {
       const origin: string = String(body?.origin ?? "").replace(/\/$/, "");
-      if (!origin || !/^https?:\/\//.test(origin)) return j(400, { error: "Invalid origin" });
+      console.log(`[github-oauth] start origin=${origin}`);
+      if (!origin || !/^https?:\/\//.test(origin)) {
+        console.error(`[github-oauth] start invalid_origin=${origin}`);
+        return j(400, { error: "Invalid origin" });
+      }
       const state = await makeState(userId);
       const redirect_uri = `${origin}/auth/github/callback`;
+      console.log(`[github-oauth] start redirect_uri=${redirect_uri}`);
       const url = new URL("https://github.com/login/oauth/authorize");
       url.searchParams.set("client_id", GITHUB_CLIENT_ID);
       url.searchParams.set("redirect_uri", redirect_uri);
@@ -136,9 +153,19 @@ Deno.serve(async (req) => {
     if (action === "callback") {
       const code: string = String(body?.code ?? "").trim();
       const state: string = String(body?.state ?? "").trim();
-      if (!code || !state) return j(400, { error: "Missing code or state" });
-      const ok = await verifyState(state, userId);
-      if (!ok) return j(400, { error: "Invalid or expired state" });
+      if (!code || !state) {
+        console.error(
+          `[github-oauth] callback missing code/state code_present=${!!code} state_present=${!!state}`,
+        );
+        return j(400, { error: "Missing code or state" });
+      }
+      const stateResult = await verifyState(state, userId);
+      if (!stateResult.ok) {
+        console.error(
+          `[github-oauth] callback state verification failed reason=${stateResult.reason} age_sec=${stateResult.ageSec ?? "n/a"} user=${userId}`,
+        );
+        return j(400, { error: "Invalid or expired state" });
+      }
 
       const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
         method: "POST",
@@ -149,10 +176,21 @@ Deno.serve(async (req) => {
           code,
         }),
       });
-      if (!tokenRes.ok) return j(502, { error: "GitHub token exchange failed" });
+      console.log(`[github-oauth] callback token exchange http_status=${tokenRes.status}`);
+      if (!tokenRes.ok) {
+        const errText = await tokenRes.text().catch(() => "");
+        console.error(`[github-oauth] callback token exchange non-2xx body=${errText}`);
+        return j(502, { error: "GitHub token exchange failed" });
+      }
       const tokenJson: any = await tokenRes.json();
       const accessToken: string | undefined = tokenJson?.access_token;
-      if (!accessToken) return j(400, { error: tokenJson?.error_description ?? "No access token" });
+      if (!accessToken) {
+        console.error(
+          `[github-oauth] callback no access_token; github response=${JSON.stringify(tokenJson)}`,
+        );
+        return j(400, { error: tokenJson?.error_description ?? "No access token" });
+      }
+      console.log("[github-oauth] callback token received");
 
       const encrypted = await encryptSecret(accessToken);
       const last4 = accessToken.slice(-4);
@@ -166,7 +204,11 @@ Deno.serve(async (req) => {
         },
         { onConflict: "user_id,provider" },
       );
-      if (error) throw error;
+      if (error) {
+        console.error(`[github-oauth] callback upsert failed: ${error.message}`);
+        throw error;
+      }
+      console.log(`[github-oauth] callback upsert ok last4=${last4}`);
       return j(200, { connected: true, last4, status: "valid" });
     }
 
@@ -176,12 +218,18 @@ Deno.serve(async (req) => {
         .delete()
         .eq("user_id", userId)
         .eq("provider", "github");
-      if (error) throw error;
+      if (error) {
+        console.error(`[github-oauth] disconnect failed: ${error.message}`);
+        throw error;
+      }
+      console.log("[github-oauth] disconnect ok");
       return j(200, { disconnected: true });
     }
 
+    console.error(`[github-oauth] unknown action=${action}`);
     return j(400, { error: "Unknown action" });
   } catch (e) {
+    console.error(`[github-oauth] unhandled error: ${(e as Error).message}`);
     return j(500, { error: (e as Error).message });
   }
 });
