@@ -609,7 +609,7 @@ async function executeStep(admin: any, run: any, step: any) {
         } catch {
           candidate = null;
         }
-        const err = candidate ? validateStepJson(step.step_key, candidate) : "Response was not parseable JSON.";
+        const err = candidate ? validateStepJson(step.step_key, candidate, run.kind) : "Response was not parseable JSON.";
         if (!err) {
           parsed = candidate;
           break;
