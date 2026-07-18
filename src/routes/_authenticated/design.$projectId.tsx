@@ -16,7 +16,7 @@ const CONVENE_BLOCKED: Record<string, string> = {
   killed: "This idea was killed.",
 };
 
-type Project = { id: string; name: string; user_id: string; status: string };
+type Project = { id: string; name: string; user_id: string; status: string; is_import: boolean; github_repo: string | null };
 type PlanVersion = {
   id: string;
   version: number;
