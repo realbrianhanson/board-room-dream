@@ -1151,7 +1151,7 @@ function RunControls({
       </button>
     );
   }
-  if (run.status === "paused_budget" || (run.status === "paused" && run.consensus?.awaiting !== "batch6_protocol")) {
+  if (run.status === "paused_budget" || run.status === "paused") {
     return (
       <button
         onClick={onResume}
