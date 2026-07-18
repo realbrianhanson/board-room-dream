@@ -566,6 +566,19 @@ function RollCall({
   );
 }
 
+function FallbackChip({ meta }: { meta?: { fallback_model_used?: string; primary_model?: string } | null }) {
+  if (!meta?.fallback_model_used) return null;
+  const label = meta.fallback_model_used.split("/").pop() ?? meta.fallback_model_used;
+  return (
+    <span
+      title={`Primary seat (${meta.primary_model ?? "primary"}) declined. Answered by ${meta.fallback_model_used}.`}
+      className="rounded-full border border-border bg-surface-2 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-muted-foreground"
+    >
+      answered by {label} — primary seat declined
+    </span>
+  );
+}
+
 // ============================== Transcript ==============================
 
 function stepRoundLabel(step: SessionStep): string {
@@ -601,6 +614,7 @@ function TranscriptCard({
           <p className="truncate font-display text-sm text-foreground">{meta.label}</p>
           <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">{roundLabel}</p>
         </div>
+        <FallbackChip meta={step.response_json?._meta?.fallback} />
         <StepStatusChip status={step.status} />
       </div>
       <div className="mt-4">

@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import {
   adminClient,
   BudgetExceeded,
+  DailyCapExceeded,
   callSeat,
   NoUserKey,
   SeatUnavailable,
@@ -780,6 +781,7 @@ async function executeStep(admin: any, run: any, step: any) {
       let parsed: any = null;
       let content = "";
       let usage = { tokensIn: 0, tokensOut: 0, costUsd: 0 };
+      let fallbackMeta: any = null;
       let validationAttempt = 0;
 
       // Structured JSON path: one re-prompt on invalid.
@@ -792,6 +794,7 @@ async function executeStep(admin: any, run: any, step: any) {
         });
         content = result.content;
         usage = { tokensIn: result.tokensIn, tokensOut: result.tokensOut, costUsd: result.costUsd };
+        if (result.fallback) fallbackMeta = result.fallback;
         if (!jsonMode) break;
         let candidate: any;
         try {
@@ -805,7 +808,6 @@ async function executeStep(admin: any, run: any, step: any) {
           break;
         }
         if (validationAttempt >= 1) {
-          // Give up, store invalid marker but continue the run
           parsed = { invalid: true, raw: content, validation_error: err };
           break;
         }
@@ -818,6 +820,11 @@ async function executeStep(admin: any, run: any, step: any) {
             content: `Your previous response failed validation: ${err}\nReturn ONLY the required JSON object, no prose, no code fences.`,
           },
         ];
+      }
+
+      if (fallbackMeta) {
+        if (!parsed || typeof parsed !== "object") parsed = {};
+        parsed._meta = { ...(parsed._meta ?? {}), fallback: fallbackMeta };
       }
 
       await admin
@@ -834,6 +841,19 @@ async function executeStep(admin: any, run: any, step: any) {
         .eq("id", step.id);
       return;
     } catch (e) {
+      if (e instanceof DailyCapExceeded) {
+        await admin.from("run_steps").update({ status: "queued", error: "daily_cap" }).eq("id", step.id);
+        await admin.from("boardroom_runs").update({ status: "paused_budget" }).eq("id", run.id);
+        if (run.project_id && run.user_id) {
+          await insertAlert(admin, {
+            user_id: run.user_id,
+            project_id: run.project_id,
+            kind: "spend_cap",
+            detail: { scope: "daily", cap_usd: e.cap, spent_usd: e.spent, source: e.scope },
+          });
+        }
+        return;
+      }
       if (e instanceof BudgetExceeded) {
         await admin.from("run_steps").update({ status: "queued", error: "budget" }).eq("id", step.id);
         await admin.from("boardroom_runs").update({ status: "paused_budget" }).eq("id", run.id);
@@ -842,7 +862,7 @@ async function executeStep(admin: any, run: any, step: any) {
             user_id: run.user_id,
             project_id: run.project_id,
             kind: "spend_cap",
-            detail: { run_kind: run.kind, spent_usd: Number(run.spent_usd ?? 0), budget_usd: Number(run.budget_usd ?? 0) },
+            detail: { scope: "run", run_kind: run.kind, spent_usd: Number(run.spent_usd ?? 0), budget_usd: Number(run.budget_usd ?? 0) },
           });
         }
         return;
@@ -1263,7 +1283,7 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
           user_id: audit.user_id,
           batch_no: nextNo,
           title: "Final A-Z QA",
-          channel: "human",
+          channel: "lovable",
           prompt_md: qa,
           status: "pending",
         });
@@ -1606,14 +1626,14 @@ Deno.serve(async (req) => {
       const locked = await loadLockedPlan(admin, projectId);
       if (!locked) {
         if (kind === "design" && project.is_import) {
-          // Imports may design without a locked plan: need either a linked repo
-          // or a description in the intake.
+          // Design Council for imports may run without a locked plan: need repo or description.
           const intake = await loadIntake(admin, projectId);
           const hasDesc = !!intake?.answers?.description;
           if (!project.github_repo && !hasDesc) {
             return j(400, { error: "Link your repo or describe the app so the board can see it." });
           }
         } else {
+          // 'batches' ALWAYS requires a locked plan — imports must lock their improvement plan first.
           return j(400, { error: kind === "design" ? "The board locks the plan before it debates the look." : "The board locks the plan before it sequences the build." });
         }
       }

@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { SpendPanel } from "@/components/spend-panel";
 
 export const Route = createFileRoute("/_authenticated/settings")({
   component: SettingsPage,
@@ -15,6 +16,7 @@ type Seat = {
   role_prompt: string | null;
   enabled: boolean;
   max_cost_per_run: number;
+  fallback_model_id: string | null;
 };
 
 async function callVault(action: string, payload: Record<string, unknown> = {}) {
@@ -353,7 +355,7 @@ function ModelRegistryEditor() {
     setLoading(true);
     const { data, error } = await supabase
       .from("model_registry")
-      .select("seat, model_id, display_name, role_prompt, enabled, max_cost_per_run")
+      .select("seat, model_id, display_name, role_prompt, enabled, max_cost_per_run, fallback_model_id")
       .order("seat");
     if (error) toast.error(error.message);
     else setSeats((data ?? []) as Seat[]);
@@ -377,6 +379,7 @@ function ModelRegistryEditor() {
         role_prompt: seat.role_prompt,
         enabled: seat.enabled,
         max_cost_per_run: seat.max_cost_per_run,
+        fallback_model_id: seat.fallback_model_id,
       })
       .eq("seat", seat.seat);
     if (error) toast.error(error.message);
@@ -438,6 +441,15 @@ function ModelRegistryEditor() {
                 className="w-full rounded-md border border-border bg-surface-1 px-3 py-2 font-mono text-sm text-foreground outline-none focus:border-primary"
               />
             </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">Refusal fallback model</label>
+              <input
+                value={s.fallback_model_id ?? ""}
+                onChange={(e) => update(s.seat, { fallback_model_id: e.target.value || null })}
+                placeholder="moonshotai/kimi-k3"
+                className="w-full rounded-md border border-border bg-surface-1 px-3 py-2 font-mono text-sm text-foreground outline-none focus:border-primary"
+              />
+            </div>
           </div>
           <div className="mt-4">
             <button
@@ -450,6 +462,62 @@ function ModelRegistryEditor() {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function DefaultDailyCapEditor() {
+  const [usd, setUsd] = useState<number>(25);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase
+        .from("app_settings")
+        .select("value")
+        .eq("key", "default_daily_cap_usd")
+        .maybeSingle();
+      const n = Number((data?.value as { usd?: number } | null)?.usd);
+      if (Number.isFinite(n) && n > 0) setUsd(n);
+      setLoading(false);
+    })();
+  }, []);
+
+  async function save() {
+    setSaving(true);
+    const { error } = await supabase
+      .from("app_settings")
+      .update({ value: { usd }, updated_at: new Date().toISOString() })
+      .eq("key", "default_daily_cap_usd");
+    if (error) toast.error(error.message);
+    else toast.success(`Default daily cap set to $${usd.toFixed(2)}`);
+    setSaving(false);
+  }
+
+  if (loading) return <div className="h-20 animate-pulse rounded-md bg-surface-2" />;
+  return (
+    <div className="rounded-lg border border-border bg-surface-2 p-5">
+      <label className="mb-2 block text-xs text-muted-foreground">Default daily cap ($ USD)</label>
+      <div className="flex flex-wrap items-center gap-3">
+        <input
+          type="number"
+          step="0.01"
+          value={usd}
+          onChange={(e) => setUsd(Number(e.target.value))}
+          className="w-40 rounded-md border border-border bg-surface-1 px-3 py-2 font-mono text-sm text-foreground outline-none focus:border-primary"
+        />
+        <button
+          onClick={save}
+          disabled={saving || !Number.isFinite(usd) || usd <= 0}
+          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+        >
+          {saving ? "Saving…" : "Save default"}
+        </button>
+      </div>
+      <p className="mt-3 text-xs text-muted-foreground">
+        Applies to any user whose cohort hasn't set its own cap. Resets at 00:00 UTC.
+      </p>
     </div>
   );
 }
@@ -558,6 +626,20 @@ function SettingsPage() {
         <GitHubCard isAdmin={isAdmin} />
       </div>
 
+      <div className="mt-14 border-t border-border pt-10">
+        <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+          Spend
+        </span>
+        <h2 className="mt-3 font-display text-2xl text-foreground">The meter.</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Every board call is logged. Resets at 00:00 UTC.
+        </p>
+        <div className="mt-6">
+          <SpendPanel />
+        </div>
+      </div>
+
+
       {isAdmin && (
         <>
           <div className="mt-14 border-t border-border pt-10">
@@ -570,6 +652,19 @@ function SettingsPage() {
             </p>
             <div className="mt-6">
               <ModelRegistryEditor />
+            </div>
+          </div>
+
+          <div className="mt-14 border-t border-border pt-10">
+            <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+              Admin · Default daily cap
+            </span>
+            <h2 className="mt-3 font-display text-2xl text-foreground">The workspace ceiling.</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Fallback cap when a cohort hasn't set its own.
+            </p>
+            <div className="mt-6">
+              <DefaultDailyCapEditor />
             </div>
           </div>
 
