@@ -165,9 +165,18 @@ Revise ONLY the contested parts. Preserve agreed parts verbatim.`;
 
 async function queueRound1(admin: any, run: any) {
   const intake = await loadIntake(admin, run.project_id);
-  const user = `${intakeBlock(intake)}\n\nWrite your Round 1 draft now.`;
-  const system =
-    "Round 1 of the board's deliberation. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best version of the app plan: concept, target user, core features (MVP-first, ruthlessly cut), the data the app stores, and what you'd cut. Be specific, concise, and opinionated.";
+  let system: string;
+  let userContent: string;
+  if (run.kind === "design") {
+    const plan = await loadLockedPlan(admin, run.project_id);
+    system =
+      "Round 1 of the Design Council. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best design direction for this app. You MUST include: concept/mood; palette as specific HSL values; type pairing with specific font names; spacing and shape language; ONE distinctive signature element (a structural design move — non-negotiable, this is the point); and motion rules. Be specific, opinionated, and premium. Avoid generic AI-slop aesthetics.";
+    userContent = `${intakeBlock(intake)}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nWrite your Round 1 design direction now.`;
+  } else {
+    system =
+      "Round 1 of the board's deliberation. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best version of the app plan: concept, target user, core features (MVP-first, ruthlessly cut), the data the app stores, and what you'd cut. Be specific, concise, and opinionated.";
+    userContent = `${intakeBlock(intake)}\n\nWrite your Round 1 draft now.`;
+  }
   const rows = SEATS.map((seat) => ({
     run_id: run.id,
     user_id: run.user_id,
@@ -178,7 +187,7 @@ async function queueRound1(admin: any, run: any) {
     request: {
       messages: [
         { role: "system", content: system },
-        { role: "user", content: user },
+        { role: "user", content: userContent },
       ],
     },
   }));
