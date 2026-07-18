@@ -57,23 +57,28 @@ async function makeState(userId: string): Promise<string> {
   return b64url(new TextEncoder().encode(`${payload}|${sig}`));
 }
 
-async function verifyState(state: string, userId: string): Promise<boolean> {
+async function verifyState(
+  state: string,
+  userId: string,
+): Promise<{ ok: boolean; reason?: string; ageSec?: number }> {
   try {
     const decoded = new TextDecoder().decode(b64urlDecode(state));
     const parts = decoded.split("|");
-    if (parts.length !== 3) return false;
+    if (parts.length !== 3) return { ok: false, reason: "parts" };
     const [uid, ts, sig] = parts;
-    if (uid !== userId) return false;
-    const age = Date.now() - parseInt(ts, 10);
-    if (!isFinite(age) || age < 0 || age > 10 * 60 * 1000) return false;
+    if (uid !== userId) return { ok: false, reason: "uid_mismatch" };
+    const ageMs = Date.now() - parseInt(ts, 10);
+    const ageSec = Math.round(ageMs / 1000);
+    if (!isFinite(ageMs) || ageMs < 0 || ageMs > 10 * 60 * 1000) {
+      return { ok: false, reason: "age", ageSec };
+    }
     const expected = await hmac(`${uid}|${ts}`);
-    // constant-time-ish
-    if (expected.length !== sig.length) return false;
+    if (expected.length !== sig.length) return { ok: false, reason: "sig_len", ageSec };
     let diff = 0;
     for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ sig.charCodeAt(i);
-    return diff === 0;
-  } catch {
-    return false;
+    return diff === 0 ? { ok: true, ageSec } : { ok: false, reason: "sig_mismatch", ageSec };
+  } catch (e) {
+    return { ok: false, reason: `parse_error:${(e as Error).message}` };
   }
 }
 
