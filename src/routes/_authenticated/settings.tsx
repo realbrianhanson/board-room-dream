@@ -466,6 +466,62 @@ function ModelRegistryEditor() {
   );
 }
 
+function DefaultDailyCapEditor() {
+  const [usd, setUsd] = useState<number>(25);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase
+        .from("app_settings")
+        .select("value")
+        .eq("key", "default_daily_cap_usd")
+        .maybeSingle();
+      const n = Number((data?.value as { usd?: number } | null)?.usd);
+      if (Number.isFinite(n) && n > 0) setUsd(n);
+      setLoading(false);
+    })();
+  }, []);
+
+  async function save() {
+    setSaving(true);
+    const { error } = await supabase
+      .from("app_settings")
+      .update({ value: { usd }, updated_at: new Date().toISOString() })
+      .eq("key", "default_daily_cap_usd");
+    if (error) toast.error(error.message);
+    else toast.success(`Default daily cap set to $${usd.toFixed(2)}`);
+    setSaving(false);
+  }
+
+  if (loading) return <div className="h-20 animate-pulse rounded-md bg-surface-2" />;
+  return (
+    <div className="rounded-lg border border-border bg-surface-2 p-5">
+      <label className="mb-2 block text-xs text-muted-foreground">Default daily cap ($ USD)</label>
+      <div className="flex flex-wrap items-center gap-3">
+        <input
+          type="number"
+          step="0.01"
+          value={usd}
+          onChange={(e) => setUsd(Number(e.target.value))}
+          className="w-40 rounded-md border border-border bg-surface-1 px-3 py-2 font-mono text-sm text-foreground outline-none focus:border-primary"
+        />
+        <button
+          onClick={save}
+          disabled={saving || !Number.isFinite(usd) || usd <= 0}
+          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+        >
+          {saving ? "Saving…" : "Save default"}
+        </button>
+      </div>
+      <p className="mt-3 text-xs text-muted-foreground">
+        Applies to any user whose cohort hasn't set its own cap. Resets at 00:00 UTC.
+      </p>
+    </div>
+  );
+}
+
 function ConstitutionEditor() {
   const [text, setText] = useState("");
   const [version, setVersion] = useState(1);
