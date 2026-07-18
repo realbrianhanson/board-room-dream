@@ -265,14 +265,16 @@ function AuditCenterPage() {
             )}
             {isImport && showPaste && (
               <div className="rounded-lg border border-border bg-surface-1 p-4">
-                <textarea
-                  value={pasted}
-                  onChange={(e) => setPasted(e.target.value)}
-                  placeholder="Paste the key files here — up to ~200KB."
-                  rows={10}
-                  className="w-full resize-y rounded-md border border-border bg-surface-2 px-3 py-2 font-mono text-[12px] text-foreground outline-none focus:border-primary"
-                />
+                <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={200_000} />
                 <button
+                  onClick={() => startFinalAudit("paste")}
+                  disabled={starting || !pasted.trim()}
+                  className="mt-3 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+                >
+                  {starting ? "Opening the audit…" : "Run the A–Z audit on this code"}
+                </button>
+              </div>
+            )}
                   onClick={() => startFinalAudit("paste")}
                   disabled={starting || !pasted.trim()}
                   className="mt-3 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
