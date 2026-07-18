@@ -292,12 +292,13 @@ Deno.serve(async (req) => {
   async function ownProject(project_id: string) {
     const { data } = await admin
       .from("projects")
-      .select("id, user_id, github_repo")
+      .select("id, user_id, github_repo, is_import")
       .eq("id", project_id)
       .maybeSingle();
     if (!data || data.user_id !== userId) return null;
-    return { id: data.id, github_repo: data.github_repo };
+    return { id: data.id, github_repo: data.github_repo, is_import: !!data.is_import };
   }
+
 
   try {
     if (action === "start_batch_audit" || action === "start_reaudit") {
