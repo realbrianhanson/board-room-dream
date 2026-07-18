@@ -417,17 +417,16 @@ async function createInitialSteps(admin: any, run: any) {
     return;
   }
   if (run.kind === "change_request") {
-    const { data: cr } = await admin
+    const crId = run.consensus?.change_request_id;
+    if (!crId) {
+      await admin.from("boardroom_runs").update({ status: "failed", error: "Missing change_request_id" }).eq("id", run.id);
+      return;
+    }
+    const { data: activeCr } = await admin
       .from("change_requests")
       .select("*")
-      .eq("id", run.change_request_id ?? "")
+      .eq("id", crId)
       .maybeSingle();
-    // fallback: read from run metadata stored on the run itself via consensus jsonb
-    const crId = cr?.id ?? run.consensus?.change_request_id;
-    const { data: crRow } = crId
-      ? await admin.from("change_requests").select("*").eq("id", crId).maybeSingle()
-      : { data: null };
-    const activeCr = cr ?? crRow;
     if (!activeCr) {
       await admin.from("boardroom_runs").update({ status: "failed", error: "Change request not found" }).eq("id", run.id);
       return;
