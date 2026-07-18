@@ -678,15 +678,16 @@ async function executeStep(admin: any, run: any, step: any) {
 
 // ============================== Consensus / locking ==============================
 
-function checkConsensus(voteSteps: any[]): { pass: boolean; scores: any } {
+function checkConsensus(voteSteps: any[], kind: string = "plan"): { pass: boolean; scores: any } {
   const scoreSets: Record<string, any> = {};
   let pass = true;
   if (voteSteps.length < 4) return { pass: false, scores: {} };
+  const rubric = rubricForKind(kind);
   for (const v of voteSteps) {
     const j = v.response_json ?? {};
     scoreSets[v.seat] = { scores: j.scores ?? null, blocking_objections: j.blocking_objections ?? [] };
     if (!j.scores) { pass = false; continue; }
-    for (const k of RUBRIC) {
+    for (const k of rubric) {
       const n = Number(j.scores[k]);
       if (!Number.isFinite(n) || n < 8) pass = false;
     }
