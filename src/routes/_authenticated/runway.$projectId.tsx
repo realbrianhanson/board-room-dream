@@ -1189,13 +1189,7 @@ function AuditModal({
         </div>
 
         {source === "paste" && (
-          <textarea
-            value={pasted}
-            onChange={(e) => setPasted(e.target.value)}
-            placeholder="Paste the relevant source files here…"
-            rows={10}
-            className="mt-4 w-full rounded-lg border border-border bg-background p-3 font-mono text-[12px] leading-relaxed text-foreground/90 outline-none focus:border-primary"
-          />
+          <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={200_000} />
         )}
 
         <div className="mt-5 flex justify-end gap-2">
