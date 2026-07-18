@@ -834,6 +834,14 @@ async function executeStep(admin: any, run: any, step: any) {
       if (e instanceof BudgetExceeded) {
         await admin.from("run_steps").update({ status: "queued", error: "budget" }).eq("id", step.id);
         await admin.from("boardroom_runs").update({ status: "paused_budget" }).eq("id", run.id);
+        if (run.project_id && run.user_id) {
+          await insertAlert(admin, {
+            user_id: run.user_id,
+            project_id: run.project_id,
+            kind: "spend_cap",
+            detail: { run_kind: run.kind, spent_usd: Number(run.spent_usd ?? 0), budget_usd: Number(run.budget_usd ?? 0) },
+          });
+        }
         return;
       }
       if (e instanceof NoUserKey || e instanceof SeatUnavailable) {
