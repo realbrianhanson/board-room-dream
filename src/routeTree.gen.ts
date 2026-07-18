@@ -21,7 +21,7 @@ import { Route as AuthenticatedDashboardRouteImport } from './routes/_authentica
 import { Route as AuthenticatedCohortRouteImport } from './routes/_authenticated/cohort'
 import { Route as AuthenticatedBoardroomRouteImport } from './routes/_authenticated/boardroom'
 import { Route as AuthenticatedAuditsRouteImport } from './routes/_authenticated/audits'
-import { Route as AuthGithubCallbackRouteImport } from './routes/auth.github.callback'
+import { Route as AuthGithubCallbackRouteImport } from './routes/auth_.github.callback'
 import { Route as AuthenticatedRunwayProjectIdRouteImport } from './routes/_authenticated/runway.$projectId'
 import { Route as AuthenticatedPlanProjectIdRouteImport } from './routes/_authenticated/plan.$projectId'
 import { Route as AuthenticatedIntakeIntakeIdRouteImport } from './routes/_authenticated/intake.$intakeId'
@@ -91,9 +91,9 @@ const AuthenticatedAuditsRoute = AuthenticatedAuditsRouteImport.update({
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthGithubCallbackRoute = AuthGithubCallbackRouteImport.update({
-  id: '/github/callback',
-  path: '/github/callback',
-  getParentRoute: () => AuthRoute,
+  id: '/auth_/github/callback',
+  path: '/auth/github/callback',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const AuthenticatedRunwayProjectIdRoute =
   AuthenticatedRunwayProjectIdRouteImport.update({
@@ -145,7 +145,7 @@ const AuthenticatedAuditsProjectIdRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/auth': typeof AuthRouteWithChildren
+  '/auth': typeof AuthRoute
   '/reset-password': typeof ResetPasswordRoute
   '/audits': typeof AuthenticatedAuditsRouteWithChildren
   '/boardroom': typeof AuthenticatedBoardroomRouteWithChildren
@@ -167,7 +167,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/auth': typeof AuthRouteWithChildren
+  '/auth': typeof AuthRoute
   '/reset-password': typeof ResetPasswordRoute
   '/audits': typeof AuthenticatedAuditsRouteWithChildren
   '/boardroom': typeof AuthenticatedBoardroomRouteWithChildren
@@ -191,7 +191,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
-  '/auth': typeof AuthRouteWithChildren
+  '/auth': typeof AuthRoute
   '/reset-password': typeof ResetPasswordRoute
   '/_authenticated/audits': typeof AuthenticatedAuditsRouteWithChildren
   '/_authenticated/boardroom': typeof AuthenticatedBoardroomRouteWithChildren
@@ -209,7 +209,7 @@ export interface FileRoutesById {
   '/_authenticated/intake/$intakeId': typeof AuthenticatedIntakeIntakeIdRoute
   '/_authenticated/plan/$projectId': typeof AuthenticatedPlanProjectIdRoute
   '/_authenticated/runway/$projectId': typeof AuthenticatedRunwayProjectIdRoute
-  '/auth/github/callback': typeof AuthGithubCallbackRoute
+  '/auth_/github/callback': typeof AuthGithubCallbackRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -278,14 +278,15 @@ export interface FileRouteTypes {
     | '/_authenticated/intake/$intakeId'
     | '/_authenticated/plan/$projectId'
     | '/_authenticated/runway/$projectId'
-    | '/auth/github/callback'
+    | '/auth_/github/callback'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
-  AuthRoute: typeof AuthRouteWithChildren
+  AuthRoute: typeof AuthRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
+  AuthGithubCallbackRoute: typeof AuthGithubCallbackRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -374,12 +375,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAuditsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/auth/github/callback': {
-      id: '/auth/github/callback'
-      path: '/github/callback'
+    '/auth_/github/callback': {
+      id: '/auth_/github/callback'
+      path: '/auth/github/callback'
       fullPath: '/auth/github/callback'
       preLoaderRoute: typeof AuthGithubCallbackRouteImport
-      parentRoute: typeof AuthRoute
+      parentRoute: typeof rootRouteImport
     }
     '/_authenticated/runway/$projectId': {
       id: '/_authenticated/runway/$projectId'
@@ -529,21 +530,12 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
 const AuthenticatedRouteRouteWithChildren =
   AuthenticatedRouteRoute._addFileChildren(AuthenticatedRouteRouteChildren)
 
-interface AuthRouteChildren {
-  AuthGithubCallbackRoute: typeof AuthGithubCallbackRoute
-}
-
-const AuthRouteChildren: AuthRouteChildren = {
-  AuthGithubCallbackRoute: AuthGithubCallbackRoute,
-}
-
-const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)
-
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
-  AuthRoute: AuthRouteWithChildren,
+  AuthRoute: AuthRoute,
   ResetPasswordRoute: ResetPasswordRoute,
+  AuthGithubCallbackRoute: AuthGithubCallbackRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
