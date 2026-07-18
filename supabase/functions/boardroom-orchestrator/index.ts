@@ -1114,7 +1114,30 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
       .eq("id", auditId);
     if (audit.batch_id) {
       await admin.from("batches").update({ status: "passed" }).eq("id", audit.batch_id);
+      // If this batch is a fix, also pass the parent.
+      const { data: fixBatch } = await admin
+        .from("batches")
+        .select("parent_batch_id")
+        .eq("id", audit.batch_id)
+        .maybeSingle();
+      if (fixBatch?.parent_batch_id) {
+        await admin.from("batches").update({ status: "passed" }).eq("id", fixBatch.parent_batch_id);
+        // Resolve prior open findings on the parent's audits too.
+        const { data: parentAudits } = await admin
+          .from("audits")
+          .select("id")
+          .eq("batch_id", fixBatch.parent_batch_id);
+        const parentIds = (parentAudits ?? []).map((r: any) => r.id);
+        if (parentIds.length) {
+          await admin
+            .from("audit_findings")
+            .update({ status: "resolved" })
+            .in("audit_id", parentIds)
+            .in("status", ["open", "fix_drafted"]);
+        }
+      }
     }
+
     if (isFinal) {
       // Append a final human QA batch to the runway.
       const qa = String(parsed?.final_qa_prompt_md ?? "").trim();
