@@ -653,9 +653,25 @@ function BatchCard({
               Finish Batch {activeBatchNo} first
             </p>
           )}
+          {latestAudit && auditFindings.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <FindingChips findings={auditFindings} />
+              {latestAudit.loop_no >= 2 && batch.status === "fix_needed" && (
+                <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-[hsl(8_60%_75%)]">
+                  · The board wants human eyes
+                </span>
+              )}
+            </div>
+          )}
+          {latestAudit && latestAudit.status === "clean" && isPassed && (
+            <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.24em] text-[hsl(160_45%_65%)]">
+              Passed the board · {latestAudit.files_analyzed ?? 0} files read
+            </p>
+          )}
         </div>
         {isPassed && <Check className="h-5 w-5 text-[hsl(160_45%_60%)]" />}
       </div>
+
 
       {active && (
         <div className="border-t border-border/60 p-5">
