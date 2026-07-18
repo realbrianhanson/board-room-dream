@@ -2,6 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { CodeSourcePicker } from "@/components/code-source-picker";
 import {
   AlertTriangle,
   ArrowRight,
