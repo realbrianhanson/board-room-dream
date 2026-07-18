@@ -21,7 +21,7 @@ import {
   X,
 } from "lucide-react";
 
-export const Route = createFileRoute("/_authenticated/runway/$projectId")({
+export const Route = createFileRoute("/_authenticated/runway_/$projectId")({
   component: RunwayPage,
 });
 

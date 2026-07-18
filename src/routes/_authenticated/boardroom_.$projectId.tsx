@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { BoardroomSession, PLAN_RUBRIC } from "@/components/boardroom-session";
 import { ArrowRight } from "lucide-react";
 
-export const Route = createFileRoute("/_authenticated/boardroom/$projectId")({
+export const Route = createFileRoute("/_authenticated/boardroom_/$projectId")({
   component: BoardroomProjectPage,
 });
 

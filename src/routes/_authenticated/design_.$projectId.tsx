@@ -7,7 +7,7 @@ import { BoardroomSession, DESIGN_RUBRIC } from "@/components/boardroom-session"
 import { toast } from "sonner";
 import { ArrowRight, Download, Palette, Upload, X } from "lucide-react";
 
-export const Route = createFileRoute("/_authenticated/design/$projectId")({
+export const Route = createFileRoute("/_authenticated/design_/$projectId")({
   component: DesignStudioPage,
 });
 

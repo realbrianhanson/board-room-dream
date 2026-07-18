@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { BoardroomSession } from "@/components/boardroom-session";
 import { ArrowLeft, Github, Lock, ScrollText, ShieldCheck } from "lucide-react";
 
-export const Route = createFileRoute("/_authenticated/cohort/$projectId")({
+export const Route = createFileRoute("/_authenticated/cohort_/$projectId")({
   beforeLoad: async () => {
     const { data } = await supabase.from("profiles").select("role").maybeSingle();
     const role = (data as { role?: string } | null)?.role;

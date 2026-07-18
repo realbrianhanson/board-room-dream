@@ -6,7 +6,7 @@ import { ArrowRight, Check, ScrollText, ShieldCheck } from "lucide-react";
 import { CodeSourcePicker } from "@/components/code-source-picker";
 import { startGithubConnect } from "@/lib/github-connect";
 
-export const Route = createFileRoute("/_authenticated/audits/$projectId")({
+export const Route = createFileRoute("/_authenticated/audits_/$projectId")({
   component: AuditCenterPage,
 });
 
