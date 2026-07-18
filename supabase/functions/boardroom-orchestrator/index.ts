@@ -1030,6 +1030,7 @@ Deno.serve(async (req) => {
   if (action === "start_run") {
     const projectId: string = body?.project_id;
     const kind: string = body?.kind;
+    const changeRequestId: string | undefined = body?.change_request_id;
     if (!projectId || !kind) return j(400, { error: "Missing project_id or kind" });
     if (!["test", "plan", "features", "design", "change_request", "audit"].includes(kind)) {
       return j(400, { error: "Invalid kind" });
@@ -1041,13 +1042,28 @@ Deno.serve(async (req) => {
       .maybeSingle();
     if (!project || project.user_id !== userId) return j(404, { error: "Project not found" });
 
+    let consensusMeta: any = null;
+    if (kind === "change_request") {
+      if (!changeRequestId) return j(400, { error: "Missing change_request_id" });
+      const { data: cr } = await admin
+        .from("change_requests")
+        .select("id, user_id, project_id, status")
+        .eq("id", changeRequestId)
+        .maybeSingle();
+      if (!cr || cr.user_id !== userId || cr.project_id !== projectId) {
+        return j(404, { error: "Change request not found" });
+      }
+      if (cr.status !== "pending") return j(400, { error: "Change request is not pending" });
+      consensusMeta = { change_request_id: changeRequestId };
+    }
+
     const { data: constRow } = await admin
       .from("app_settings")
       .select("version")
       .eq("key", "constitution")
       .maybeSingle();
 
-    const budget = kind === "test" ? 0.25 : 10.0;
+    const budget = kind === "test" ? 0.25 : kind === "change_request" ? 3.0 : 10.0;
     const { data: run, error: rerr } = await admin
       .from("boardroom_runs")
       .insert({
@@ -1059,6 +1075,7 @@ Deno.serve(async (req) => {
         loop_no: 0,
         constitution_version: constRow?.version ?? 1,
         budget_usd: budget,
+        consensus: consensusMeta,
       })
       .select("*")
       .single();
