@@ -175,7 +175,9 @@ async function beginAudit(params: {
   const { admin, userId, project, batchId, kind, loopNo, source, pastedCode, budget } = params;
   const isFinal = kind === "final_az";
 
-  const plan = await loadLockedPlan(admin, project.id);
+  // For imports without a locked plan, substitute the intake description + goals.
+  const plan = (await loadLockedPlan(admin, project.id)) ?? (await loadImportContract(admin, project.id));
+
   const { data: design } = await admin
     .from("plan_versions")
     .select("content_md")
