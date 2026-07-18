@@ -601,6 +601,7 @@ function TranscriptCard({
           <p className="truncate font-display text-sm text-foreground">{meta.label}</p>
           <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">{roundLabel}</p>
         </div>
+        <FallbackChip meta={step.response_json?._meta?.fallback} />
         <StepStatusChip status={step.status} />
       </div>
       <div className="mt-4">
