@@ -46,19 +46,27 @@ const SEV_STYLE: Record<Finding["severity"], string> = {
 function AuditCenterPage() {
   const { projectId } = Route.useParams();
   const [projectName, setProjectName] = useState<string>("");
+  const [isImport, setIsImport] = useState<boolean>(false);
+  const [ghRepo, setGhRepo] = useState<string | null>(null);
   const [audits, setAudits] = useState<Audit[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
+  const [starting, setStarting] = useState(false);
+  const [showPaste, setShowPaste] = useState(false);
+  const [pasted, setPasted] = useState("");
 
   const load = useCallback(async () => {
     const [{ data: p }, { data: au }, { data: fi }, { data: bs }] = await Promise.all([
-      supabase.from("projects").select("name").eq("id", projectId).maybeSingle(),
+      supabase.from("projects").select("name, is_import, github_repo").eq("id", projectId).maybeSingle(),
       supabase.from("audits").select("*").eq("project_id", projectId).order("created_at", { ascending: false }),
       supabase.from("audit_findings").select("*").order("severity", { ascending: true }),
       supabase.from("batches").select("id, batch_no, title, status").eq("project_id", projectId).order("batch_no", { ascending: true }),
     ]);
-    setProjectName((p as { name?: string } | null)?.name ?? "");
+    const proj = p as { name?: string; is_import?: boolean; github_repo?: string | null } | null;
+    setProjectName(proj?.name ?? "");
+    setIsImport(!!proj?.is_import);
+    setGhRepo(proj?.github_repo ?? null);
     setAudits((au ?? []) as Audit[]);
     setFindings((fi ?? []) as Finding[]);
     setBatches((bs ?? []) as Batch[]);
@@ -74,6 +82,27 @@ function AuditCenterPage() {
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, [projectId, load]);
+
+  async function startFinalAudit(source: "github" | "paste") {
+    if (starting) return;
+    setStarting(true);
+    try {
+      const payload: Record<string, unknown> = { action: "start_final_audit", project_id: projectId, source };
+      if (source === "paste") payload.pasted_code = pasted;
+      const { data, error } = await supabase.functions.invoke("audit-runner", { body: payload });
+      if (error) throw new Error(error.message);
+      if ((data as any)?.error) throw new Error((data as any).error);
+      toast.success("The board is reading your code.");
+      setShowPaste(false);
+      setPasted("");
+      load();
+    } catch (err: any) {
+      toast.error(err?.message ?? "Failed to start audit");
+    } finally {
+      setStarting(false);
+    }
+  }
+
 
   const batchAudits = useMemo(() => audits.filter((a) => a.kind === "batch"), [audits]);
   const finalAudit = useMemo(() => audits.find((a) => a.kind === "final_az") ?? null, [audits]);
