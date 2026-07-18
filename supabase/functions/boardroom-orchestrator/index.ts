@@ -968,6 +968,41 @@ async function finalizeChangeRequest(admin: any, run: any, steps: any[]) {
 
 // ============================== Round advancement ==============================
 
+async function finalizeBatches(admin: any, run: any, batchesJson: any[]) {
+  const { data: plan } = await admin
+    .from("plan_versions")
+    .select("id")
+    .eq("project_id", run.project_id)
+    .eq("kind", "plan")
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const rows = batchesJson.map((b: any) => ({
+    project_id: run.project_id,
+    user_id: run.user_id,
+    plan_version_id: plan?.id ?? null,
+    batch_no: Number(b.batch_no),
+    title: String(b.title),
+    channel: String(b.channel),
+    prompt_md: String(b.prompt_md),
+    status: "pending",
+    is_fix: false,
+  }));
+  const { error: insErr } = await admin.from("batches").insert(rows);
+  if (insErr) {
+    await admin
+      .from("boardroom_runs")
+      .update({ status: "failed", error: `Failed to insert batches: ${insErr.message}` })
+      .eq("id", run.id);
+    return;
+  }
+  await admin.from("projects").update({ status: "building", current_batch_no: 1 }).eq("id", run.project_id);
+  await admin
+    .from("boardroom_runs")
+    .update({ status: "completed", consensus: { batches_inserted: rows.length }, updated_at: new Date().toISOString() })
+    .eq("id", run.id);
+}
+
 async function loadAllSteps(admin: any, runId: string) {
   const { data } = await admin
     .from("run_steps")
