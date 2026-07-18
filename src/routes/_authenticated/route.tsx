@@ -65,10 +65,13 @@ const NAV = [
 ] as const;
 
 function AuthenticatedShell() {
-  const { profile } = Route.useLoaderData();
+  const { profile, alertCount: initialAlertCount } = Route.useLoaderData();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [alertCount, setAlertCount] = useState<number>(initialAlertCount ?? 0);
+
+  const isInstructor = profile?.role === "instructor" || profile?.role === "admin";
 
   // Onboarding redirect
   useEffect(() => {
@@ -82,10 +85,27 @@ function AuthenticatedShell() {
 
   useEffect(() => setMobileOpen(false), [pathname]);
 
-  const isInstructor = profile?.role === "instructor" || profile?.role === "admin";
+  // Live alert count for instructors.
+  useEffect(() => {
+    if (!isInstructor) return;
+    const refresh = async () => {
+      const { count } = await supabase
+        .from("alerts")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "open");
+      setAlertCount(count ?? 0);
+    };
+    const channel = supabase
+      .channel("nav-alerts")
+      .on("postgres_changes", { event: "*", schema: "public", table: "alerts" }, () => { void refresh(); })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [isInstructor]);
+
   const items = isInstructor
     ? [...NAV.slice(0, 5), { to: "/cohort", label: "Cohort", icon: GraduationCap }, NAV[5]]
     : NAV;
+
 
   async function signOut() {
     await supabase.auth.signOut();
