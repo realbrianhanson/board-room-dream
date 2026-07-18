@@ -1,8 +1,10 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
+import { Check } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { consumeGithubReturnTo } from "@/lib/github-connect";
 
 export const Route = createFileRoute("/auth_/github/callback")({
   component: GitHubCallbackPage,
@@ -56,9 +58,13 @@ function GitHubCallbackPage() {
         setState({ kind: "error", error: fnError });
         return;
       }
-      toast.success("GitHub connected.");
+      const returnTo = consumeGithubReturnTo();
+      if (returnTo) {
+        toast.success("GitHub connected.");
+        window.location.replace(returnTo);
+        return;
+      }
       setState({ kind: "success" });
-      navigate({ to: "/settings" });
     })();
   }, [navigate]);
 
