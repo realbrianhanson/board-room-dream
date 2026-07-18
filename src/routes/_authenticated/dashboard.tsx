@@ -113,7 +113,7 @@ function DashboardPage() {
     let batchSet = new Set<string>();
     const fixInfo = new Map<string, number>();
     const allPassedSet = new Set<string>();
-    const finalAuditSet = new Set<string>();
+    let finalAuditSet = new Set<string>();
     if (ids.length) {
       const [{ data: pvs }, { data: bs }, { data: au }] = await Promise.all([
         supabase.from("plan_versions").select("project_id").eq("kind", "design").in("project_id", ids),
