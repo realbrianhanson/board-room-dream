@@ -205,13 +205,14 @@ async function beginAudit(params: {
     if (!token) return { error: "GitHub not connected" as const };
     baseSha = isFinal ? null : await priorHeadSha(admin, project.id);
     try {
-      const res = await assembleFromGithub(token, project.github_repo, baseSha);
+      const res = await assembleFromGithub(token, project.github_repo, { baseSha });
       payload = formatFiles(res.files);
       filesAnalyzed = res.files.length;
       headSha = res.headSha;
     } catch (e) {
       return { error: (e as Error).message };
     }
+
   } else {
     if (!pastedCode || !pastedCode.trim()) return { error: "Empty pasted code" as const };
     payload = fitPasted(pastedCode);
