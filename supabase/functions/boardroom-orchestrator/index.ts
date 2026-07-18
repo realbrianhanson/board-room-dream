@@ -434,6 +434,75 @@ If rejected, amended_* may be empty strings / empty array.`;
   });
 }
 
+async function queueBatchesStep(admin: any, run: any) {
+  const plan = await loadLockedPlan(admin, run.project_id);
+  const { data: design } = await admin
+    .from("plan_versions")
+    .select("content_md")
+    .eq("project_id", run.project_id)
+    .eq("kind", "design")
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const designSection = design?.content_md
+    ? `LOCKED DESIGN BRIEF\n\n${design.content_md}\n\nBatch 1 MUST install these design tokens (CSS variables, Tailwind config, font imports) BEFORE any feature work.`
+    : `NO LOCKED DESIGN BRIEF — do not fabricate one. The student will convene the Design Council later.`;
+
+  const system = `You are the Chair, sequencing this student's build for their Lovable project. Produce 6-14 dependency-safe, single-concern build batches that turn the locked plan + PRD into a shippable app.
+
+Rules for EVERY batch:
+- Numbered items with EXACT scope — no wishlists.
+- Ends with the sentence: "Keep everything else identical."
+- Code batches (channel 'lovable' or 'supabase') also end with: "Typecheck when done."
+- Channel 'supabase' = pure database/schema/RLS/edge-function work.
+- Channel 'human' = things only the student can do in external consoles (Stripe, DNS, OAuth apps, App Store, domain purchase) — write plain-language numbered steps, no code, no typecheck line.
+- Channel 'lovable' = frontend + integration work the student will paste into Lovable.
+- Sequence so nothing depends on a later batch. Auth/data foundations early. Polish/SEO/analytics late.
+- Every prompt_md follows this skeleton:
+  """
+  Batch N — <one-line batch name>. Numbered items only, no scope creep.
+
+  1. <item>
+  2. <item>
+  ...
+
+  Keep everything else identical.
+  Typecheck when done.  ← omit for channel 'human'
+  """
+
+Return ONLY valid JSON:
+{
+  "batches": [
+    { "batch_no": 1, "title": "Foundation & shell", "channel": "lovable"|"supabase"|"human", "prompt_md": "Batch 1 — ...\\n\\n1. ...\\n\\nKeep everything else identical.\\nTypecheck when done." }
+  ]
+}
+
+Constraints: 6-14 batches, unique ascending integer batch_no starting at 1, every prompt_md non-empty and following the skeleton exactly.`;
+
+  const featuresBlock = Array.isArray(plan?.features) && plan!.features.length
+    ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
+    : "(none listed)";
+
+  const user = `LOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nProduce the JSON now.`;
+
+  await admin.from("run_steps").insert({
+    run_id: run.id,
+    user_id: run.user_id,
+    step_key: "batches_chair",
+    round: 1,
+    seat: "chair",
+    status: "queued",
+    request: {
+      json_output: true,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    },
+  });
+}
+
 async function createInitialSteps(admin: any, run: any) {
   if (run.kind === "test") {
     await admin.from("run_steps").insert({
@@ -453,6 +522,10 @@ async function createInitialSteps(admin: any, run: any) {
   }
   if (run.kind === "plan" || run.kind === "design") {
     await queueRound1(admin, run);
+    return;
+  }
+  if (run.kind === "batches") {
+    await queueBatchesStep(admin, run);
     return;
   }
   if (run.kind === "change_request") {
