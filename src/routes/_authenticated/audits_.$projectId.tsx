@@ -265,7 +265,7 @@ function AuditCenterPage() {
             )}
             {isImport && showPaste && (
               <div className="rounded-lg border border-border bg-surface-1 p-4">
-                <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={1_000_000} />
+                <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={5_000_000} />
                 <button
                   onClick={() => startFinalAudit("paste")}
                   disabled={starting || !pasted.trim()}
