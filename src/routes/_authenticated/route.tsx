@@ -189,7 +189,7 @@ function AuthenticatedShell() {
         />
       )}
 
-      <main className="flex-1 pt-14 md:pt-0">
+      <main className="min-w-0 flex-1 pt-14 md:pt-0">
         <Outlet />
       </main>
     </div>
