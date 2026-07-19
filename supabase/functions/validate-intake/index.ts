@@ -36,7 +36,7 @@ type Scores = Record<(typeof DIMENSIONS)[number], { score: number; evidence: str
 type Verdict = { scores: Scores; total: number; verdict: "pass" | "kill"; pivot?: string };
 
 function buildUserPrompt(answers: any) {
-  return `You will score a founder's app intake on five dimensions from 1 to 10. Return ONLY strict JSON:\n{\n  "scores": {\n    "painful_problem": {"score": 1-10, "evidence": "one sentence"},\n    "reachable_buyer": {"score": 1-10, "evidence": "one sentence"},\n    "monetization_path": {"score": 1-10, "evidence": "one sentence"},\n    "buildable_scope": {"score": 1-10, "evidence": "one sentence"},\n    "differentiation": {"score": 1-10, "evidence": "one sentence"}\n  },\n  "pivot": "one sentence — only if verdict is kill, else empty string"\n}\n\nINTAKE ANSWERS\n1. Idea: ${answers?.idea ?? ""}\n2. Buyer: ${answers?.buyer ?? ""}\n3. Pain: ${answers?.pain ?? ""}\n4. Money: ${answers?.money ?? ""}\n5. Inspiration: ${answers?.inspiration ?? ""}\n\nScore honestly. Kill weak ideas fast.`;
+  return `You will score a founder's app intake on five dimensions from 1 to 10. Return ONLY strict JSON:\n{\n  "scores": {\n    "painful_problem": {"score": 1-10, "evidence": "one sentence"},\n    "reachable_buyer": {"score": 1-10, "evidence": "one sentence"},\n    "monetization_path": {"score": 1-10, "evidence": "one sentence"},\n    "buildable_scope": {"score": 1-10, "evidence": "one sentence"},\n    "differentiation": {"score": 1-10, "evidence": "one sentence"}\n  },\n  "pivot": "one sentence — only if verdict is kill, else empty string"\n}\n\nINTAKE ANSWERS\n1. Idea: ${answers?.idea ?? ""}\n2. Buyer: ${answers?.buyer ?? ""}\n3. Pain: ${answers?.pain ?? ""}\n4. Money: ${answers?.money ?? ""}\n5. Inspiration: ${answers?.inspiration ?? ""}\n\nScore honestly. Kill weak ideas fast. If web search results are available, ground your evidence in real competitors and real demand signals — name them in the evidence sentences.`;
 }
 
 function parseVerdict(content: string): Verdict | null {
@@ -103,7 +103,9 @@ Deno.serve(async (req) => {
         userId,
         "chair",
         [{ role: "user", content: userPrompt }],
-        { json: true, temperature: 0.3, projectId: intake.project_id },
+        // First attempt grounds the verdict in live web search; the retry
+        // drops the plugin so a search hiccup never blocks validation.
+        { json: true, temperature: 0.3, projectId: intake.project_id, online: attempt === 0 },
       );
       verdict = parseVerdict(res.content);
       if (!verdict) lastErr = { status: 200, body: "unparseable" };
@@ -112,7 +114,7 @@ Deno.serve(async (req) => {
       if (e instanceof SeatUnavailable) return j(500, { error: (e as Error).message });
       const status = (e as any).status ?? 500;
       lastErr = { status, body: (e as Error).message };
-      if (status === 429 || status >= 500) {
+      if (attempt === 0 || status === 429 || status >= 500) {
         await new Promise((r) => setTimeout(r, 700));
         continue;
       }

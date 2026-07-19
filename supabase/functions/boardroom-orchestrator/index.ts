@@ -9,6 +9,7 @@ import {
   SeatUnavailable,
 } from "../_shared/openrouter-proxy.ts";
 import { assembleFromGithub, formatFiles, ghToken } from "../_shared/github-payload.ts";
+import { LOVABLE_FIELD_MANUAL } from "../_shared/lovable-field-manual.ts";
 
 
 const CORS = {
@@ -285,6 +286,9 @@ async function queueRound1(admin: any, run: any) {
     seat,
     status: "queued",
     request: {
+      // Round 1 is the divergence round — hotter sampling so four seats
+      // actually produce four different drafts worth debating.
+      temperature: 0.85,
       messages: [
         { role: "system", content: system },
         { role: "user", content: userContent },
@@ -344,7 +348,9 @@ async function queueRound3(admin: any, run: any, steps: any[], loop: number) {
   const system = `Round 3 — Chair synthesis${loop > 0 ? ` (loop ${loop}, revising after a failed vote)` : ""}. You are the Chair. Weld the four ${isDesign ? "design directions" : "drafts"} and the objections into ONE candidate ${isDesign ? "design brief" : "plan"}.
 
 ${loop > 0 ? "Revise ONLY the contested parts from the previous vote. Preserve agreed parts verbatim. " : ""}Return ONLY valid JSON matching this shape:
-${isDesign ? designShape : planShape}${isDesign ? "\n\nEvery H2 header must appear exactly as written. Be specific: exact HSL values, real font names, concrete component rules." : ""}`;
+${isDesign ? designShape : planShape}${isDesign ? "\n\nEvery H2 header must appear exactly as written. Be specific: exact HSL values, real font names, concrete component rules." : ""}
+
+Write candidate_md at FULL length and quality — never compress or flatten it because it is inside a JSON string.`;
   const parts: string[] = [intakeBlock(intake)];
   if (isDesign && plan) parts.push(`LOCKED PLAN\n\n${plan.content_md ?? ""}\n\nPRD\n\n${plan.prd_md ?? "(none)"}`);
   parts.push(draftsBlock(steps), objectionsAndStealsBlock(steps));
@@ -359,6 +365,7 @@ ${isDesign ? designShape : planShape}${isDesign ? "\n\nEvery H2 header must appe
     status: "queued",
     request: {
       json_output: true,
+      reasoning_effort: "high",
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
@@ -368,6 +375,7 @@ ${isDesign ? designShape : planShape}${isDesign ? "\n\nEvery H2 header must appe
 }
 
 async function queueRound4(admin: any, run: any, steps: any[], loop: number) {
+  const intake = await loadIntake(admin, run.project_id);
   const synth = steps.find((x) => x.step_key === `r3_synthesis_chair_loop${loop}` && x.status === "completed");
   const candidateMd = String(synth?.response_json?.candidate_md ?? synth?.response_text ?? "");
   const rubric = rubricForKind(run.kind);
@@ -375,19 +383,24 @@ async function queueRound4(admin: any, run: any, steps: any[], loop: number) {
   const rows = SEATS.map((seat) => {
     const myR2 = steps.find((x) => x.step_key === `r2_exam_${seat}` && x.status === "completed");
     const myObjections = myR2?.response_json?.objections ?? [];
-    const system = `Round 4 — Scored vote${loop > 0 ? ` (loop ${loop})` : ""}. Vote on the candidate ${run.kind === "design" ? "design brief" : "plan"} against your Round-2 objections.
+    const system = `Round 4 — Scored vote${loop > 0 ? ` (loop ${loop})` : ""}. Vote on the candidate ${run.kind === "design" ? "design brief" : "plan"} against the founder's intake and your Round-2 objections.
 
 Return ONLY valid JSON matching this shape:
 {
   "scores": {
 ${scoresShape}
   },
+  "objection_resolutions": [
+    { "objection": "your Round-2 objection, restated", "status": "resolved"|"standing", "evidence_quote": "VERBATIM quote from the candidate that resolves it — required when status is resolved" }
+  ],
   "blocking_objections": [ "..." ],
   "comment": "One paragraph."
 }
 
-Every score must be an integer 1-10. State which of your own Round-2 objections are RESOLVED by this candidate and which still STAND (add the still-standing ones to blocking_objections if they are dealbreakers).`;
-    const user = `CANDIDATE\n\n${candidateMd}\n\nYOUR ROUND-2 OBJECTIONS\n${JSON.stringify(myObjections, null, 2)}\n\nProduce your JSON now.`;
+Every score must be an integer 1-10. Score against the founder's actual intake — not the candidate in a vacuum.
+
+Resolution discipline: an objection is "resolved" ONLY if you can quote the exact candidate text that resolves it. No quote = it still stands. Add still-standing dealbreakers to blocking_objections. Do not inflate scores to reach consensus.`;
+    const user = `${intakeBlock(intake)}\n\nCANDIDATE\n\n${candidateMd}\n\nYOUR ROUND-2 OBJECTIONS\n${JSON.stringify(myObjections, null, 2)}\n\nProduce your JSON now.`;
     return {
       run_id: run.id,
       user_id: run.user_id,
@@ -397,6 +410,8 @@ Every score must be an integer 1-10. State which of your own Round-2 objections 
       status: "queued",
       request: {
         json_output: true,
+        // Voting is a judgment call, not a creative act — keep it cold.
+        temperature: 0.2,
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
@@ -432,6 +447,7 @@ Return ONLY valid JSON matching this shape:
     status: "queued",
     request: {
       json_output: true,
+      reasoning_effort: "high",
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
@@ -443,13 +459,15 @@ Return ONLY valid JSON matching this shape:
 async function queueBlueprint(admin: any, run: any, contentMd: string, intake: any) {
   const system = `Blueprint — you are the Chair drafting the implementation documents for the locked plan. Turn the plan into a precise PRD and a features list.
 
+${LOVABLE_FIELD_MANUAL}
+
 Return ONLY valid JSON matching this shape:
 {
   "prd_md": "Full markdown PRD with these exact H2 sections in this exact order: ## User types\\n## Jobs to be done\\n## Data model (tables and columns)\\n## Pages\\n## Edge functions\\n## Integrations\\n## Out of scope for v1",
   "features": [ { "name": "...", "description": "...", "priority": "mvp" | "later" } ]
 }
 
-Every section header must appear exactly as written. Be specific: name concrete tables, columns, page routes, and edge functions.`;
+Every section header must appear exactly as written. Be specific: name concrete tables, columns, page routes, and edge functions. Write prd_md at FULL length and quality — never compress it because it is inside a JSON string.`;
   const user = `${intakeBlock(intake)}\n\nLOCKED PLAN\n\n${contentMd}\n\nProduce your JSON now.`;
   await admin.from("run_steps").insert({
     run_id: run.id,
@@ -460,6 +478,7 @@ Every section header must appear exactly as written. Be specific: name concrete 
     status: "queued",
     request: {
       json_output: true,
+      reasoning_effort: "high",
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
@@ -552,12 +571,15 @@ async function queueBatchesStep(admin: any, run: any) {
 
   const system = `You are the Chair, sequencing this student's build for their Lovable project. Produce 6-14 dependency-safe, single-concern build batches that turn the locked plan + PRD into a shippable app.
 
+${LOVABLE_FIELD_MANUAL}
+
 Rules for EVERY batch:
-- Numbered items with EXACT scope — no wishlists.
+- Numbered items with EXACT scope — no wishlists. Name exact routes, components, tables, and columns from the PRD in every item.
+- Code batches (channel 'lovable' or 'supabase') include an "Acceptance checks:" list — 2-5 numbered checks the student verifies in the preview with clicks only.
 - Ends with the sentence: "Keep everything else identical."
 - Code batches (channel 'lovable' or 'supabase') also end with: "Typecheck when done."
-- Channel 'supabase' = pure database/schema/RLS/edge-function work.
-- Channel 'human' = things only the student can do in external consoles (Stripe, DNS, OAuth apps, App Store, domain purchase) — write plain-language numbered steps, no code, no typecheck line.
+- Channel 'supabase' = pure database/schema/RLS/edge-function work. State access rules for every table in plain words.
+- Channel 'human' = things only the student can do in external consoles (Stripe, DNS, OAuth apps, App Store, domain purchase) — write plain-language numbered steps, no code, no acceptance checks, no typecheck line.
 - Channel 'lovable' = frontend + integration work the student will paste into Lovable.
 - Sequence so nothing depends on a later batch. Auth/data foundations early. Polish/SEO/analytics late.
 - Every prompt_md follows this skeleton:
@@ -568,6 +590,10 @@ Rules for EVERY batch:
   2. <item>
   ...
 
+  Acceptance checks:  ← omit for channel 'human'
+  1. <click-only check>
+  2. <click-only check>
+
   Keep everything else identical.
   Typecheck when done.  ← omit for channel 'human'
   """
@@ -575,11 +601,11 @@ Rules for EVERY batch:
 Return ONLY valid JSON:
 {
   "batches": [
-    { "batch_no": 1, "title": "Foundation & shell", "channel": "lovable"|"supabase"|"human", "prompt_md": "Batch 1 — ...\\n\\n1. ...\\n\\nKeep everything else identical.\\nTypecheck when done." }
+    { "batch_no": 1, "title": "Foundation & shell", "channel": "lovable"|"supabase"|"human", "prompt_md": "Batch 1 — ...\\n\\n1. ...\\n\\nAcceptance checks:\\n1. ...\\n\\nKeep everything else identical.\\nTypecheck when done." }
   ]
 }
 
-Constraints: 6-14 batches, unique ascending integer batch_no starting at 1, every prompt_md non-empty and following the skeleton exactly.`;
+Constraints: 6-14 batches, unique ascending integer batch_no starting at 1, every prompt_md non-empty, FULL length, and following the skeleton exactly.`;
 
   const featuresBlock = Array.isArray(plan?.features) && plan!.features.length
     ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
@@ -596,6 +622,93 @@ Constraints: 6-14 batches, unique ascending integer batch_no starting at 1, ever
     status: "queued",
     request: {
       json_output: true,
+      reasoning_effort: "high",
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    },
+  });
+}
+
+// The build batches are the product — they get the same adversarial treatment
+// as the plan. Inspector checks coverage + dependency order, Contrarian attacks
+// scope + security. Blocking issues send the draft back to the Chair once.
+async function queueBatchesReview(admin: any, run: any, draftJson: any) {
+  const plan = await loadLockedPlan(admin, run.project_id);
+  const draftBlock = JSON.stringify(draftJson?.batches ?? [], null, 2);
+  const shape = `Return ONLY valid JSON:
+{
+  "verdict": "approve" | "revise",
+  "issues": [ { "batch_no": <number or null>, "severity": "blocking"|"major"|"minor", "text": "specific issue and the fix" } ]
+}
+
+Verdict "approve" only if there are zero blocking issues. Be specific — name the batch and the exact item.`;
+  const prompts: Record<string, string> = {
+    inspector: `Batches review — Inspector. Check the drafted build sequence for coverage and dependency integrity:
+- Every MVP feature in the PRD lands in some batch; name any orphan (blocking).
+- No batch references a table, route, component, or function created in a LATER batch (blocking).
+- Design tokens are installed before any feature work that uses them.
+- Code batches carry acceptance checks a non-coder can run by clicks alone; skeleton followed exactly.
+
+${LOVABLE_FIELD_MANUAL}
+
+${shape}`,
+    contrarian: `Batches review — Contrarian. Attack the drafted build sequence:
+- Any single batch too big for Lovable to execute faithfully in one paste (mixes concerns, >~5 files, vague items) — blocking; say how to split.
+- Any table created without explicit access rules stated in plain words — blocking.
+- Human-channel work (Stripe, OAuth, DNS) hidden inside a code batch — blocking.
+- Scope creep beyond the locked plan — major; name the cut.
+
+${LOVABLE_FIELD_MANUAL}
+
+${shape}`,
+  };
+  const user = `LOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nDRAFT BATCHES\n\n${draftBlock}\n\nProduce your JSON now.`;
+  const rows = (["inspector", "contrarian"] as const).map((seat) => ({
+    run_id: run.id,
+    user_id: run.user_id,
+    step_key: `batches_review_${seat}`,
+    round: 2,
+    seat,
+    status: "queued",
+    request: {
+      json_output: true,
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: prompts[seat] },
+        { role: "user", content: user },
+      ],
+    },
+  }));
+  await admin.from("run_steps").insert(rows);
+}
+
+async function queueBatchesRevise(admin: any, run: any, draftJson: any, reviewSteps: any[]) {
+  const issues = reviewSteps
+    .map((s: any) => `--- ${SEAT_LABEL[s.seat as Seat]} ---\n${JSON.stringify(s.response_json ?? { missing: true }, null, 2)}`)
+    .join("\n\n");
+  const system = `Batches revision — you are the Chair. The Inspector and Contrarian reviewed your drafted build sequence and found issues. Fix every blocking issue and every major issue you agree with; keep everything uncontested verbatim.
+
+${LOVABLE_FIELD_MANUAL}
+
+Return ONLY the same JSON shape as the original draft:
+{
+  "batches": [ { "batch_no": 1, "title": "...", "channel": "lovable"|"supabase"|"human", "prompt_md": "..." } ]
+}
+
+Constraints: 6-14 batches, unique ascending integer batch_no starting at 1, every prompt_md non-empty, FULL length, following the batch skeleton exactly (numbered items, acceptance checks for code batches, "Keep everything else identical.", "Typecheck when done." for code batches).`;
+  const user = `YOUR DRAFT\n\n${JSON.stringify(draftJson?.batches ?? [], null, 2)}\n\nREVIEW ISSUES\n\n${issues}\n\nProduce the revised JSON now.`;
+  await admin.from("run_steps").insert({
+    run_id: run.id,
+    user_id: run.user_id,
+    step_key: "batches_revise_chair",
+    round: 3,
+    seat: "chair",
+    status: "queued",
+    request: {
+      json_output: true,
+      reasoning_effort: "high",
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
@@ -696,6 +809,17 @@ function validateStepJson(stepKey: string, parsed: any, kind: string = "plan"): 
       if (!Number.isInteger(n) || n < 1 || n > 10) return `Score ${k} must be an integer 1-10.`;
     }
     if (!Array.isArray(parsed.blocking_objections)) return "Missing blocking_objections array.";
+    if (!Array.isArray(parsed.objection_resolutions)) return "Missing objection_resolutions array.";
+    for (const r of parsed.objection_resolutions) {
+      if (r?.status === "resolved" && !String(r?.evidence_quote ?? "").trim()) {
+        return "Every resolved objection needs a verbatim evidence_quote from the candidate.";
+      }
+    }
+    return null;
+  }
+  if (stepKey.startsWith("batches_review_")) {
+    if (!["approve", "revise"].includes(parsed.verdict)) return "Missing/invalid verdict.";
+    if (!Array.isArray(parsed.issues)) return "Missing issues array.";
     return null;
   }
   if (stepKey === "r_final_ruling_chair") {
@@ -728,7 +852,7 @@ function validateStepJson(stepKey: string, parsed: any, kind: string = "plan"): 
     }
     return null;
   }
-  if (stepKey === "batches_chair") {
+  if (stepKey === "batches_chair" || stepKey === "batches_revise_chair") {
     if (!parsed || !Array.isArray(parsed.batches)) return "Missing batches array.";
     const b = parsed.batches;
     if (b.length < 6 || b.length > 14) return "batches must contain 6-14 items.";
@@ -789,7 +913,8 @@ async function executeStep(admin: any, run: any, step: any) {
         const result = await callSeat(run.user_id, step.seat as Seat, messages, {
           runId: run.id,
           projectId: run.project_id,
-          temperature: 0.4,
+          temperature: Number(step.request?.temperature ?? 0.4),
+          reasoningEffort: step.request?.reasoning_effort,
           json: jsonMode,
         });
         content = result.content;
@@ -1183,6 +1308,7 @@ If verdict is "clean", findings is [] and fix_prompt_md is "".`;
     status: "queued",
     request: {
       json_output: true,
+      reasoning_effort: "high",
       messages: [
         { role: "system", content: system },
         { role: "user", content: `THREE SEAT REPORTS\n\n${combined}\n\nProduce your JSON now.` },
@@ -1450,15 +1576,46 @@ async function afterStepComplete(admin: any, runIn: any) {
   }
 
   if (run.kind === "batches") {
-    const step = steps.find((x: any) => x.step_key === "batches_chair");
-    if (step?.status === "completed" && step.response_json && !step.response_json.invalid) {
-      await finalizeBatches(admin, run, step.response_json.batches ?? []);
-    } else {
+    const draft = steps.find((x: any) => x.step_key === "batches_chair");
+    if (!(draft?.status === "completed" && draft.response_json && !draft.response_json.invalid)) {
       await admin
         .from("boardroom_runs")
-        .update({ status: "failed", error: step?.response_json?.validation_error ?? "batches_chair did not produce a valid response" })
+        .update({ status: "failed", error: draft?.response_json?.validation_error ?? "batches_chair did not produce a valid response" })
         .eq("id", run.id);
+      return;
     }
+
+    // Stage 3: a revision exists — ship it (fall back to the draft if the
+    // revision came back invalid; a reviewed draft beats a dead run).
+    const revise = steps.find((x: any) => x.step_key === "batches_revise_chair");
+    if (revise) {
+      const revised = revise.status === "completed" && revise.response_json && !revise.response_json.invalid
+        ? revise.response_json
+        : draft.response_json;
+      await finalizeBatches(admin, run, revised.batches ?? []);
+      return;
+    }
+
+    // Stage 2: reviews are in — decide whether the Chair must revise.
+    const reviews = steps.filter((x: any) => x.step_key.startsWith("batches_review_"));
+    if (reviews.length) {
+      const completed = reviews.filter((x: any) => x.status === "completed" && x.response_json && !x.response_json.invalid);
+      const needsRevision = completed.some((x: any) =>
+        x.response_json.verdict === "revise" ||
+        (Array.isArray(x.response_json.issues) && x.response_json.issues.some((i: any) => i?.severity === "blocking")),
+      );
+      if (needsRevision) {
+        await queueBatchesRevise(admin, run, draft.response_json, completed);
+        fireSelfTick();
+        return;
+      }
+      await finalizeBatches(admin, run, draft.response_json.batches ?? []);
+      return;
+    }
+
+    // Stage 1: the draft just landed — send it to review.
+    await queueBatchesReview(admin, run, draft.response_json);
+    fireSelfTick();
     return;
   }
 
@@ -1555,12 +1712,22 @@ async function processRun(admin: any, runId: string) {
   if (run.status === "queued") {
     await admin.from("boardroom_runs").update({ status: "running" }).eq("id", runId);
   }
-  const step = await claimOneStep(admin, runId);
-  if (!step) {
+  // Claim every queued step of the current round and run the seats
+  // concurrently — a round of four drafts takes one seat's latency, not four.
+  // The proxy still checks budget/caps before each call; parallel seats can
+  // overshoot the run budget by at most the in-flight calls, same order of
+  // magnitude as the per-call overshoot the serial path already allowed.
+  const claimed: any[] = [];
+  while (claimed.length < SEATS.length) {
+    const step = await claimOneStep(admin, runId);
+    if (!step) break;
+    claimed.push(step);
+  }
+  if (!claimed.length) {
     await afterStepComplete(admin, run);
     return;
   }
-  await executeStep(admin, run, step);
+  await Promise.all(claimed.map((step) => executeStep(admin, run, step)));
   const freshRun = await getRun(admin, runId);
   if (freshRun && freshRun.status === "running") {
     await afterStepComplete(admin, freshRun);

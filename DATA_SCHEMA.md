@@ -83,9 +83,12 @@ RLS: owner insert/read; instructor cohort read.
 suffix denotes fix batch), `title`, `channel` (`lovable`|`supabase`|`human`),
 `prompt_md`, `status`
 (`pending`|`sent`|`built`|`auditing`|`fix_needed`|`passed`|`skipped`),
-`is_fix`, `parent_batch_id`, `sent_at`, `built_at`, `created_at`.
+`is_fix`, `parent_batch_id`, `sent_at`, `built_at`, `outcome_md`
+(owner-reported "what Lovable actually did" — fed into the next audit's
+context), `created_at`.
 RLS: owner read/update (trigger `batches_guard_content` restricts client
-updates to `status`, `sent_at`, `built_at`); instructor cohort read.
+updates to `status`, `sent_at`, `built_at`, and `outcome_md`); instructor
+cohort read.
 
 ### `audits`
 `id`, `project_id`, `user_id`, `batch_id`, `kind` (`batch`|`final`|`reaudit`),
