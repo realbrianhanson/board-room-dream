@@ -35,7 +35,20 @@ improvement plan.
   brief in `plan_versions.kind='design'`. Screenshots live in the private
   `design-screenshots` bucket, owner-scoped, signed URLs only.
 - **Batches & Runway** — the `batches` run kind emits 6-14 numbered build
-  batches (Lovable / Supabase / Human). Runway UI activates one at a time.
+  batches (Lovable / Supabase / Human). The Chair's draft is adversarially
+  reviewed (Inspector: coverage + dependency order; Contrarian: scope +
+  security) and revised once if anything blocking surfaces, before batches
+  land. Runway UI activates one at a time and captures an owner-reported
+  outcome per batch (`batches.outcome_md`) that the board reads at the next
+  audit.
+- **Doctrine** — the constitution (`app_settings.constitution`, v2) is the
+  first system message of every call; each seat carries a full charter in
+  `model_registry.role_prompt`; artifact-writing steps embed the Lovable
+  field manual (`supabase/functions/_shared/lovable-field-manual.ts`).
+  Chair-critical steps (synthesis, ruling, blueprint, batches, audit merge)
+  run at high reasoning effort; Round-1 drafts sample hot (0.85), votes cold
+  (0.2). Intake validation grounds its verdict with OpenRouter's web plugin
+  when available.
 - **Audit engine** — `audit-runner` pulls the batch's code (GitHub or paste,
   300KB cap), runs Inspector/Contrarian/Strategist in parallel, Chair merges
   and issues findings. Findings with P0/P1 insert a fix batch numbered `N.1`;
@@ -78,7 +91,7 @@ Four seats, editable from **Settings → Admin · Model registry**:
 | Seat | Default | Role |
 | --- | --- | --- |
 | Chair | `anthropic/claude-fable-5` | Synthesizes, rules on consensus, writes the PRD. |
-| Strategist | `openai/gpt-5.5` | Argues market/UX/monetization. |
+| Strategist | `openai/gpt-5.6-sol` | Argues market/UX/monetization. |
 | Contrarian | `x-ai/grok-4.5` | Attacks feasibility, scope, security. |
 | Inspector | `moonshotai/kimi-k3` | Coherence, completeness, code audits. |
 

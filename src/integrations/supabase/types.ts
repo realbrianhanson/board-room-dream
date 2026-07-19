@@ -260,6 +260,7 @@ export type Database = {
           created_at: string
           id: string
           is_fix: boolean
+          outcome_md: string | null
           parent_batch_id: string | null
           plan_version_id: string | null
           project_id: string
@@ -276,6 +277,7 @@ export type Database = {
           created_at?: string
           id?: string
           is_fix?: boolean
+          outcome_md?: string | null
           parent_batch_id?: string | null
           plan_version_id?: string | null
           project_id: string
@@ -292,6 +294,7 @@ export type Database = {
           created_at?: string
           id?: string
           is_fix?: boolean
+          outcome_md?: string | null
           parent_batch_id?: string | null
           plan_version_id?: string | null
           project_id?: string

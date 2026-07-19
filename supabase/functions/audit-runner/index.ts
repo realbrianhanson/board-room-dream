@@ -3,6 +3,7 @@
 // then kicks the orchestrator. Chair merge + finalization happen in the orchestrator.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { assembleFromGithub, formatFiles, ghToken } from "../_shared/github-payload.ts";
+import { LOVABLE_FIELD_MANUAL } from "../_shared/lovable-field-manual.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -100,11 +101,17 @@ async function insertAuditSteps(
   plan: any,
   designBrief: string | null,
   isFinal: boolean,
+  batchOutcome: string | null,
 ) {
   const contract = isFinal
     ? `FINAL A-Z AUDIT — verify the whole app against the plan + PRD.`
     : `BATCH CONTRACT (what this batch was supposed to do):\n\n${batchPrompt}`;
-  const user = `${contract}
+  const outcomeBlock = batchOutcome?.trim()
+    ? `\n\nOWNER-REPORTED OUTCOME (what Lovable actually said or did — errors, drift, surprises; investigate every claim):\n${batchOutcome.trim()}`
+    : "";
+  const user = `${contract}${outcomeBlock}
+
+${LOVABLE_FIELD_MANUAL}
 
 PRD
 ${plan?.prd_md ?? "(none)"}
@@ -189,9 +196,11 @@ async function beginAudit(params: {
   const designBrief: string | null = design?.content_md ?? null;
 
   let batchPrompt: string | null = null;
+  let batchOutcome: string | null = null;
   if (batchId) {
-    const { data: b } = await admin.from("batches").select("prompt_md").eq("id", batchId).maybeSingle();
+    const { data: b } = await admin.from("batches").select("prompt_md, outcome_md").eq("id", batchId).maybeSingle();
     batchPrompt = b?.prompt_md ?? null;
+    batchOutcome = b?.outcome_md ?? null;
   }
 
   let payload = "";
@@ -205,7 +214,13 @@ async function beginAudit(params: {
     if (!token) return { error: "GitHub not connected" as const };
     baseSha = isFinal ? null : await priorHeadSha(admin, project.id);
     try {
-      const res = await assembleFromGithub(token, project.github_repo, { baseSha });
+      // The A-Z audit reads the whole app — give it a wider window than the
+      // per-batch diff audits so mature apps aren't judged on a sliver.
+      const res = await assembleFromGithub(
+        token,
+        project.github_repo,
+        isFinal ? { baseSha, maxFiles: 60, maxTotalBytes: 450 * 1024, preferKeyFiles: true } : { baseSha },
+      );
       payload = formatFiles(res.files);
       filesAnalyzed = res.files.length;
       headSha = res.headSha;
@@ -261,7 +276,7 @@ async function beginAudit(params: {
   if (batchId) await admin.from("batches").update({ status: "auditing" }).eq("id", batchId);
   if (isFinal) await admin.from("projects").update({ status: "auditing" }).eq("id", project.id);
 
-  await insertAuditSteps(admin, run, payload, batchPrompt, plan, designBrief, isFinal);
+  await insertAuditSteps(admin, run, payload, batchPrompt, plan, designBrief, isFinal, batchOutcome);
   fireOrchestrator();
   return { audit_id: audit.id, run_id: run.id };
 }

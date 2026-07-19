@@ -599,6 +599,11 @@ function stepRoundLabel(step: SessionStep): string {
   if (step.step_key === "r5_blueprint_chair") return "Blueprint — The Chair drafts the documents";
   if (step.step_key.startsWith("cr_exam_")) return "Change request — Cross-examination";
   if (step.step_key === "cr_verdict_chair") return "Change request — Chair's verdict";
+  if (step.step_key === "batches_chair") return "Batches — The Chair sequences the build";
+  if (step.step_key.startsWith("batches_review_")) return "Batches — Board review";
+  if (step.step_key === "batches_revise_chair") return "Batches — Chair's revision";
+  if (step.step_key === "audit_chair_merge") return "Audit — Chair merges findings";
+  if (step.step_key.startsWith("audit_")) return "Audit — Independent review";
   return `Round ${step.round}`;
 }
 

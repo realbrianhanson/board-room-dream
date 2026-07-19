@@ -49,6 +49,7 @@ type Batch = {
   is_fix: boolean;
   sent_at: string | null;
   built_at: string | null;
+  outcome_md: string | null;
 };
 
 type Run = {
@@ -278,6 +279,17 @@ function RunwayPage() {
     loadAll();
   }
 
+  async function saveOutcome(b: Batch, text: string) {
+    const val = text.trim();
+    const { error } = await supabase
+      .from("batches")
+      .update({ outcome_md: val || null })
+      .eq("id", b.id);
+    if (error) { toast.error(error.message); return; }
+    toast.success("Noted — the board will read this at the next audit.");
+    loadAll();
+  }
+
   async function copy(text: string, msg = "Copied.") {
     try {
       await navigator.clipboard.writeText(text);
@@ -473,6 +485,7 @@ function RunwayPage() {
                 onOpenRollback={() => setShowRollback(true)}
                 onRequestSkip={() => setShowSkipConfirm(b)}
                 onOpenAudit={() => setAuditModal({ kind: "batch", batch: b, mode: b.is_fix ? "reaudit" : "start" })}
+                onSaveOutcome={(text) => saveOutcome(b, text)}
               />
             );
           })}
@@ -606,7 +619,7 @@ function EmptyState({
 function BatchCard({
   batch, active, locked, activeBatchNo, isOwner, lovableUrl,
   latestAudit, auditFindings, fixBatch, ghRepo,
-  onCopyPrompt, onAdvance, onOpenRollback, onRequestSkip, onOpenAudit,
+  onCopyPrompt, onAdvance, onOpenRollback, onRequestSkip, onOpenAudit, onSaveOutcome,
 }: {
   batch: Batch;
   active: boolean;
@@ -623,7 +636,9 @@ function BatchCard({
   onOpenRollback: () => void;
   onRequestSkip: () => void;
   onOpenAudit: () => void;
+  onSaveOutcome: (text: string) => void;
 }) {
+  const [outcomeDraft, setOutcomeDraft] = useState(batch.outcome_md ?? "");
 
   const ch = CHANNEL_STYLE[batch.channel];
   const st = STATUS_STYLE[batch.status];
@@ -787,6 +802,33 @@ function BatchCard({
               >
                 Something broke?
               </button>
+            </div>
+          )}
+
+          {/* Learning loop: what Lovable actually did feeds the board's next audit. */}
+          {isOwner && batch.channel !== "human" && batch.status !== "pending" && (
+            <div className="mt-5 rounded-lg border border-border/60 bg-background/40 p-4">
+              <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+                Report to the board
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                What did Lovable say? Paste errors, drift, or anything unexpected — the board reads this before it audits.
+              </p>
+              <textarea
+                value={outcomeDraft}
+                onChange={(e) => setOutcomeDraft(e.target.value)}
+                rows={3}
+                placeholder="e.g. Build succeeded but the dashboard route 404s, and it renamed the table to user_batches…"
+                className="mt-2 w-full resize-y rounded-md border border-border bg-background p-3 font-mono text-[12px] leading-relaxed text-foreground/90 placeholder:text-muted-foreground/60 focus:border-primary/50 focus:outline-none"
+              />
+              {outcomeDraft.trim() !== (batch.outcome_md ?? "").trim() && (
+                <button
+                  onClick={() => onSaveOutcome(outcomeDraft)}
+                  className="mt-2 inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:border-primary/40"
+                >
+                  Save report
+                </button>
+              )}
             </div>
           )}
         </div>

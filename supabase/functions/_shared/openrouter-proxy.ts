@@ -34,6 +34,10 @@ export type ProxyOptions = {
   runId?: string;
   projectId?: string;
   seatOverrideModel?: string;
+  /** OpenRouter reasoning effort — use "high" for chair-critical synthesis/ruling steps. */
+  reasoningEffort?: "low" | "medium" | "high";
+  /** Attach OpenRouter's web plugin so the model can ground claims in live search. */
+  online?: boolean;
 };
 
 export type FallbackMeta = {
@@ -296,6 +300,8 @@ export async function callSeat(
       usage: { include: true },
     };
     if (options.json) body.response_format = { type: "json_object" };
+    if (options.reasoningEffort) body.reasoning = { effort: options.reasoningEffort };
+    if (options.online) body.plugins = [{ id: "web", max_results: 5 }];
     return body;
   };
 
