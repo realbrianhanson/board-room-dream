@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { ArrowRight, Check, ScrollText, ShieldCheck } from "lucide-react";
 import { CodeSourcePicker } from "@/components/code-source-picker";
-import { startGithubConnect } from "@/lib/github-connect";
+import { GitHubRepoCard } from "@/components/github-repo-card";
 
 export const Route = createFileRoute("/_authenticated/audits_/$projectId")({
   component: AuditCenterPage,
