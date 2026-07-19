@@ -796,7 +796,27 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      model_registry_public: {
+        Row: {
+          display_name: string | null
+          enabled: boolean | null
+          model_id: string | null
+          seat: string | null
+        }
+        Insert: {
+          display_name?: string | null
+          enabled?: boolean | null
+          model_id?: string | null
+          seat?: string | null
+        }
+        Update: {
+          display_name?: string | null
+          enabled?: boolean | null
+          model_id?: string | null
+          seat?: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       admin_model_registry: {
