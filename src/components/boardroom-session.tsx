@@ -457,14 +457,21 @@ function TheTable({
           />
         )}
         {showSegments && segments.map((seg, i) => {
-          const t0 = (i / total_segments) * Math.PI * 2 - Math.PI / 2;
-          const t1 = ((i + 1) / total_segments) * Math.PI * 2 - Math.PI / 2;
+          if (seg === "empty") return null;
+          const seatIdx = Math.floor(i / rubricSize);
+          const rubricIdx = i % rubricSize;
+          const seatAngle = angles[seatIdx] - Math.PI / 2; // ring math starts at top; align to seat position
+          const arcSpan = Math.PI / 3.2; // ~56° per seat cluster
+          const segStep = arcSpan / rubricSize;
+          const segLen = segStep * 0.72;
+          const center = seatAngle - arcSpan / 2 + segStep * (rubricIdx + 0.5);
+          const t0 = center - segLen / 2 - Math.PI / 2;
+          const t1 = center + segLen / 2 - Math.PI / 2;
           const x0 = cx + ringRx * Math.cos(t0), y0 = cy + ringRy * Math.sin(t0);
           const x1 = cx + ringRx * Math.cos(t1), y1 = cy + ringRy * Math.sin(t1);
           const stroke = seg === "brass"
             ? (chairRuled ? "hsl(38 45% 45%)" : "hsl(38 65% 55%)")
-            : seg === "oxblood" ? "hsl(8 60% 55%)" : "transparent";
-          if (seg === "empty") return null;
+            : "hsl(8 60% 55%)";
           return (
             <path
               key={i}
