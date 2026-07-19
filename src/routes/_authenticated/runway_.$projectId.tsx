@@ -185,10 +185,21 @@ function RunwayPage() {
 
   const passedCount = useMemo(() => (batches ?? []).filter((b) => b.status === "passed").length, [batches]);
   const total = (batches ?? []).length;
-  const activeIdx = useMemo(
-    () => (batches ?? []).findIndex((b) => !isTerminal(b.status)),
-    [batches],
-  );
+  const activeIdx = useMemo(() => {
+    const list = batches ?? [];
+    const idx = list.findIndex((b) => !isTerminal(b.status));
+    if (idx === -1) return -1;
+    // A fix_needed parent must not hide its repair batch's prompt — the
+    // repair (N.1) becomes the active card until it passes.
+    const b = list[idx];
+    if (b.status === "fix_needed") {
+      const fixIdx = list.findIndex(
+        (x) => (x as unknown as { parent_batch_id?: string | null }).parent_batch_id === b.id && !isTerminal(x.status),
+      );
+      if (fixIdx !== -1) return fixIdx;
+    }
+    return idx;
+  }, [batches]);
 
   const latestAuditByBatch = useMemo(() => {
     const m = new Map<string, AuditRow>();

@@ -27,6 +27,7 @@ export type SessionRun = {
   spent_usd: number;
   budget_warning: boolean;
   consensus: { awaiting?: string } | null;
+  founder_notes: string | null;
   error: string | null;
   created_at: string;
 };
@@ -227,8 +228,11 @@ export function BoardroomSession(props: BoardroomSessionProps) {
     const latest = voteSteps.filter((v) => v.step_key.endsWith(`_loop${latestLoop}`));
     const bySeat = new Map<Seat, SessionStep>();
     for (const v of latest) bySeat.set(v.seat, v);
+    // The Chair abstains on its own synthesis in current runs; legacy runs
+    // include its vote. Size the ring to whoever actually votes.
+    const votingOrder = SEAT_ORDER.filter((s) => s !== "chair" || bySeat.has("chair"));
     const out: Array<"empty" | "brass" | "oxblood"> = [];
-    for (const seat of SEAT_ORDER) {
+    for (const seat of votingOrder) {
       const v = bySeat.get(seat);
       const scores = v?.response_json?.scores as Record<string, number> | undefined;
       for (const key of rubric) {
@@ -241,7 +245,7 @@ export function BoardroomSession(props: BoardroomSessionProps) {
 
   const roundOneFill = completedR1 / totalR1;
   const votesFilled = segments.filter((s) => s !== "empty").length;
-  const votesFraction = votesFilled / (rubric.length * 4);
+  const votesFraction = segments.length ? votesFilled / segments.length : 0;
   const consensusFill =
     run?.status === "consensus" || run?.status === "chair_ruled"
       ? 1
@@ -339,6 +343,10 @@ export function BoardroomSession(props: BoardroomSessionProps) {
             />
           </div>
         </div>
+      )}
+
+      {isOwner && !readOnly && run && !locked && (
+        <FounderNoteBox run={run} onSaved={() => void loadRun()} />
       )}
 
       <div className="mt-10 hidden md:block">
@@ -586,6 +594,46 @@ function FallbackChip({ meta }: { meta?: { fallback_model_used?: string; primary
   );
 }
 
+// Standing note the Chair reads at the next synthesis — the founder's voice
+// in the room without pausing the run.
+function FounderNoteBox({ run, onSaved }: { run: SessionRun; onSaved: () => void }) {
+  const [draft, setDraft] = useState(run.founder_notes ?? "");
+  const [saving, setSaving] = useState(false);
+  const dirty = draft.trim() !== (run.founder_notes ?? "").trim();
+  async function save() {
+    setSaving(true);
+    const { error } = await supabase
+      .from("boardroom_runs")
+      .update({ founder_notes: draft.trim() || null })
+      .eq("id", run.id);
+    setSaving(false);
+    if (error) { toast.error(error.message); return; }
+    toast.success("The Chair will read this at the next synthesis.");
+    onSaved();
+  }
+  return (
+    <div className="mt-6 rounded-xl border border-border/60 bg-surface-1/60 p-4">
+      <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Note to the board</p>
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        rows={2}
+        placeholder="Anything the board should weigh — a direction you hate, a feature you refuse to cut…"
+        className="mt-2 w-full resize-y rounded-md border border-border bg-background p-3 text-sm leading-relaxed text-foreground/90 placeholder:text-muted-foreground/60 focus:border-primary/50 focus:outline-none"
+      />
+      {dirty && (
+        <button
+          onClick={save}
+          disabled={saving}
+          className="mt-2 rounded-md border border-border bg-surface-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:border-primary/40 disabled:opacity-60"
+        >
+          {saving ? "Saving…" : "Save note"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ============================== Transcript ==============================
 
 function stepRoundLabel(step: SessionStep): string {
@@ -594,9 +642,12 @@ function stepRoundLabel(step: SessionStep): string {
   const loopMatch = /_loop(\d+)/.exec(step.step_key);
   const loop = loopMatch ? Number(loopMatch[1]) : 0;
   if (step.step_key.startsWith("r3_synthesis_")) return `Round 3 — Synthesis (loop ${loop})`;
+  if (step.step_key.startsWith("r3_draft_")) return `Round 3 — Synthesis (loop ${loop})`;
+  if (step.step_key.startsWith("r3_extract_")) return `Round 3 — Decision log (loop ${loop})`;
   if (step.step_key.startsWith("r4_vote_")) return `Round 4 — The vote (loop ${loop})`;
   if (step.step_key === "r_final_ruling_chair") return "Final ruling — Chair rules";
   if (step.step_key === "r5_blueprint_chair") return "Blueprint — The Chair drafts the documents";
+  if (step.step_key === "r5_blueprint_extract_chair") return "Blueprint — Features extract";
   if (step.step_key.startsWith("cr_exam_")) return "Change request — Cross-examination";
   if (step.step_key === "cr_verdict_chair") return "Change request — Chair's verdict";
   if (step.step_key === "batches_chair") return "Batches — The Chair sequences the build";
@@ -665,6 +716,7 @@ function StepBody({ step, rubric }: { step: SessionStep; rubric: readonly string
   }
   if (step.step_key.startsWith("r2_exam_") && json) return <Round2Body json={json} />;
   if (step.step_key.startsWith("r3_synthesis_") && json) return <Round3Body json={json} />;
+  if (step.step_key.startsWith("r3_extract_") && json) return <Round3Body json={json} />;
   if (step.step_key.startsWith("r4_vote_") && json) return <Round4Body json={json} rubric={rubric} />;
   if (step.step_key === "r_final_ruling_chair" && json) return <FinalRulingBody json={json} />;
   if (step.response_text) {
@@ -749,6 +801,7 @@ function Round3Body({ json }: { json: any }) {
 function Round4Body({ json, rubric }: { json: any; rubric: readonly string[] }) {
   const scores = (json.scores ?? {}) as Record<string, number>;
   const blocking: string[] = Array.isArray(json.blocking_objections) ? json.blocking_objections : [];
+  const resolutions: any[] = Array.isArray(json.objection_resolutions) ? json.objection_resolutions : [];
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
@@ -763,6 +816,29 @@ function Round4Body({ json, rubric }: { json: any; rubric: readonly string[] }) 
           );
         })}
       </div>
+      {resolutions.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Objection ledger</p>
+          {resolutions.map((r, i) => {
+            const resolved = r?.status === "resolved";
+            return (
+              <div key={i} className={`rounded-md border border-l-2 px-3 py-2 ${resolved ? "border-border border-l-[hsl(160_45%_48%)]" : "border-border border-l-[hsl(8_60%_55%)]"}`}>
+                <p className="text-sm text-foreground/90">
+                  <span className={`font-mono text-[10px] uppercase tracking-widest ${resolved ? "text-[hsl(160_45%_62%)]" : "text-[hsl(8_60%_70%)]"}`}>
+                    {resolved ? "Resolved" : "Standing"}
+                  </span>{" "}
+                  — {String(r?.objection ?? "")}
+                </p>
+                {resolved && r?.evidence_quote && (
+                  <p className="mt-1 border-l border-border pl-2 text-xs italic text-muted-foreground">
+                    "{String(r.evidence_quote)}"
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
       {blocking.length > 0 && (
         <div className="space-y-1">
           <p className="font-mono text-[10px] uppercase tracking-widest text-[hsl(8_60%_70%)]">Blocking objections</p>

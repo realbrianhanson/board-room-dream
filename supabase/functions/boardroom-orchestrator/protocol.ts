@@ -1,0 +1,289 @@
+// deno-lint-ignore-file no-explicit-any
+// The board's protocol: seats, rubrics, step validation, consensus rules,
+// and the pure helpers that read candidate documents out of step history.
+// No step queuing here; the only I/O is the consensus-threshold lookup.
+
+
+export const SEATS = ["chair", "strategist", "contrarian", "inspector"] as const;
+
+export type Seat = typeof SEATS[number];
+
+
+export const SEAT_LABEL: Record<Seat, string> = {
+  chair: "The Chair",
+  strategist: "The Strategist",
+  contrarian: "The Contrarian",
+  inspector: "The Inspector",
+};
+
+
+export const PLAN_RUBRIC = [
+  "painful_problem",
+  "reachable_buyer",
+  "monetization_path",
+  "buildable_scope",
+  "differentiation",
+  "wow_factor",
+] as const;
+
+export const DESIGN_RUBRIC = [
+  "distinctiveness",
+  "premium_feel",
+  "usability",
+  "buildable_in_lovable",
+  "coherence",
+  "signature_element",
+] as const;
+
+export function rubricForKind(kind: string): readonly string[] {
+  return kind === "design" ? DESIGN_RUBRIC : PLAN_RUBRIC;
+}
+
+
+export function intakeBlock(intake: any) {
+  const a = intake?.answers ?? {};
+  if (a?.imported) {
+    const goals = Array.isArray(a.goals) ? a.goals.join(", ") : "";
+    return `IMPORT INTAKE (owner already built this app)
+Description: ${a.description ?? ""}
+Goals for the board: ${goals || "(none stated)"}`;
+  }
+  return `INTAKE ANSWERS
+Idea: ${a.idea ?? ""}
+Buyer: ${a.buyer ?? ""}
+Pain: ${a.pain ?? ""}
+Monetization: ${a.money ?? ""}
+Inspiration: ${a.inspiration ?? ""}
+
+VALIDATION SCORES
+${JSON.stringify(intake?.validation_scores ?? null, null, 2)}`;
+}
+
+
+
+export function draftsBlock(steps: any[], forSeat?: Seat) {
+  return SEATS
+    .filter((s) => (forSeat ? s !== forSeat : true))
+    .map((s) => {
+      const step = steps.find((x) => x.step_key === `r1_draft_${s}` && x.status === "completed");
+      return `--- ${SEAT_LABEL[s]} (${s}) DRAFT ---\n${step?.response_text ?? "(no draft)"}`;
+    })
+    .join("\n\n");
+}
+
+
+export function objectionsAndStealsBlock(steps: any[]) {
+  const parts: string[] = [];
+  for (const s of SEATS) {
+    const step = steps.find((x) => x.step_key === `r2_exam_${s}` && x.status === "completed");
+    if (!step?.response_json) continue;
+    const j = step.response_json;
+    parts.push(`--- ${SEAT_LABEL[s]} (${s}) — OBJECTIONS AND STEALS ---
+${JSON.stringify(j, null, 2)}`);
+  }
+  return parts.join("\n\n");
+}
+
+
+export function priorRoundFailureBlock(steps: any[], previousLoop: number) {
+  const votes = SEATS
+    .map((s) => steps.find((x) => x.step_key === `r4_vote_${s}_loop${previousLoop}` && x.status === "completed"))
+    .filter(Boolean);
+  const blocking: string[] = [];
+  const lowScores: string[] = [];
+  for (const v of votes as any[]) {
+    const jj = v.response_json ?? {};
+    (jj.blocking_objections ?? []).forEach((b: string) => blocking.push(`- [${v.seat}] ${b}`));
+    for (const k of [...PLAN_RUBRIC, ...DESIGN_RUBRIC]) {
+      const n = Number(jj?.scores?.[k]);
+      if (Number.isFinite(n) && n < 8) lowScores.push(`- [${v.seat}] ${k}: ${n}`);
+    }
+  }
+  return `PRIOR VOTE FAILED (loop ${previousLoop})
+
+BLOCKING OBJECTIONS STILL STANDING:
+${blocking.length ? blocking.join("\n") : "(none)"}
+
+RUBRIC SCORES BELOW 8:
+${lowScores.length ? lowScores.join("\n") : "(none)"}
+
+Revise ONLY the contested parts. Preserve agreed parts verbatim.`;
+}
+
+
+// The candidate document for a loop — two-phase draft first, legacy JSON
+// synthesis (pre-upgrade runs) as fallback.
+export function candidateForLoop(steps: any[], loop: number): string {
+  const draft = steps.find((x: any) => x.step_key === `r3_draft_chair_loop${loop}` && x.status === "completed");
+  if (String(draft?.response_text ?? "").trim()) return String(draft.response_text);
+  const legacy = steps.find((x: any) => x.step_key === `r3_synthesis_chair_loop${loop}` && x.status === "completed");
+  return String(legacy?.response_json?.candidate_md ?? legacy?.response_text ?? "");
+}
+
+
+export function lastCandidateLoop(steps: any[]): number {
+  return Math.max(-1, ...steps
+    .filter((x: any) => (x.step_key.startsWith("r3_draft_chair_loop") || x.step_key.startsWith("r3_synthesis_chair_loop")) && x.status === "completed")
+    .map((x: any) => Number(/_loop(\d+)$/.exec(x.step_key)?.[1] ?? -1)));
+}
+
+
+// ============================== Validation ==============================
+
+export function validateStepJson(stepKey: string, parsed: any, kind: string = "plan"): string | null {
+  if (!parsed || typeof parsed !== "object") return "Response is not a JSON object.";
+  if (stepKey.startsWith("r2_exam_")) {
+    const seat = stepKey.replace("r2_exam_", "");
+    const objections = parsed.objections;
+    const steals = parsed.steals;
+    if (!Array.isArray(objections)) return "Missing objections array.";
+    if (!Array.isArray(steals)) return "Missing steals array.";
+    if (objections.length < 3) return "Need at least 3 objections total.";
+    if (steals.length < 1) return "Need at least 1 steal.";
+    for (const s of steals) {
+      if (!s || !SEATS.includes(s.from_seat) || typeof s.idea !== "string" || s.idea.trim().length < 10) {
+        return "Each steal needs a from_seat and a concrete idea — what you are adopting and why.";
+      }
+    }
+    const others = SEATS.filter((s) => s !== seat);
+    for (const other of others) {
+      if (!objections.some((o: any) => o?.target_seat === other)) {
+        return `Need at least one objection targeting ${other}.`;
+      }
+    }
+    return null;
+  }
+  if (stepKey.startsWith("r3_synthesis_chair_loop")) {
+    // Legacy single-phase synthesis (pre-two-phase runs).
+    if (typeof parsed.candidate_md !== "string" || !parsed.candidate_md.trim()) {
+      return "Missing candidate_md string.";
+    }
+    if (!Array.isArray(parsed.decision_log)) return "Missing decision_log array.";
+    return null;
+  }
+  if (stepKey.startsWith("r3_extract_chair_loop")) {
+    if (!Array.isArray(parsed.decision_log)) return "Missing decision_log array.";
+    if (!Array.isArray(parsed.steals_adopted)) return "Missing steals_adopted array.";
+    return null;
+  }
+  if (stepKey.startsWith("r4_vote_")) {
+    const scores = parsed.scores;
+    if (!scores || typeof scores !== "object") return "Missing scores object.";
+    for (const k of rubricForKind(kind)) {
+      const n = scores[k];
+      if (!Number.isInteger(n) || n < 1 || n > 10) return `Score ${k} must be an integer 1-10.`;
+    }
+    if (!Array.isArray(parsed.blocking_objections)) return "Missing blocking_objections array.";
+    if (!Array.isArray(parsed.objection_resolutions)) return "Missing objection_resolutions array.";
+    for (const r of parsed.objection_resolutions) {
+      if (r?.status === "resolved" && !String(r?.evidence_quote ?? "").trim()) {
+        return "Every resolved objection needs a verbatim evidence_quote from the candidate.";
+      }
+    }
+    return null;
+  }
+  if (stepKey.startsWith("batches_review_") || stepKey === "cr_review_inspector") {
+    if (!["approve", "revise"].includes(parsed.verdict)) return "Missing/invalid verdict.";
+    if (!Array.isArray(parsed.issues)) return "Missing issues array.";
+    return null;
+  }
+  if (stepKey === "r_final_ruling_chair") {
+    if (typeof parsed.final_md !== "string" || !parsed.final_md.trim()) return "Missing final_md.";
+    if (!Array.isArray(parsed.dissent_ledger)) return "Missing dissent_ledger array.";
+    return null;
+  }
+  if (stepKey === "r5_blueprint_extract_chair") {
+    if (!Array.isArray(parsed.features)) return "Missing features array.";
+    for (const f of parsed.features) {
+      if (!f || typeof f.name !== "string" || typeof f.description !== "string") return "Each feature needs name and description.";
+      if (f.priority !== "mvp" && f.priority !== "later") return "Each feature.priority must be 'mvp' or 'later'.";
+    }
+    return null;
+  }
+  if (stepKey.startsWith("cr_exam_")) {
+    if (!["approve", "approve_with_amendments", "reject"].includes(parsed.stance)) return "Missing/invalid stance.";
+    if (typeof parsed.reasoning !== "string" || !parsed.reasoning.trim()) return "Missing reasoning.";
+    if (!Array.isArray(parsed.amendments)) return "Missing amendments array.";
+    return null;
+  }
+  if (stepKey === "cr_verdict_chair" || stepKey === "cr_revise_chair") {
+    if (!["approved", "rejected"].includes(parsed.verdict)) return "Missing/invalid verdict.";
+    if (typeof parsed.rationale !== "string" || !parsed.rationale.trim()) return "Missing rationale.";
+    if (parsed.verdict === "approved") {
+      if (typeof parsed.amended_plan_md !== "string" || !parsed.amended_plan_md.trim()) return "Approved verdict requires amended_plan_md.";
+      if (typeof parsed.amended_prd_md !== "string" || !parsed.amended_prd_md.trim()) return "Approved verdict requires amended_prd_md.";
+      if (!Array.isArray(parsed.amended_features)) return "Approved verdict requires amended_features array.";
+    }
+    return null;
+  }
+  if (stepKey === "batches_chair" || stepKey === "batches_revise_chair") {
+    if (!parsed || !Array.isArray(parsed.batches)) return "Missing batches array.";
+    const b = parsed.batches;
+    if (b.length < 6 || b.length > 14) return "batches must contain 6-14 items.";
+    let prev = 0;
+    const seen = new Set<number>();
+    for (const item of b) {
+      if (!item || typeof item !== "object") return "Each batch must be an object.";
+      const n = Number(item.batch_no);
+      if (!Number.isFinite(n) || n <= prev) return "batch_no must be unique and strictly ascending.";
+      if (seen.has(n)) return "batch_no values must be unique.";
+      seen.add(n);
+      prev = n;
+      if (typeof item.title !== "string" || !item.title.trim()) return "Each batch needs a title.";
+      if (!["lovable", "supabase", "human"].includes(item.channel)) return "Each batch.channel must be lovable, supabase, or human.";
+      if (typeof item.prompt_md !== "string" || !item.prompt_md.trim()) return "Each batch needs a non-empty prompt_md.";
+    }
+    return null;
+  }
+  return null;
+}
+
+
+// ============================== Consensus / locking ==============================
+
+// Consensus gate: per-cohort override → workspace default → 8. The prompts
+// keep calibrating "8 = reputation-staking" regardless; the threshold only
+// moves the pass gate.
+export async function resolveConsensusThreshold(admin: any, userId: string): Promise<number> {
+  try {
+    const { data: profile } = await admin.from("profiles").select("cohort_id").eq("id", userId).maybeSingle();
+    if (profile?.cohort_id) {
+      const { data: cohort } = await admin
+        .from("cohorts")
+        .select("consensus_threshold")
+        .eq("id", profile.cohort_id)
+        .maybeSingle();
+      const n = Number(cohort?.consensus_threshold);
+      if (Number.isFinite(n) && n >= 1 && n <= 10) return n;
+    }
+    const { data: setting } = await admin
+      .from("app_settings")
+      .select("value")
+      .eq("key", "consensus_threshold")
+      .maybeSingle();
+    const s = Number((setting?.value as any)?.score);
+    if (Number.isFinite(s) && s >= 1 && s <= 10) return s;
+  } catch { /* default */ }
+  return 8;
+}
+
+
+export function checkConsensus(voteSteps: any[], kind: string = "plan", threshold: number = 8): { pass: boolean; scores: any } {
+  const scoreSets: Record<string, any> = {};
+  let pass = true;
+  // Three independent voters (chair abstains on its own synthesis). Legacy
+  // four-vote runs still pass this floor.
+  if (voteSteps.length < 3) return { pass: false, scores: {} };
+  const rubric = rubricForKind(kind);
+  for (const v of voteSteps) {
+    const j = v.response_json ?? {};
+    scoreSets[v.seat] = { scores: j.scores ?? null, blocking_objections: j.blocking_objections ?? [] };
+    if (!j.scores) { pass = false; continue; }
+    for (const k of rubric) {
+      const n = Number(j.scores[k]);
+      if (!Number.isFinite(n) || n < threshold) pass = false;
+    }
+    if (Array.isArray(j.blocking_objections) && j.blocking_objections.length > 0) pass = false;
+  }
+  return { pass, scores: scoreSets };
+}

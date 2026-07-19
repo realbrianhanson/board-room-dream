@@ -13,7 +13,7 @@ export const Route = createFileRoute("/_authenticated/cohort")({
   component: CohortPage,
 });
 
-type CohortRow = { id: string; name: string; daily_cap_usd: number | null; instructor_id: string | null };
+type CohortRow = { id: string; name: string; daily_cap_usd: number | null; consensus_threshold: number | null; instructor_id: string | null };
 
 
 
@@ -58,10 +58,19 @@ function alertLine(a: AlertRow): string {
   }
 }
 
+type CohortStats = {
+  lockedPlans: number;
+  consensusRate: number | null; // 0-1 across finished plan/design runs
+  avgLoops: number | null;
+  p01PerAudit: number | null;
+  liveRuns: number;
+};
+
 function CohortPage() {
   const [cohorts, setCohorts] = useState<CohortRow[]>([]);
   const [members, setMembers] = useState<MemberRow[]>([]);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
+  const [stats, setStats] = useState<CohortStats | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -71,7 +80,7 @@ function CohortPage() {
     if (!uid) return;
 
     // Cohorts the instructor teaches (RLS also permits admin-wide reads).
-    const { data: cohortsData } = await supabase.from("cohorts").select("id, name, daily_cap_usd, instructor_id").order("name");
+    const { data: cohortsData } = await supabase.from("cohorts").select("id, name, daily_cap_usd, consensus_threshold, instructor_id").order("name");
     setCohorts((cohortsData ?? []) as CohortRow[]);
 
     // Members in those cohorts.
@@ -110,7 +119,7 @@ function CohortPage() {
     }
 
     // Open alert counts per user.
-    let openAlertsByUser: Record<string, number> = {};
+    const openAlertsByUser: Record<string, number> = {};
     if (memberIds.length) {
       const { data } = await supabase
         .from("alerts")
@@ -120,6 +129,40 @@ function CohortPage() {
       for (const r of data ?? []) {
         openAlertsByUser[(r as any).user_id] = (openAlertsByUser[(r as any).user_id] ?? 0) + 1;
       }
+    }
+
+    // Health metrics — the numbers that say whether protocol changes help.
+    if (memberIds.length) {
+      const [{ data: runRows }, { data: auditRows }] = await Promise.all([
+        supabase
+          .from("boardroom_runs")
+          .select("kind, status, loop_no")
+          .in("user_id", memberIds),
+        supabase
+          .from("audits")
+          .select("summary")
+          .in("user_id", memberIds)
+          .not("summary", "is", null),
+      ]);
+      const deliberations = (runRows ?? []).filter(
+        (r: any) => ["plan", "design"].includes(r.kind) && ["consensus", "chair_ruled"].includes(r.status),
+      );
+      const consensusCount = deliberations.filter((r: any) => r.status === "consensus").length;
+      const loops = deliberations.map((r: any) => Number(r.loop_no ?? 0));
+      const auditsWithCounts = (auditRows ?? []).filter((a: any) => a.summary?.counts);
+      const p01Total = auditsWithCounts.reduce(
+        (s: number, a: any) => s + Number(a.summary.counts.P0 ?? 0) + Number(a.summary.counts.P1 ?? 0),
+        0,
+      );
+      setStats({
+        lockedPlans: lockedByProject.size,
+        consensusRate: deliberations.length ? consensusCount / deliberations.length : null,
+        avgLoops: loops.length ? loops.reduce((a: number, b: number) => a + b, 0) / loops.length : null,
+        p01PerAudit: auditsWithCounts.length ? p01Total / auditsWithCounts.length : null,
+        liveRuns: (runRows ?? []).filter((r: any) => ["queued", "running"].includes(r.status)).length,
+      });
+    } else {
+      setStats(null);
     }
 
     const cohortNameById = new Map((cohortsData ?? []).map((c: any) => [c.id, c.name]));
@@ -220,6 +263,34 @@ function CohortPage() {
           <CohortCapEditor cohorts={cohorts} onSaved={load} />
         )}
       </div>
+
+      {/* Health strip — is the protocol actually working for this cohort? */}
+      {stats && (
+        <section className="mb-10">
+          <h2 className="mb-3 font-mono text-[11px] uppercase tracking-[0.28em] text-muted-foreground">Health</h2>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+            <StatTile label="Locked plans" value={String(stats.lockedPlans)} />
+            <StatTile
+              label="Consensus rate"
+              value={stats.consensusRate === null ? "—" : `${Math.round(stats.consensusRate * 100)}%`}
+              hint={stats.consensusRate === null ? "no finished deliberations" : "vs chair-ruled"}
+              tone={stats.consensusRate !== null && stats.consensusRate < 0.5 ? "warn" : "default"}
+            />
+            <StatTile
+              label="Avg loops to lock"
+              value={stats.avgLoops === null ? "—" : stats.avgLoops.toFixed(1)}
+              tone={stats.avgLoops !== null && stats.avgLoops >= 2 ? "warn" : "default"}
+            />
+            <StatTile
+              label="P0+P1 per audit"
+              value={stats.p01PerAudit === null ? "—" : stats.p01PerAudit.toFixed(1)}
+              hint={stats.p01PerAudit === null ? "no audits yet" : "lower is better"}
+              tone={stats.p01PerAudit !== null && stats.p01PerAudit >= 2 ? "warn" : "default"}
+            />
+            <StatTile label="Live runs" value={String(stats.liveRuns)} />
+          </div>
+        </section>
+      )}
 
       {/* Alerts strip */}
       <section className="mb-10">
@@ -350,32 +421,50 @@ function CohortPage() {
   );
 }
 
+function StatTile({ label, value, hint, tone = "default" }: { label: string; value: string; hint?: string; tone?: "default" | "warn" }) {
+  return (
+    <div className="rounded-xl border border-border/40 bg-surface-1 p-4">
+      <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">{label}</p>
+      <p className={`mt-1 font-display text-2xl ${tone === "warn" ? "text-[hsl(38_65%_55%)]" : "text-foreground"}`}>{value}</p>
+      {hint && <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">{hint}</p>}
+    </div>
+  );
+}
+
 function CohortCapEditor({ cohorts, onSaved }: { cohorts: CohortRow[]; onSaved: () => void }) {
   const [selectedId, setSelectedId] = useState<string>(cohorts[0]?.id ?? "");
   const selected = cohorts.find((c) => c.id === selectedId) ?? cohorts[0];
   const [value, setValue] = useState<string>(selected?.daily_cap_usd == null ? "" : String(selected.daily_cap_usd));
+  const [threshold, setThreshold] = useState<string>(selected?.consensus_threshold == null ? "" : String(selected.consensus_threshold));
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setValue(selected?.daily_cap_usd == null ? "" : String(selected.daily_cap_usd));
-  }, [selected?.id, selected?.daily_cap_usd]);
+    setThreshold(selected?.consensus_threshold == null ? "" : String(selected.consensus_threshold));
+  }, [selected?.id, selected?.daily_cap_usd, selected?.consensus_threshold]);
 
   async function save() {
     if (!selected) return;
     setSaving(true);
     const parsed = value.trim() === "" ? null : Number(value);
     if (parsed !== null && (!Number.isFinite(parsed) || parsed <= 0)) {
-      toast.error("Enter a positive number, or leave blank to use the workspace default.");
+      toast.error("Daily cap must be a positive number, or blank for the workspace default.");
+      setSaving(false);
+      return;
+    }
+    const parsedThreshold = threshold.trim() === "" ? null : Number(threshold);
+    if (parsedThreshold !== null && (!Number.isFinite(parsedThreshold) || parsedThreshold < 1 || parsedThreshold > 10)) {
+      toast.error("Consensus bar must be 1-10, or blank for the workspace default.");
       setSaving(false);
       return;
     }
     const { error } = await supabase
       .from("cohorts")
-      .update({ daily_cap_usd: parsed })
+      .update({ daily_cap_usd: parsed, consensus_threshold: parsedThreshold })
       .eq("id", selected.id);
     if (error) toast.error(error.message);
     else {
-      toast.success(parsed == null ? "Reverted to workspace default" : `Cap set to $${parsed.toFixed(2)}`);
+      toast.success("Cohort settings saved.");
       onSaved();
     }
     setSaving(false);
@@ -383,7 +472,7 @@ function CohortCapEditor({ cohorts, onSaved }: { cohorts: CohortRow[]; onSaved: 
 
   return (
     <div className="flex flex-col items-end gap-2 rounded-xl border border-border/40 bg-surface-1 p-4">
-      <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Daily cap</span>
+      <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Cohort settings</span>
       <div className="flex flex-wrap items-center gap-2">
         {cohorts.length > 1 && (
           <select
@@ -396,15 +485,28 @@ function CohortCapEditor({ cohorts, onSaved }: { cohorts: CohortRow[]; onSaved: 
             ))}
           </select>
         )}
-        <div className="flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-1.5">
+        <div className="flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-1.5" title="Daily spend cap">
           <span className="font-mono text-xs text-muted-foreground">$</span>
           <input
             type="number"
             step="0.01"
             value={value}
             onChange={(e) => setValue(e.target.value)}
-            placeholder="default"
-            className="w-20 bg-transparent font-mono text-xs text-foreground outline-none"
+            placeholder="cap"
+            className="w-16 bg-transparent font-mono text-xs text-foreground outline-none"
+          />
+        </div>
+        <div className="flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-1.5" title="Consensus bar — every rubric score must reach this for a consensus lock">
+          <span className="font-mono text-xs text-muted-foreground">≥</span>
+          <input
+            type="number"
+            step="0.5"
+            min="1"
+            max="10"
+            value={threshold}
+            onChange={(e) => setThreshold(e.target.value)}
+            placeholder="bar"
+            className="w-12 bg-transparent font-mono text-xs text-foreground outline-none"
           />
         </div>
         <button
@@ -415,7 +517,7 @@ function CohortCapEditor({ cohorts, onSaved }: { cohorts: CohortRow[]; onSaved: 
           {saving ? "Saving…" : "Save"}
         </button>
       </div>
-      <span className="font-mono text-[10px] text-muted-foreground">Leave blank to use the workspace default</span>
+      <span className="font-mono text-[10px] text-muted-foreground">Blank fields inherit the workspace defaults</span>
     </div>
   );
 }

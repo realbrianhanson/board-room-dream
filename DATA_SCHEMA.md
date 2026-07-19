@@ -19,7 +19,7 @@ cohorts they instruct. `role` and `cohort_id` cannot be changed directly by
 clients — enforced by `profiles_guard_privileged_fields` trigger. Cohort
 joining goes through `join_cohort(code text)` (SECURITY DEFINER RPC).
 
-### `cohorts`
+### `cohorts` (`consensus_threshold` — optional 1-10 override of the workspace consensus bar)
 `id`, `name`, `join_code` (unique), `starts_at`, `instructor_id`, `daily_cap_usd`.
 RLS: members read own cohort; instructors read/update their cohorts (admins any).
 
@@ -31,8 +31,15 @@ the service role. Plaintext keys never touch the DB.
 
 ### `app_settings`
 `key` (PK), `value` (jsonb), `version`, `updated_at`.
-Seeded keys: `constitution`, `default_daily_cap_usd`.
+Seeded keys: `constitution`, `default_daily_cap_usd`, `consensus_threshold`
+(`{score}`), `field_manual_addenda` (`{items[]}` — admin-approved rules
+appended to the Lovable field manual in every prompt).
 RLS: SELECT authenticated; write admin-only.
+
+### `field_manual_proposals`
+`id`, `proposed_rule`, `rationale`, `evidence` (jsonb), `status`
+(`pending`|`approved`|`dismissed`), `created_by`, `created_at`, `decided_at`.
+Written by `flywheel-miner` (service role); RLS: admin read/update only.
 
 ### `model_registry`
 `seat` (PK: `chair` \| `strategist` \| `contrarian` \| `inspector`), `model_id`,
@@ -57,15 +64,20 @@ RLS: owner CRUD; instructor cohort read.
 `status` (includes `queued`, `running`, `consensus`, `completed`,
 `paused_budget`, `failed`), `round_no`, `loop_no`, `constitution_version`,
 `budget_usd`, `spent_usd`, `budget_warning`, `consensus` (jsonb),
-`dissent_ledger` (jsonb), `error`, timestamps.
-RLS: owner full access; instructor cohort read. Realtime enabled.
+`dissent_ledger` (jsonb), `founder_notes` (owner's standing note, read at
+the next Round-3 synthesis), `error`, timestamps.
+RLS: owner read; instructor cohort read. Server-write-only — clients may
+update ONLY `founder_notes` (trigger `boardroom_runs_guard`); INSERT/DELETE
+revoked. Realtime enabled.
 
 ### `run_steps`
 `id`, `run_id`, `user_id`, `step_key` (unique per run — powers atomic claim),
 `round`, `seat`, `status`, `request` (jsonb), `response_text`,
 `response_json` (jsonb, includes `_meta.fallback_model_used`), `tokens_in/out`,
-`cost_usd`, `error`, timestamps.
-RLS: owner full; instructor cohort read. Realtime enabled.
+`cost_usd`, `started_at` (claim time — steps stuck `running` 15+ min are
+requeued by the cron tick), `error`, timestamps.
+RLS: owner read; instructor cohort read. Server-write-only (all client
+writes revoked). Realtime enabled.
 
 ### `plan_versions`
 `id`, `project_id`, `user_id`, `kind` (`plan`|`design`), `version`,

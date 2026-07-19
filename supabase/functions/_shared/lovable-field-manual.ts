@@ -14,4 +14,25 @@ export const LOVABLE_FIELD_MANUAL = `LOVABLE FIELD MANUAL (how to write prompts 
 - Design tokens first: colors, fonts, and spacing installed as CSS variables + Tailwind config in the earliest batch, then referenced (never restated) in later batches.
 - Edge functions: state the auth model (user JWT vs shared secret), inputs, outputs, and error shape. Secrets go in Supabase secrets, never in code.
 - Empty, loading, and error states are part of every screen's definition — not polish for later.
-- Database changes are additive; never rename or drop in the same batch that builds UI on top of the result.`;
+- Database changes are additive; never rename or drop in the same batch that builds UI on top of the result.
+- Verification is part of the prompt: fix and QA batches should tell Lovable which of its built-in test types to run (browser workflow tests for user flows, frontend tests for components, edge-function verification for backend work).`;
+
+// The full manual = static doctrine + cohort-learned rules mined from real
+// audit findings and batch outcomes, approved by an admin in Settings.
+// deno-lint-ignore no-explicit-any
+export async function loadFieldManual(admin: any): Promise<string> {
+  try {
+    const { data } = await admin
+      .from("app_settings")
+      .select("value")
+      .eq("key", "field_manual_addenda")
+      .maybeSingle();
+    // deno-lint-ignore no-explicit-any
+    const items = Array.isArray((data?.value as any)?.items) ? (data!.value as any).items : [];
+    if (!items.length) return LOVABLE_FIELD_MANUAL;
+    // deno-lint-ignore no-explicit-any
+    return `${LOVABLE_FIELD_MANUAL}\nCOHORT-LEARNED RULES (mined from real build outcomes in this workspace):\n${items.map((i: any) => `- ${String(i)}`).join("\n")}`;
+  } catch {
+    return LOVABLE_FIELD_MANUAL;
+  }
+}

@@ -337,6 +337,7 @@ export type Database = {
           created_at: string
           dissent_ledger: Json | null
           error: string | null
+          founder_notes: string | null
           id: string
           kind: string
           loop_no: number
@@ -355,6 +356,7 @@ export type Database = {
           created_at?: string
           dissent_ledger?: Json | null
           error?: string | null
+          founder_notes?: string | null
           id?: string
           kind: string
           loop_no?: number
@@ -373,6 +375,7 @@ export type Database = {
           created_at?: string
           dissent_ledger?: Json | null
           error?: string | null
+          founder_notes?: string | null
           id?: string
           kind?: string
           loop_no?: number
@@ -451,8 +454,42 @@ export type Database = {
           },
         ]
       }
+      field_manual_proposals: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          decided_at: string | null
+          evidence: Json | null
+          id: string
+          proposed_rule: string
+          rationale: string | null
+          status: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          decided_at?: string | null
+          evidence?: Json | null
+          id?: string
+          proposed_rule: string
+          rationale?: string | null
+          status?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          decided_at?: string | null
+          evidence?: Json | null
+          id?: string
+          proposed_rule?: string
+          rationale?: string | null
+          status?: string
+        }
+        Relationships: []
+      }
       cohorts: {
         Row: {
+          consensus_threshold: number | null
           daily_cap_usd: number | null
           id: string
           instructor_id: string | null
@@ -461,6 +498,7 @@ export type Database = {
           starts_at: string | null
         }
         Insert: {
+          consensus_threshold?: number | null
           daily_cap_usd?: number | null
           id?: string
           instructor_id?: string | null
@@ -469,6 +507,7 @@ export type Database = {
           starts_at?: string | null
         }
         Update: {
+          consensus_threshold?: number | null
           daily_cap_usd?: number | null
           id?: string
           instructor_id?: string | null
@@ -742,6 +781,7 @@ export type Database = {
           round: number
           run_id: string
           seat: string
+          started_at: string | null
           status: string
           step_key: string
           tokens_in: number
@@ -760,6 +800,7 @@ export type Database = {
           round: number
           run_id: string
           seat: string
+          started_at?: string | null
           status?: string
           step_key: string
           tokens_in?: number
@@ -778,6 +819,7 @@ export type Database = {
           round?: number
           run_id?: string
           seat?: string
+          started_at?: string | null
           status?: string
           step_key?: string
           tokens_in?: number

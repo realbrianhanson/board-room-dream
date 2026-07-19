@@ -702,8 +702,154 @@ function SettingsPage() {
               <ConstitutionEditor />
             </div>
           </div>
+
+          <div className="mt-14 border-t border-border pt-10">
+            <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+              Admin · Field manual
+            </span>
+            <h2 className="mt-3 font-display text-2xl text-foreground">Cohort learnings.</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              The Chair mines recent audit findings and batch outcomes for recurring Lovable
+              failure patterns. Approve a rule and every future prompt carries it.
+            </p>
+            <div className="mt-6">
+              <FlywheelPanel />
+            </div>
+          </div>
         </>
       )}
     </div>
+  );
+}
+
+type Proposal = {
+  id: string;
+  proposed_rule: string;
+  rationale: string | null;
+  status: "pending" | "approved" | "dismissed";
+  created_at: string;
+};
+
+function FlywheelPanel() {
+  const [proposals, setProposals] = useState<Proposal[] | null>(null);
+  const [addenda, setAddenda] = useState<string[]>([]);
+  const [mining, setMining] = useState(false);
+  const [acting, setActing] = useState<string | null>(null);
+
+  async function load() {
+    const [{ data: rows }, { data: setting }] = await Promise.all([
+      supabase
+        .from("field_manual_proposals")
+        .select("id, proposed_rule, rationale, status, created_at")
+        .eq("status", "pending")
+        .order("created_at", { ascending: false }),
+      supabase.from("app_settings").select("value").eq("key", "field_manual_addenda").maybeSingle(),
+    ]);
+    setProposals((rows ?? []) as Proposal[]);
+    const items = (setting?.value as { items?: unknown[] } | null)?.items;
+    setAddenda(Array.isArray(items) ? items.map(String) : []);
+  }
+  useEffect(() => { void load(); }, []);
+
+  async function mine() {
+    setMining(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("flywheel-miner", { body: {} });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      if (data?.status === "no_key") { toast.error("Add your OpenRouter key first — the miner runs on it."); return; }
+      if (data?.status === "no_evidence") { toast("No findings or outcomes in the last 30 days yet."); return; }
+      toast.success(data.inserted ? `${data.inserted} new rule${data.inserted === 1 ? "" : "s"} proposed.` : "Nothing new — the manual already covers recent history.");
+      await load();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setMining(false);
+    }
+  }
+
+  async function decide(p: Proposal, status: "approved" | "dismissed") {
+    setActing(p.id);
+    try {
+      if (status === "approved") {
+        // Re-read before writing so two admins can't clobber each other's approvals.
+        const { data: setting } = await supabase.from("app_settings").select("value").eq("key", "field_manual_addenda").maybeSingle();
+        const current = (setting?.value as { items?: unknown[] } | null)?.items;
+        const items = Array.isArray(current) ? current.map(String) : [];
+        if (!items.includes(p.proposed_rule)) items.push(p.proposed_rule);
+        const { error: aerr } = await supabase
+          .from("app_settings")
+          .update({ value: { items }, updated_at: new Date().toISOString() })
+          .eq("key", "field_manual_addenda");
+        if (aerr) throw aerr;
+      }
+      const { error } = await supabase
+        .from("field_manual_proposals")
+        .update({ status, decided_at: new Date().toISOString() })
+        .eq("id", p.id);
+      if (error) throw error;
+      toast.success(status === "approved" ? "Rule adopted — every future prompt carries it." : "Dismissed.");
+      await load();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setActing(null);
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-border bg-surface-1 p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="font-mono text-[11px] text-muted-foreground">
+          {addenda.length} adopted rule{addenda.length === 1 ? "" : "s"} · {(proposals ?? []).length} pending
+        </p>
+        <button
+          onClick={mine}
+          disabled={mining}
+          className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+        >
+          {mining ? "The Chair is reading the history…" : "Mine recent findings"}
+        </button>
+      </div>
+
+      {addenda.length > 0 && (
+        <div className="mt-4 space-y-1">
+          {addenda.map((a, i) => (
+            <p key={i} className="border-l-2 border-[hsl(160_45%_48%)] pl-3 text-sm text-foreground/90">{a}</p>
+          ))}
+        </div>
+      )}
+
+      {proposals === null ? (
+        <div className="mt-4 h-16 animate-pulse rounded-lg bg-surface-2" />
+      ) : proposals.length === 0 ? (
+        <p className="mt-4 text-sm text-muted-foreground">No pending proposals. Mine after a batch of audits lands.</p>
+      ) : (
+        <div className="mt-4 space-y-3">
+          {proposals.map((p) => (
+            <div key={p.id} className="rounded-lg border border-border bg-background/40 p-4">
+              <p className="text-sm text-foreground">{p.proposed_rule}</p>
+              {p.rationale && <p className="mt-1 text-xs text-muted-foreground">{p.rationale}</p>}
+              <div className="mt-3 flex gap-2">
+                <button
+                  onClick={() => decide(p, "approved")}
+                  disabled={acting === p.id}
+                  className="rounded-md border border-[hsl(160_45%_48%/0.5)] bg-[hsl(160_45%_28%/0.3)] px-3 py-1.5 text-xs text-foreground hover:brightness-110 disabled:opacity-60"
+                >
+                  Adopt into the manual
+                </button>
+                <button
+                  onClick={() => decide(p, "dismissed")}
+                  disabled={acting === p.id}
+                  className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground disabled:opacity-60"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
