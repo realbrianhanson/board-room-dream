@@ -40,8 +40,7 @@ function GitHubCallbackPage() {
         setState({ kind: "error", error: "GitHub returned no code or state." });
         return;
       }
-      const { data: session } = await supabase.auth.getSession();
-      const token = session.session?.access_token;
+      const token = await getTokenWithRetry();
       if (!token) {
         setState({
           kind: "error",
@@ -49,6 +48,7 @@ function GitHubCallbackPage() {
         });
         return;
       }
+
       const { data, error } = await supabase.functions.invoke("github-oauth", {
         body: { action: "callback", code, state: stateParam },
         headers: { Authorization: `Bearer ${token}` },
