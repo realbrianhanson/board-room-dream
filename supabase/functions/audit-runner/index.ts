@@ -2,8 +2,8 @@
 // Assembles the code payload, creates the audit + boardroom_run + parallel steps,
 // then kicks the orchestrator. Chair merge + finalization happen in the orchestrator.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-import { assembleFromGithub, formatFiles, ghToken } from "../_shared/github-payload.ts";
-import { LOVABLE_FIELD_MANUAL } from "../_shared/lovable-field-manual.ts";
+import { assembleFromGithub, formatFiles, ghToken, redactSecrets } from "../_shared/github-payload.ts";
+import { loadFieldManual } from "../_shared/lovable-field-manual.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -28,7 +28,7 @@ function j(status: number, body: any) {
 const MAX_PASTE_BYTES = 200 * 1024;
 
 function fitPasted(text: string): string {
-  const t = String(text ?? "");
+  const t = redactSecrets(String(text ?? ""));
   return t.length > MAX_PASTE_BYTES ? t.slice(0, MAX_PASTE_BYTES) + "\n\n[TRUNCATED]" : t;
 }
 
@@ -93,15 +93,39 @@ ${jsonShape}`;
 ${jsonShape}`;
 }
 
+// Map-reduce: large repos are split into chunks; every seat reviews every
+// chunk in its own step, and the Chair merge dedupes across chunk reports.
+// Single-chunk audits keep the legacy step keys (audit_<seat>).
+const CHUNK_BYTES = 300 * 1024;
+const MAX_CHUNKS = 4;
+
+function chunkFiles(files: { path: string; content: string; bytes: number }[]): string[] {
+  const chunks: string[] = [];
+  let current: typeof files = [];
+  let size = 0;
+  for (const f of files) {
+    if (current.length && size + f.bytes > CHUNK_BYTES && chunks.length < MAX_CHUNKS - 1) {
+      chunks.push(formatFiles(current));
+      current = [];
+      size = 0;
+    }
+    current.push(f);
+    size += f.bytes;
+  }
+  if (current.length) chunks.push(formatFiles(current));
+  return chunks.length ? chunks : [formatFiles([])];
+}
+
 async function insertAuditSteps(
   admin: any,
   run: any,
-  payload: string,
+  chunks: string[],
   batchPrompt: string | null,
   plan: any,
   designBrief: string | null,
   isFinal: boolean,
   batchOutcome: string | null,
+  fileTree: string[],
 ) {
   const contract = isFinal
     ? `FINAL A-Z AUDIT — verify the whole app against the plan + PRD.`
@@ -109,9 +133,16 @@ async function insertAuditSteps(
   const outcomeBlock = batchOutcome?.trim()
     ? `\n\nOWNER-REPORTED OUTCOME (what Lovable actually said or did — errors, drift, surprises; investigate every claim):\n${batchOutcome.trim()}`
     : "";
-  const user = `${contract}${outcomeBlock}
+  const manual = await loadFieldManual(admin);
+  const multi = chunks.length > 1;
+  const rows: any[] = [];
+  chunks.forEach((code, idx) => {
+    const chunkNote = multi
+      ? `\n\nCHUNK ${idx + 1} OF ${chunks.length} — the app is split across parallel review steps. The full file tree (for orientation only):\n${fileTree.join("\n")}\n\nFlag only issues you can verify in THIS chunk's code; do not report files you cannot see as missing.`
+      : "";
+    const user = `${contract}${outcomeBlock}${chunkNote}
 
-${LOVABLE_FIELD_MANUAL}
+${manual}
 
 PRD
 ${plan?.prd_md ?? "(none)"}
@@ -123,25 +154,27 @@ DESIGN BRIEF
 ${designBrief ?? "(none)"}
 
 CODE
-${payload}
+${code}
 
 Produce your JSON now.`;
-
-  const rows = (["inspector", "contrarian", "strategist"] as const).map((seat) => ({
-    run_id: run.id,
-    user_id: run.user_id,
-    step_key: `audit_${seat}`,
-    round: 1,
-    seat,
-    status: "queued",
-    request: {
-      json_output: true,
-      messages: [
-        { role: "system", content: seatPrompt(seat, isFinal) },
-        { role: "user", content: user },
-      ],
-    },
-  }));
+    for (const seat of ["inspector", "contrarian", "strategist"] as const) {
+      rows.push({
+        run_id: run.id,
+        user_id: run.user_id,
+        step_key: multi ? `audit_${seat}_c${idx + 1}` : `audit_${seat}`,
+        round: 1,
+        seat,
+        status: "queued",
+        request: {
+          json_output: true,
+          messages: [
+            { role: "system", content: seatPrompt(seat, isFinal) },
+            { role: "user", content: user },
+          ],
+        },
+      });
+    }
+  });
   await admin.from("run_steps").insert(rows);
 }
 
@@ -203,7 +236,8 @@ async function beginAudit(params: {
     batchOutcome = b?.outcome_md ?? null;
   }
 
-  let payload = "";
+  let chunks: string[] = [];
+  let fileTree: string[] = [];
   let filesAnalyzed = 0;
   let headSha: string | null = null;
   let baseSha: string | null = null;
@@ -214,14 +248,18 @@ async function beginAudit(params: {
     if (!token) return { error: "GitHub not connected" as const };
     baseSha = isFinal ? null : await priorHeadSha(admin, project.id);
     try {
-      // The A-Z audit reads the whole app — give it a wider window than the
-      // per-batch diff audits so mature apps aren't judged on a sliver.
+      // The A-Z audit reads the whole app, map-reduce style: up to
+      // MAX_CHUNKS × CHUNK_BYTES of code split across parallel seat steps.
+      // Per-batch audits stay diff-based and single-chunk.
       const res = await assembleFromGithub(
         token,
         project.github_repo,
-        isFinal ? { baseSha, maxFiles: 60, maxTotalBytes: 450 * 1024, preferKeyFiles: true } : { baseSha },
+        isFinal
+          ? { baseSha, maxFiles: 200, maxTotalBytes: MAX_CHUNKS * CHUNK_BYTES, preferKeyFiles: true }
+          : { baseSha },
       );
-      payload = formatFiles(res.files);
+      chunks = isFinal ? chunkFiles(res.files) : [formatFiles(res.files)];
+      fileTree = res.fileTree;
       filesAnalyzed = res.files.length;
       headSha = res.headSha;
     } catch (e) {
@@ -230,7 +268,7 @@ async function beginAudit(params: {
 
   } else {
     if (!pastedCode || !pastedCode.trim()) return { error: "Empty pasted code" as const };
-    payload = fitPasted(pastedCode);
+    chunks = [fitPasted(pastedCode)];
     filesAnalyzed = 1;
   }
 
@@ -276,7 +314,7 @@ async function beginAudit(params: {
   if (batchId) await admin.from("batches").update({ status: "auditing" }).eq("id", batchId);
   if (isFinal) await admin.from("projects").update({ status: "auditing" }).eq("id", project.id);
 
-  await insertAuditSteps(admin, run, payload, batchPrompt, plan, designBrief, isFinal, batchOutcome);
+  await insertAuditSteps(admin, run, chunks, batchPrompt, plan, designBrief, isFinal, batchOutcome, fileTree);
   fireOrchestrator();
   return { audit_id: audit.id, run_id: run.id };
 }
@@ -380,7 +418,7 @@ Deno.serve(async (req) => {
 
       const res = await beginAudit({
         admin, userId, project, batchId: null,
-        kind: "final_az", loopNo: 1, source, pastedCode, budget: 8.0,
+        kind: "final_az", loopNo: 1, source, pastedCode, budget: 12.0,
       });
       if ("error" in res) return j(400, { error: res.error });
       return j(200, res);

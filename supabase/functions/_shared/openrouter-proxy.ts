@@ -26,7 +26,13 @@ export class DailyCapExceeded extends Error {
 export class SeatUnavailable extends Error {}
 export class NoUserKey extends Error {}
 
-export type ProxyMessage = { role: "system" | "user" | "assistant"; content: string };
+// Multimodal content parts (OpenRouter follows the OpenAI shape). Design runs
+// attach signed screenshot URLs so the board critiques what it can actually see.
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
+export type ProxyMessage = { role: "system" | "user" | "assistant"; content: string | ContentPart[] };
 
 export type ProxyOptions = {
   json?: boolean;
@@ -184,14 +190,20 @@ function isRefusal(content: string, finishReason: string | undefined, jsonMode: 
   if (finishReason === "content_filter" || finishReason === "safety") return true;
   const trimmed = (content ?? "").trim();
   if (!trimmed) return true;
+  // Anything that even looks like an attempt at the requested format is not a
+  // refusal — the validation/re-prompt layer owns malformed output. Refusals
+  // are short prose that LEADS with the refusal, so anchor the regex to the
+  // opening of the text; a mid-document "I can't help but notice…" must not
+  // burn a fallback call.
   if (jsonMode) {
-    // If asked for JSON, but got short prose that matches refusal — refusal.
-    const looksJson = trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("```");
-    if (!looksJson && trimmed.length < 800 && REFUSAL_PATTERNS.some((r) => r.test(trimmed))) return true;
-  } else {
-    if (trimmed.length < 400 && REFUSAL_PATTERNS.some((r) => r.test(trimmed))) return true;
+    if (trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("```")) return false;
+    try {
+      JSON.parse(trimmed);
+      return false;
+    } catch { /* not JSON — fall through to prose check */ }
+    return trimmed.length < 800 && REFUSAL_PATTERNS.some((r) => r.test(trimmed.slice(0, 200)));
   }
-  return false;
+  return trimmed.length < 300 && REFUSAL_PATTERNS.some((r) => r.test(trimmed.slice(0, 200)));
 }
 
 async function callOpenRouter(

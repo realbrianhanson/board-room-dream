@@ -1,5 +1,6 @@
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+
 import {
   adminClient,
   BudgetExceeded,
@@ -8,8 +9,34 @@ import {
   NoUserKey,
   SeatUnavailable,
 } from "../_shared/openrouter-proxy.ts";
-import { assembleFromGithub, formatFiles, ghToken } from "../_shared/github-payload.ts";
-import { LOVABLE_FIELD_MANUAL } from "../_shared/lovable-field-manual.ts";
+
+import {
+  SEATS,
+  type Seat,
+  candidateForLoop,
+  lastCandidateLoop,
+  checkConsensus,
+  resolveConsensusThreshold,
+  validateStepJson,
+} from "./protocol.ts";
+import {
+  createInitialSteps,
+  loadIntake,
+  loadLockedPlan,
+  queueAuditChairMerge,
+  queueBatchesReview,
+  queueBatchesRevise,
+  queueBlueprint,
+  queueBlueprintExtract,
+  queueChangeRequestReview,
+  queueChangeRequestRevise,
+  queueChangeRequestVerdict,
+  queueFinalRuling,
+  queueRound2,
+  queueRound3,
+  queueRound3Extract,
+  queueRound4,
+} from "./queues.ts";
 
 
 const CORS = {
@@ -19,52 +46,15 @@ const CORS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+
 const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? Deno.env.get("SUPABASE_PUBLISHABLE_KEY")!;
+
 const PIPELINE_SECRET = Deno.env.get("PIPELINE_SECRET")!;
+
 const SELF_URL = `${SUPABASE_URL}/functions/v1/boardroom-orchestrator`;
 
-const SEATS = ["chair", "strategist", "contrarian", "inspector"] as const;
-type Seat = typeof SEATS[number];
-
-const SEAT_LABEL: Record<Seat, string> = {
-  chair: "The Chair",
-  strategist: "The Strategist",
-  contrarian: "The Contrarian",
-  inspector: "The Inspector",
-};
-
-const PLAN_RUBRIC = [
-  "painful_problem",
-  "reachable_buyer",
-  "monetization_path",
-  "buildable_scope",
-  "differentiation",
-  "wow_factor",
-] as const;
-const DESIGN_RUBRIC = [
-  "distinctiveness",
-  "premium_feel",
-  "usability",
-  "buildable_in_lovable",
-  "coherence",
-  "signature_element",
-] as const;
-function rubricForKind(kind: string): readonly string[] {
-  return kind === "design" ? DESIGN_RUBRIC : PLAN_RUBRIC;
-}
-
-async function loadLockedPlan(admin: any, projectId: string) {
-  const { data } = await admin
-    .from("plan_versions")
-    .select("content_md, prd_md, features")
-    .eq("project_id", projectId)
-    .eq("kind", "plan")
-    .order("version", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  return data ?? null;
-}
 
 function j(status: number, body: any) {
   return new Response(JSON.stringify(body), {
@@ -72,6 +62,7 @@ function j(status: number, body: any) {
     headers: { ...CORS, "Content-Type": "application/json" },
   });
 }
+
 
 async function verifyUser(token: string): Promise<string | null> {
   if (!token || token === ANON_KEY) return null;
@@ -84,6 +75,7 @@ async function verifyUser(token: string): Promise<string | null> {
   return data.user.id;
 }
 
+
 function fireSelfTick(body: any = {}) {
   fetch(SELF_URL, {
     method: "POST",
@@ -91,6 +83,7 @@ function fireSelfTick(body: any = {}) {
     body: JSON.stringify(body),
   }).catch(() => {});
 }
+
 
 // Idempotent alert insert: skip if there's an OPEN alert for (project, kind).
 async function insertAlert(
@@ -123,757 +116,6 @@ async function insertAlert(
 }
 
 
-
-
-// ============================== Prompt builders ==============================
-
-async function loadIntake(admin: any, projectId: string) {
-  const { data } = await admin
-    .from("intakes")
-    .select("answers, validation_scores")
-    .eq("project_id", projectId)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  return data ?? { answers: {}, validation_scores: null };
-}
-
-async function loadProjectMeta(admin: any, projectId: string) {
-  const { data } = await admin
-    .from("projects")
-    .select("id, user_id, is_import, github_repo")
-    .eq("id", projectId)
-    .maybeSingle();
-  return data ?? null;
-}
-
-async function loadRepoSample(admin: any, project: any, maxFiles: number) {
-  if (!project?.github_repo) return { files: [], fileTree: [] as string[] };
-  const token = await ghToken(admin, project.user_id);
-  if (!token) return { files: [], fileTree: [] as string[] };
-  try {
-    const res = await assembleFromGithub(token, project.github_repo, {
-      maxFiles,
-      maxFileBytes: 100 * 1024,
-      maxTotalBytes: 300 * 1024,
-      preferKeyFiles: true,
-    });
-    return { files: res.files, fileTree: res.fileTree };
-  } catch {
-    return { files: [], fileTree: [] as string[] };
-  }
-}
-
-async function latestAuditSummary(admin: any, projectId: string) {
-  const { data } = await admin
-    .from("audits")
-    .select("id, kind, status, summary, completed_at")
-    .eq("project_id", projectId)
-    .eq("kind", "final_az")
-    .not("summary", "is", null)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  return data ?? null;
-}
-
-function intakeBlock(intake: any) {
-  const a = intake?.answers ?? {};
-  if (a?.imported) {
-    const goals = Array.isArray(a.goals) ? a.goals.join(", ") : "";
-    return `IMPORT INTAKE (owner already built this app)
-Description: ${a.description ?? ""}
-Goals for the board: ${goals || "(none stated)"}`;
-  }
-  return `INTAKE ANSWERS
-Idea: ${a.idea ?? ""}
-Buyer: ${a.buyer ?? ""}
-Pain: ${a.pain ?? ""}
-Monetization: ${a.money ?? ""}
-Inspiration: ${a.inspiration ?? ""}
-
-VALIDATION SCORES
-${JSON.stringify(intake?.validation_scores ?? null, null, 2)}`;
-}
-
-
-function draftsBlock(steps: any[], forSeat?: Seat) {
-  return SEATS
-    .filter((s) => (forSeat ? s !== forSeat : true))
-    .map((s) => {
-      const step = steps.find((x) => x.step_key === `r1_draft_${s}` && x.status === "completed");
-      return `--- ${SEAT_LABEL[s]} (${s}) DRAFT ---\n${step?.response_text ?? "(no draft)"}`;
-    })
-    .join("\n\n");
-}
-
-function objectionsAndStealsBlock(steps: any[]) {
-  const parts: string[] = [];
-  for (const s of SEATS) {
-    const step = steps.find((x) => x.step_key === `r2_exam_${s}` && x.status === "completed");
-    if (!step?.response_json) continue;
-    const j = step.response_json;
-    parts.push(`--- ${SEAT_LABEL[s]} (${s}) — OBJECTIONS AND STEALS ---
-${JSON.stringify(j, null, 2)}`);
-  }
-  return parts.join("\n\n");
-}
-
-function priorRoundFailureBlock(steps: any[], previousLoop: number) {
-  const votes = SEATS
-    .map((s) => steps.find((x) => x.step_key === `r4_vote_${s}_loop${previousLoop}` && x.status === "completed"))
-    .filter(Boolean);
-  const blocking: string[] = [];
-  const lowScores: string[] = [];
-  for (const v of votes as any[]) {
-    const jj = v.response_json ?? {};
-    (jj.blocking_objections ?? []).forEach((b: string) => blocking.push(`- [${v.seat}] ${b}`));
-    for (const k of [...PLAN_RUBRIC, ...DESIGN_RUBRIC]) {
-      const n = Number(jj?.scores?.[k]);
-      if (Number.isFinite(n) && n < 8) lowScores.push(`- [${v.seat}] ${k}: ${n}`);
-    }
-  }
-  return `PRIOR VOTE FAILED (loop ${previousLoop})
-
-BLOCKING OBJECTIONS STILL STANDING:
-${blocking.length ? blocking.join("\n") : "(none)"}
-
-RUBRIC SCORES BELOW 8:
-${lowScores.length ? lowScores.join("\n") : "(none)"}
-
-Revise ONLY the contested parts. Preserve agreed parts verbatim.`;
-}
-
-// ============================== Step queuing ==============================
-
-async function queueRound1(admin: any, run: any) {
-  const intake = await loadIntake(admin, run.project_id);
-  const project = await loadProjectMeta(admin, run.project_id);
-  const isImport = !!project?.is_import;
-  let system: string;
-  let userContent: string;
-
-  if (run.kind === "design") {
-    const plan = await loadLockedPlan(admin, run.project_id);
-    system =
-      "Round 1 of the Design Council. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best design direction for this app. You MUST include: concept/mood; palette as specific HSL values; type pairing with specific font names; spacing and shape language; ONE distinctive signature element (a structural design move — non-negotiable, this is the point); and motion rules. Be specific, opinionated, and premium. Avoid generic AI-slop aesthetics.";
-    if (isImport && !plan) {
-      const sample = await loadRepoSample(admin, project, 10);
-      userContent = `${intakeBlock(intake)}\n\nCODE FILES FROM THE OWNER'S REPO (frontend-biased sample)\n${formatFiles(sample.files)}\n\nThis is an existing app — critique what's there and propose a design direction that elevates it. Write your Round 1 design direction now.`;
-    } else {
-      userContent = `${intakeBlock(intake)}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nWrite your Round 1 design direction now.`;
-    }
-  } else if (run.kind === "plan" && isImport) {
-    system =
-      "Round 1 of the board's improvement deliberation. This app already exists — the owner has brought it to the board. You are drafting INDEPENDENTLY. Produce a PRIORITIZED IMPROVEMENT PLAN: what's broken, what's missing, what to build next, ranked by impact. Be specific, opinionated, and concrete about the code you can see. Do not restart the app from scratch.";
-    const sample = await loadRepoSample(admin, project, 15);
-    const audit = await latestAuditSummary(admin, run.project_id);
-    const treeBlock = sample.fileTree.length ? sample.fileTree.join("\n") : "(no repo linked)";
-    const auditBlock = audit?.summary
-      ? `LATEST A-Z AUDIT SUMMARY\n${JSON.stringify(audit.summary, null, 2)}`
-      : "LATEST A-Z AUDIT SUMMARY\n(no A-Z audit yet)";
-    userContent = `${intakeBlock(intake)}\n\nREPO FILE TREE (top ${sample.fileTree.length})\n${treeBlock}\n\nKEY FILES\n${formatFiles(sample.files)}\n\n${auditBlock}\n\nWrite your Round 1 prioritized improvement plan now.`;
-  } else {
-    system =
-      "Round 1 of the board's deliberation. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best version of the app plan: concept, target user, core features (MVP-first, ruthlessly cut), the data the app stores, and what you'd cut. Be specific, concise, and opinionated.";
-    userContent = `${intakeBlock(intake)}\n\nWrite your Round 1 draft now.`;
-  }
-  const rows = SEATS.map((seat) => ({
-    run_id: run.id,
-    user_id: run.user_id,
-    step_key: `r1_draft_${seat}`,
-    round: 1,
-    seat,
-    status: "queued",
-    request: {
-      // Round 1 is the divergence round — hotter sampling so four seats
-      // actually produce four different drafts worth debating.
-      temperature: 0.85,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: userContent },
-      ],
-    },
-  }));
-  await admin.from("run_steps").insert(rows);
-}
-
-
-async function queueRound2(admin: any, run: any, steps: any[]) {
-  const intake = await loadIntake(admin, run.project_id);
-  const rows = SEATS.map((seat) => {
-    const system = `Round 2 — Cross-examination. You are reviewing the OTHER three seats' drafts. "No objections" is not an option. If you cannot find real flaws you are not looking hard enough.
-
-Return ONLY valid JSON matching this shape:
-{
-  "objections": [ { "target_seat": "chair"|"strategist"|"contrarian"|"inspector", "severity": "blocking"|"major"|"minor", "text": "..." } ],
-  "steals": [ { "from_seat": "chair"|"strategist"|"contrarian"|"inspector", "idea": "..." } ]
-}
-
-Requirements: at least ONE objection targeting EACH of the three other seats, at least THREE objections total, and at least ONE steal.`;
-    const user = `${intakeBlock(intake)}\n\n${draftsBlock(steps, seat)}\n\nProduce your JSON now.`;
-    return {
-      run_id: run.id,
-      user_id: run.user_id,
-      step_key: `r2_exam_${seat}`,
-      round: 2,
-      seat,
-      status: "queued",
-      request: {
-        json_output: true,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-      },
-    };
-  });
-  await admin.from("run_steps").insert(rows);
-}
-
-async function queueRound3(admin: any, run: any, steps: any[], loop: number) {
-  const intake = await loadIntake(admin, run.project_id);
-  const isDesign = run.kind === "design";
-  const plan = isDesign ? await loadLockedPlan(admin, run.project_id) : null;
-  const planShape = `{
-  "candidate_md": "Full markdown plan: concept, target user, MVP features, data stored, cuts.",
-  "decision_log": [ { "from_seat": "...", "objection": "...", "decision": "accepted"|"rejected", "reason": "..." } ],
-  "steals_adopted": [ "..." ]
-}`;
-  const designShape = `{
-  "candidate_md": "Full markdown design brief — a paste-ready design system prompt with these EXACT H2 sections in this exact order:\\n## Direction\\n## Tokens (CSS variables, HSL)\\n## Type\\n## Spacing & shape\\n## Signature element\\n## Motion\\n## Component rules",
-  "decision_log": [ { "from_seat": "...", "objection": "...", "decision": "accepted"|"rejected", "reason": "..." } ],
-  "steals_adopted": [ "..." ]
-}`;
-  const system = `Round 3 — Chair synthesis${loop > 0 ? ` (loop ${loop}, revising after a failed vote)` : ""}. You are the Chair. Weld the four ${isDesign ? "design directions" : "drafts"} and the objections into ONE candidate ${isDesign ? "design brief" : "plan"}.
-
-${loop > 0 ? "Revise ONLY the contested parts from the previous vote. Preserve agreed parts verbatim. " : ""}Return ONLY valid JSON matching this shape:
-${isDesign ? designShape : planShape}${isDesign ? "\n\nEvery H2 header must appear exactly as written. Be specific: exact HSL values, real font names, concrete component rules." : ""}
-
-Write candidate_md at FULL length and quality — never compress or flatten it because it is inside a JSON string.`;
-  const parts: string[] = [intakeBlock(intake)];
-  if (isDesign && plan) parts.push(`LOCKED PLAN\n\n${plan.content_md ?? ""}\n\nPRD\n\n${plan.prd_md ?? "(none)"}`);
-  parts.push(draftsBlock(steps), objectionsAndStealsBlock(steps));
-  if (loop > 0) parts.push(priorRoundFailureBlock(steps, loop - 1));
-  const user = `${parts.join("\n\n")}\n\nProduce your JSON now.`;
-  await admin.from("run_steps").insert({
-    run_id: run.id,
-    user_id: run.user_id,
-    step_key: `r3_synthesis_chair_loop${loop}`,
-    round: 3,
-    seat: "chair",
-    status: "queued",
-    request: {
-      json_output: true,
-      reasoning_effort: "high",
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    },
-  });
-}
-
-async function queueRound4(admin: any, run: any, steps: any[], loop: number) {
-  const intake = await loadIntake(admin, run.project_id);
-  const synth = steps.find((x) => x.step_key === `r3_synthesis_chair_loop${loop}` && x.status === "completed");
-  const candidateMd = String(synth?.response_json?.candidate_md ?? synth?.response_text ?? "");
-  const rubric = rubricForKind(run.kind);
-  const scoresShape = rubric.map((k) => `    "${k}": 1-10`).join(",\n");
-  const rows = SEATS.map((seat) => {
-    const myR2 = steps.find((x) => x.step_key === `r2_exam_${seat}` && x.status === "completed");
-    const myObjections = myR2?.response_json?.objections ?? [];
-    const system = `Round 4 — Scored vote${loop > 0 ? ` (loop ${loop})` : ""}. Vote on the candidate ${run.kind === "design" ? "design brief" : "plan"} against the founder's intake and your Round-2 objections.
-
-Return ONLY valid JSON matching this shape:
-{
-  "scores": {
-${scoresShape}
-  },
-  "objection_resolutions": [
-    { "objection": "your Round-2 objection, restated", "status": "resolved"|"standing", "evidence_quote": "VERBATIM quote from the candidate that resolves it — required when status is resolved" }
-  ],
-  "blocking_objections": [ "..." ],
-  "comment": "One paragraph."
-}
-
-Every score must be an integer 1-10. Score against the founder's actual intake — not the candidate in a vacuum.
-
-Resolution discipline: an objection is "resolved" ONLY if you can quote the exact candidate text that resolves it. No quote = it still stands. Add still-standing dealbreakers to blocking_objections. Do not inflate scores to reach consensus.`;
-    const user = `${intakeBlock(intake)}\n\nCANDIDATE\n\n${candidateMd}\n\nYOUR ROUND-2 OBJECTIONS\n${JSON.stringify(myObjections, null, 2)}\n\nProduce your JSON now.`;
-    return {
-      run_id: run.id,
-      user_id: run.user_id,
-      step_key: `r4_vote_${seat}_loop${loop}`,
-      round: 4,
-      seat,
-      status: "queued",
-      request: {
-        json_output: true,
-        // Voting is a judgment call, not a creative act — keep it cold.
-        temperature: 0.2,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-      },
-    };
-  });
-  await admin.from("run_steps").insert(rows);
-}
-
-async function queueFinalRuling(admin: any, run: any, steps: any[]) {
-  const intake = await loadIntake(admin, run.project_id);
-  const allR3 = steps.filter((x) => x.step_key.startsWith("r3_synthesis_chair_loop") && x.status === "completed");
-  const lastR3 = allR3[allR3.length - 1];
-  const lastLoop = run.loop_no; // by now already incremented to 3
-  const previousLoop = Math.max(0, lastLoop - 1);
-  const failure = priorRoundFailureBlock(steps, previousLoop);
-  const system = `The board has failed to reach consensus after three synthesis loops. You are the Chair — RULE. Accept some outstanding objections, reject others, and produce the final plan. This is a chair-ruled plan, not a consensus plan.
-
-Return ONLY valid JSON matching this shape:
-{
-  "final_md": "Full markdown plan.",
-  "ruling_note": "One paragraph explaining the ruling.",
-  "dissent_ledger": [ { "seat": "...", "objection": "...", "chair_response": "..." } ]
-}`;
-  const user = `${intakeBlock(intake)}\n\nLAST CANDIDATE\n${lastR3?.response_json?.candidate_md ?? ""}\n\n${failure}\n\nProduce your JSON now.`;
-  await admin.from("run_steps").insert({
-    run_id: run.id,
-    user_id: run.user_id,
-    step_key: `r_final_ruling_chair`,
-    round: 5,
-    seat: "chair",
-    status: "queued",
-    request: {
-      json_output: true,
-      reasoning_effort: "high",
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    },
-  });
-}
-
-async function queueBlueprint(admin: any, run: any, contentMd: string, intake: any) {
-  const system = `Blueprint — you are the Chair drafting the implementation documents for the locked plan. Turn the plan into a precise PRD and a features list.
-
-${LOVABLE_FIELD_MANUAL}
-
-Return ONLY valid JSON matching this shape:
-{
-  "prd_md": "Full markdown PRD with these exact H2 sections in this exact order: ## User types\\n## Jobs to be done\\n## Data model (tables and columns)\\n## Pages\\n## Edge functions\\n## Integrations\\n## Out of scope for v1",
-  "features": [ { "name": "...", "description": "...", "priority": "mvp" | "later" } ]
-}
-
-Every section header must appear exactly as written. Be specific: name concrete tables, columns, page routes, and edge functions. Write prd_md at FULL length and quality — never compress it because it is inside a JSON string.`;
-  const user = `${intakeBlock(intake)}\n\nLOCKED PLAN\n\n${contentMd}\n\nProduce your JSON now.`;
-  await admin.from("run_steps").insert({
-    run_id: run.id,
-    user_id: run.user_id,
-    step_key: "r5_blueprint_chair",
-    round: 5,
-    seat: "chair",
-    status: "queued",
-    request: {
-      json_output: true,
-      reasoning_effort: "high",
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    },
-  });
-}
-
-async function queueChangeRequestExam(admin: any, run: any, cr: any, plan: any) {
-  const system = `Change Request review. The board has already locked a plan. A change is being proposed. Decide your stance.
-
-Return ONLY valid JSON matching this shape:
-{
-  "stance": "approve" | "approve_with_amendments" | "reject",
-  "reasoning": "One paragraph.",
-  "amendments": [ "..." ]
-}`;
-  const rows = SEATS.map((seat) => ({
-    run_id: run.id,
-    user_id: run.user_id,
-    step_key: `cr_exam_${seat}`,
-    round: 1,
-    seat,
-    status: "queued",
-    request: {
-      json_output: true,
-      messages: [
-        { role: "system", content: system },
-        {
-          role: "user",
-          content: `LOCKED PLAN\n\n${plan.content_md ?? ""}\n\nPRD\n\n${plan.prd_md ?? "(none)"}\n\nREQUESTED CHANGE\n\n${cr.description}\n\nProduce your JSON now.`,
-        },
-      ],
-    },
-  }));
-  await admin.from("run_steps").insert(rows);
-}
-
-async function queueChangeRequestVerdict(admin: any, run: any, cr: any, plan: any, steps: any[]) {
-  const stances = SEATS.map((s) => {
-    const step = steps.find((x) => x.step_key === `cr_exam_${s}` && x.status === "completed");
-    return `--- ${SEAT_LABEL[s]} ---\n${JSON.stringify(step?.response_json ?? { missing: true }, null, 2)}`;
-  }).join("\n\n");
-  const system = `Change Request verdict. You are the Chair. Rule on the change based on the four seats' stances.
-
-Return ONLY valid JSON matching this shape:
-{
-  "verdict": "approved" | "rejected",
-  "rationale": "One paragraph.",
-  "amended_plan_md": "Full markdown of the AMENDED plan (required when approved).",
-  "amended_prd_md": "Full markdown of the AMENDED PRD, same H2 sections as the original (required when approved).",
-  "amended_features": [ { "name": "...", "description": "...", "priority": "mvp"|"later" } ]
-}
-
-If rejected, amended_* may be empty strings / empty array.`;
-  await admin.from("run_steps").insert({
-    run_id: run.id,
-    user_id: run.user_id,
-    step_key: "cr_verdict_chair",
-    round: 2,
-    seat: "chair",
-    status: "queued",
-    request: {
-      json_output: true,
-      messages: [
-        { role: "system", content: system },
-        {
-          role: "user",
-          content: `LOCKED PLAN\n\n${plan.content_md ?? ""}\n\nCURRENT PRD\n\n${plan.prd_md ?? "(none)"}\n\nREQUESTED CHANGE\n\n${cr.description}\n\nSEAT STANCES\n\n${stances}\n\nProduce your JSON now.`,
-        },
-      ],
-    },
-  });
-}
-
-async function queueBatchesStep(admin: any, run: any) {
-  const plan = await loadLockedPlan(admin, run.project_id);
-  const { data: design } = await admin
-    .from("plan_versions")
-    .select("content_md")
-    .eq("project_id", run.project_id)
-    .eq("kind", "design")
-    .order("version", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const designSection = design?.content_md
-    ? `LOCKED DESIGN BRIEF\n\n${design.content_md}\n\nBatch 1 MUST install these design tokens (CSS variables, Tailwind config, font imports) BEFORE any feature work.`
-    : `NO LOCKED DESIGN BRIEF — do not fabricate one. The student will convene the Design Council later.`;
-
-  const system = `You are the Chair, sequencing this student's build for their Lovable project. Produce 6-14 dependency-safe, single-concern build batches that turn the locked plan + PRD into a shippable app.
-
-${LOVABLE_FIELD_MANUAL}
-
-Rules for EVERY batch:
-- Numbered items with EXACT scope — no wishlists. Name exact routes, components, tables, and columns from the PRD in every item.
-- Code batches (channel 'lovable' or 'supabase') include an "Acceptance checks:" list — 2-5 numbered checks the student verifies in the preview with clicks only.
-- Ends with the sentence: "Keep everything else identical."
-- Code batches (channel 'lovable' or 'supabase') also end with: "Typecheck when done."
-- Channel 'supabase' = pure database/schema/RLS/edge-function work. State access rules for every table in plain words.
-- Channel 'human' = things only the student can do in external consoles (Stripe, DNS, OAuth apps, App Store, domain purchase) — write plain-language numbered steps, no code, no acceptance checks, no typecheck line.
-- Channel 'lovable' = frontend + integration work the student will paste into Lovable.
-- Sequence so nothing depends on a later batch. Auth/data foundations early. Polish/SEO/analytics late.
-- Every prompt_md follows this skeleton:
-  """
-  Batch N — <one-line batch name>. Numbered items only, no scope creep.
-
-  1. <item>
-  2. <item>
-  ...
-
-  Acceptance checks:  ← omit for channel 'human'
-  1. <click-only check>
-  2. <click-only check>
-
-  Keep everything else identical.
-  Typecheck when done.  ← omit for channel 'human'
-  """
-
-Return ONLY valid JSON:
-{
-  "batches": [
-    { "batch_no": 1, "title": "Foundation & shell", "channel": "lovable"|"supabase"|"human", "prompt_md": "Batch 1 — ...\\n\\n1. ...\\n\\nAcceptance checks:\\n1. ...\\n\\nKeep everything else identical.\\nTypecheck when done." }
-  ]
-}
-
-Constraints: 6-14 batches, unique ascending integer batch_no starting at 1, every prompt_md non-empty, FULL length, and following the skeleton exactly.`;
-
-  const featuresBlock = Array.isArray(plan?.features) && plan!.features.length
-    ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
-    : "(none listed)";
-
-  const user = `LOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nProduce the JSON now.`;
-
-  await admin.from("run_steps").insert({
-    run_id: run.id,
-    user_id: run.user_id,
-    step_key: "batches_chair",
-    round: 1,
-    seat: "chair",
-    status: "queued",
-    request: {
-      json_output: true,
-      reasoning_effort: "high",
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    },
-  });
-}
-
-// The build batches are the product — they get the same adversarial treatment
-// as the plan. Inspector checks coverage + dependency order, Contrarian attacks
-// scope + security. Blocking issues send the draft back to the Chair once.
-async function queueBatchesReview(admin: any, run: any, draftJson: any) {
-  const plan = await loadLockedPlan(admin, run.project_id);
-  const draftBlock = JSON.stringify(draftJson?.batches ?? [], null, 2);
-  const shape = `Return ONLY valid JSON:
-{
-  "verdict": "approve" | "revise",
-  "issues": [ { "batch_no": <number or null>, "severity": "blocking"|"major"|"minor", "text": "specific issue and the fix" } ]
-}
-
-Verdict "approve" only if there are zero blocking issues. Be specific — name the batch and the exact item.`;
-  const prompts: Record<string, string> = {
-    inspector: `Batches review — Inspector. Check the drafted build sequence for coverage and dependency integrity:
-- Every MVP feature in the PRD lands in some batch; name any orphan (blocking).
-- No batch references a table, route, component, or function created in a LATER batch (blocking).
-- Design tokens are installed before any feature work that uses them.
-- Code batches carry acceptance checks a non-coder can run by clicks alone; skeleton followed exactly.
-
-${LOVABLE_FIELD_MANUAL}
-
-${shape}`,
-    contrarian: `Batches review — Contrarian. Attack the drafted build sequence:
-- Any single batch too big for Lovable to execute faithfully in one paste (mixes concerns, >~5 files, vague items) — blocking; say how to split.
-- Any table created without explicit access rules stated in plain words — blocking.
-- Human-channel work (Stripe, OAuth, DNS) hidden inside a code batch — blocking.
-- Scope creep beyond the locked plan — major; name the cut.
-
-${LOVABLE_FIELD_MANUAL}
-
-${shape}`,
-  };
-  const user = `LOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nDRAFT BATCHES\n\n${draftBlock}\n\nProduce your JSON now.`;
-  const rows = (["inspector", "contrarian"] as const).map((seat) => ({
-    run_id: run.id,
-    user_id: run.user_id,
-    step_key: `batches_review_${seat}`,
-    round: 2,
-    seat,
-    status: "queued",
-    request: {
-      json_output: true,
-      temperature: 0.2,
-      messages: [
-        { role: "system", content: prompts[seat] },
-        { role: "user", content: user },
-      ],
-    },
-  }));
-  await admin.from("run_steps").insert(rows);
-}
-
-async function queueBatchesRevise(admin: any, run: any, draftJson: any, reviewSteps: any[]) {
-  const issues = reviewSteps
-    .map((s: any) => `--- ${SEAT_LABEL[s.seat as Seat]} ---\n${JSON.stringify(s.response_json ?? { missing: true }, null, 2)}`)
-    .join("\n\n");
-  const system = `Batches revision — you are the Chair. The Inspector and Contrarian reviewed your drafted build sequence and found issues. Fix every blocking issue and every major issue you agree with; keep everything uncontested verbatim.
-
-${LOVABLE_FIELD_MANUAL}
-
-Return ONLY the same JSON shape as the original draft:
-{
-  "batches": [ { "batch_no": 1, "title": "...", "channel": "lovable"|"supabase"|"human", "prompt_md": "..." } ]
-}
-
-Constraints: 6-14 batches, unique ascending integer batch_no starting at 1, every prompt_md non-empty, FULL length, following the batch skeleton exactly (numbered items, acceptance checks for code batches, "Keep everything else identical.", "Typecheck when done." for code batches).`;
-  const user = `YOUR DRAFT\n\n${JSON.stringify(draftJson?.batches ?? [], null, 2)}\n\nREVIEW ISSUES\n\n${issues}\n\nProduce the revised JSON now.`;
-  await admin.from("run_steps").insert({
-    run_id: run.id,
-    user_id: run.user_id,
-    step_key: "batches_revise_chair",
-    round: 3,
-    seat: "chair",
-    status: "queued",
-    request: {
-      json_output: true,
-      reasoning_effort: "high",
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    },
-  });
-}
-
-async function createInitialSteps(admin: any, run: any) {
-  if (run.kind === "test") {
-    await admin.from("run_steps").insert({
-      run_id: run.id,
-      user_id: run.user_id,
-      step_key: "r1_test_chair",
-      round: 1,
-      seat: "chair",
-      status: "queued",
-      request: {
-        messages: [
-          { role: "user", content: "Reply with exactly one sentence confirming the pipeline is live." },
-        ],
-      },
-    });
-    return;
-  }
-  if (run.kind === "plan" || run.kind === "design") {
-    await queueRound1(admin, run);
-    return;
-  }
-  if (run.kind === "batches") {
-    await queueBatchesStep(admin, run);
-    return;
-  }
-  if (run.kind === "change_request") {
-    const crId = run.consensus?.change_request_id;
-    if (!crId) {
-      await admin.from("boardroom_runs").update({ status: "failed", error: "Missing change_request_id" }).eq("id", run.id);
-      return;
-    }
-    const { data: activeCr } = await admin
-      .from("change_requests")
-      .select("*")
-      .eq("id", crId)
-      .maybeSingle();
-    if (!activeCr) {
-      await admin.from("boardroom_runs").update({ status: "failed", error: "Change request not found" }).eq("id", run.id);
-      return;
-    }
-    const { data: plan } = await admin
-      .from("plan_versions")
-      .select("content_md, prd_md")
-      .eq("project_id", run.project_id)
-      .eq("kind", "plan")
-      .order("version", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    await queueChangeRequestExam(admin, run, activeCr, plan ?? {});
-    return;
-  }
-  await admin
-    .from("boardroom_runs")
-    .update({ status: "paused", consensus: { awaiting: "future_batch" } })
-    .eq("id", run.id);
-}
-
-// ============================== Validation ==============================
-
-function validateStepJson(stepKey: string, parsed: any, kind: string = "plan"): string | null {
-  if (!parsed || typeof parsed !== "object") return "Response is not a JSON object.";
-  if (stepKey.startsWith("r2_exam_")) {
-    const seat = stepKey.replace("r2_exam_", "");
-    const objections = parsed.objections;
-    const steals = parsed.steals;
-    if (!Array.isArray(objections)) return "Missing objections array.";
-    if (!Array.isArray(steals)) return "Missing steals array.";
-    if (objections.length < 3) return "Need at least 3 objections total.";
-    if (steals.length < 1) return "Need at least 1 steal.";
-    const others = SEATS.filter((s) => s !== seat);
-    for (const other of others) {
-      if (!objections.some((o: any) => o?.target_seat === other)) {
-        return `Need at least one objection targeting ${other}.`;
-      }
-    }
-    return null;
-  }
-  if (stepKey.startsWith("r3_synthesis_chair_loop")) {
-    if (typeof parsed.candidate_md !== "string" || !parsed.candidate_md.trim()) {
-      return "Missing candidate_md string.";
-    }
-    if (!Array.isArray(parsed.decision_log)) return "Missing decision_log array.";
-    return null;
-  }
-  if (stepKey.startsWith("r4_vote_")) {
-    const scores = parsed.scores;
-    if (!scores || typeof scores !== "object") return "Missing scores object.";
-    for (const k of rubricForKind(kind)) {
-      const n = scores[k];
-      if (!Number.isInteger(n) || n < 1 || n > 10) return `Score ${k} must be an integer 1-10.`;
-    }
-    if (!Array.isArray(parsed.blocking_objections)) return "Missing blocking_objections array.";
-    if (!Array.isArray(parsed.objection_resolutions)) return "Missing objection_resolutions array.";
-    for (const r of parsed.objection_resolutions) {
-      if (r?.status === "resolved" && !String(r?.evidence_quote ?? "").trim()) {
-        return "Every resolved objection needs a verbatim evidence_quote from the candidate.";
-      }
-    }
-    return null;
-  }
-  if (stepKey.startsWith("batches_review_")) {
-    if (!["approve", "revise"].includes(parsed.verdict)) return "Missing/invalid verdict.";
-    if (!Array.isArray(parsed.issues)) return "Missing issues array.";
-    return null;
-  }
-  if (stepKey === "r_final_ruling_chair") {
-    if (typeof parsed.final_md !== "string" || !parsed.final_md.trim()) return "Missing final_md.";
-    if (!Array.isArray(parsed.dissent_ledger)) return "Missing dissent_ledger array.";
-    return null;
-  }
-  if (stepKey === "r5_blueprint_chair") {
-    if (typeof parsed.prd_md !== "string" || !parsed.prd_md.trim()) return "Missing prd_md string.";
-    if (!Array.isArray(parsed.features)) return "Missing features array.";
-    for (const f of parsed.features) {
-      if (!f || typeof f.name !== "string" || typeof f.description !== "string") return "Each feature needs name and description.";
-      if (f.priority !== "mvp" && f.priority !== "later") return "Each feature.priority must be 'mvp' or 'later'.";
-    }
-    return null;
-  }
-  if (stepKey.startsWith("cr_exam_")) {
-    if (!["approve", "approve_with_amendments", "reject"].includes(parsed.stance)) return "Missing/invalid stance.";
-    if (typeof parsed.reasoning !== "string" || !parsed.reasoning.trim()) return "Missing reasoning.";
-    if (!Array.isArray(parsed.amendments)) return "Missing amendments array.";
-    return null;
-  }
-  if (stepKey === "cr_verdict_chair") {
-    if (!["approved", "rejected"].includes(parsed.verdict)) return "Missing/invalid verdict.";
-    if (typeof parsed.rationale !== "string" || !parsed.rationale.trim()) return "Missing rationale.";
-    if (parsed.verdict === "approved") {
-      if (typeof parsed.amended_plan_md !== "string" || !parsed.amended_plan_md.trim()) return "Approved verdict requires amended_plan_md.";
-      if (typeof parsed.amended_prd_md !== "string" || !parsed.amended_prd_md.trim()) return "Approved verdict requires amended_prd_md.";
-      if (!Array.isArray(parsed.amended_features)) return "Approved verdict requires amended_features array.";
-    }
-    return null;
-  }
-  if (stepKey === "batches_chair" || stepKey === "batches_revise_chair") {
-    if (!parsed || !Array.isArray(parsed.batches)) return "Missing batches array.";
-    const b = parsed.batches;
-    if (b.length < 6 || b.length > 14) return "batches must contain 6-14 items.";
-    let prev = 0;
-    const seen = new Set<number>();
-    for (const item of b) {
-      if (!item || typeof item !== "object") return "Each batch must be an object.";
-      const n = Number(item.batch_no);
-      if (!Number.isFinite(n) || n <= prev) return "batch_no must be unique and strictly ascending.";
-      if (seen.has(n)) return "batch_no values must be unique.";
-      seen.add(n);
-      prev = n;
-      if (typeof item.title !== "string" || !item.title.trim()) return "Each batch needs a title.";
-      if (!["lovable", "supabase", "human"].includes(item.channel)) return "Each batch.channel must be lovable, supabase, or human.";
-      if (typeof item.prompt_md !== "string" || !item.prompt_md.trim()) return "Each batch needs a non-empty prompt_md.";
-    }
-    return null;
-  }
-  return null;
-}
-
 async function claimOneStep(admin: any, runId: string) {
   const { data: candidate } = await admin
     .from("run_steps")
@@ -886,13 +128,14 @@ async function claimOneStep(admin: any, runId: string) {
   if (!candidate) return null;
   const { data: claimed } = await admin
     .from("run_steps")
-    .update({ status: "running" })
+    .update({ status: "running", started_at: new Date().toISOString() })
     .eq("id", candidate.id)
     .eq("status", "queued")
     .select("*")
     .maybeSingle();
   return claimed;
 }
+
 
 async function executeStep(admin: any, run: any, step: any) {
   const baseMessages = step.request?.messages ?? [];
@@ -1019,25 +262,6 @@ async function executeStep(admin: any, run: any, step: any) {
   }
 }
 
-// ============================== Consensus / locking ==============================
-
-function checkConsensus(voteSteps: any[], kind: string = "plan"): { pass: boolean; scores: any } {
-  const scoreSets: Record<string, any> = {};
-  let pass = true;
-  if (voteSteps.length < 4) return { pass: false, scores: {} };
-  const rubric = rubricForKind(kind);
-  for (const v of voteSteps) {
-    const j = v.response_json ?? {};
-    scoreSets[v.seat] = { scores: j.scores ?? null, blocking_objections: j.blocking_objections ?? [] };
-    if (!j.scores) { pass = false; continue; }
-    for (const k of rubric) {
-      const n = Number(j.scores[k]);
-      if (!Number.isFinite(n) || n < 8) pass = false;
-    }
-    if (Array.isArray(j.blocking_objections) && j.blocking_objections.length > 0) pass = false;
-  }
-  return { pass, scores: scoreSets };
-}
 
 async function lockPlanAndQueueBlueprint(
   admin: any,
@@ -1070,13 +294,13 @@ async function lockPlanAndQueueBlueprint(
       decisionLog = [{ from_seat: "chair", decision: "ruled", reason: final.response_json.ruling_note }];
     }
   } else {
-    const allR3 = steps
-      .filter((x) => x.step_key.startsWith("r3_synthesis_chair_loop") && x.status === "completed")
+    contentMd = candidateForLoop(steps, lastCandidateLoop(steps));
+    // Decision logs live in the extract steps (two-phase) or legacy synthesis JSON.
+    const logSteps = steps
+      .filter((x) => (x.step_key.startsWith("r3_extract_chair_loop") || x.step_key.startsWith("r3_synthesis_chair_loop")) && x.status === "completed")
       .sort((a, b) => a.step_key.localeCompare(b.step_key));
-    const lastR3 = allR3[allR3.length - 1];
-    contentMd = String(lastR3?.response_json?.candidate_md ?? lastR3?.response_text ?? "");
-    for (const r3 of allR3) {
-      const dl = r3?.response_json?.decision_log;
+    for (const s of logSteps) {
+      const dl = s?.response_json?.decision_log;
       if (Array.isArray(dl)) decisionLog.push(...dl);
     }
   }
@@ -1143,13 +367,19 @@ async function lockPlanAndQueueBlueprint(
   await queueBlueprint(admin, refreshed, contentMd, intake);
 }
 
+
 async function finalizeBlueprint(admin: any, run: any, steps: any[]) {
   const bp = steps.find((x) => x.step_key === "r5_blueprint_chair" && x.status === "completed");
+  const extract = steps.find((x) => x.step_key === "r5_blueprint_extract_chair" && x.status === "completed");
   const meta = run.consensus ?? {};
   const finalStatus = meta.pending_final_status === "chair_ruled" ? "chair_ruled" : "consensus";
   const planVersionId = meta.plan_version_id;
-  const prdMd = String(bp?.response_json?.prd_md ?? "");
-  const features = Array.isArray(bp?.response_json?.features) ? bp!.response_json.features : [];
+  // Two-phase: PRD is the draft's raw markdown, features come from the
+  // extract step. Legacy single-phase JSON runs still finalize correctly.
+  const prdMd = String(bp?.response_json?.prd_md ?? bp?.response_text ?? "");
+  const features = Array.isArray(extract?.response_json?.features)
+    ? extract!.response_json.features
+    : Array.isArray(bp?.response_json?.features) ? bp!.response_json.features : [];
   if (planVersionId && prdMd) {
     await admin
       .from("plan_versions")
@@ -1166,10 +396,15 @@ async function finalizeBlueprint(admin: any, run: any, steps: any[]) {
     .eq("id", run.id);
 }
 
+
 async function finalizeChangeRequest(admin: any, run: any, steps: any[]) {
   const crId = run.consensus?.change_request_id;
   const verdictStep = steps.find((x) => x.step_key === "cr_verdict_chair" && x.status === "completed");
-  const v = verdictStep?.response_json ?? {};
+  // If the Inspector sent the amendment back and the Chair produced a valid
+  // revision, the revision is the document of record.
+  const reviseStep = steps.find((x) => x.step_key === "cr_revise_chair" && x.status === "completed");
+  const chosen = reviseStep?.response_json && !reviseStep.response_json.invalid ? reviseStep : verdictStep;
+  const v = chosen?.response_json ?? {};
   const verdict = v.verdict === "approved" ? "approved" : "rejected";
   let newVersionId: string | null = null;
   if (verdict === "approved" && crId) {
@@ -1219,6 +454,7 @@ async function finalizeChangeRequest(admin: any, run: any, steps: any[]) {
     .eq("id", run.id);
 }
 
+
 // ============================== Round advancement ==============================
 
 async function finalizeBatches(admin: any, run: any, batchesJson: any[]) {
@@ -1256,6 +492,7 @@ async function finalizeBatches(admin: any, run: any, batchesJson: any[]) {
     .eq("id", run.id);
 }
 
+
 async function loadAllSteps(admin: any, runId: string) {
   const { data } = await admin
     .from("run_steps")
@@ -1265,57 +502,12 @@ async function loadAllSteps(admin: any, runId: string) {
   return data ?? [];
 }
 
+
 async function getRun(admin: any, runId: string) {
   const { data } = await admin.from("boardroom_runs").select("*").eq("id", runId).maybeSingle();
   return data;
 }
 
-// ============================== Audit helpers ==============================
-
-async function queueAuditChairMerge(admin: any, run: any, steps: any[]) {
-  const seatOutput = (seat: string) => {
-    const st = steps.find((x: any) => x.step_key === `audit_${seat}` && x.status === "completed");
-    return `--- ${seat.toUpperCase()} ---\n${JSON.stringify(st?.response_json ?? { missing: true }, null, 2)}`;
-  };
-  const combined = ["inspector", "contrarian", "strategist"].map(seatOutput).join("\n\n");
-  const isFinal = run.consensus?.audit_kind === "final_az";
-  const system = `You are the Chair. Three seats independently reviewed the student's code. Merge, dedupe, and assign FINAL severities.
-
-Severities:
-- P0: broken build, data loss risk, auth/RLS bypass, secret exposure.
-- P1: contract miss (batch/PRD says X, code does Y), critical UX flow broken, insecure default.
-- P2: notable UX / copy / design-brief drift, minor a11y, small refactor.
-- P3: nits and polish suggestions.
-
-Return ONLY valid JSON:
-{
-  "verdict": "clean" | "findings",
-  "summary": "one paragraph",
-  "findings": [ { "seat": "inspector"|"contrarian"|"strategist", "severity": "P0"|"P1"|"P2"|"P3", "file_path": "path/or/empty", "title": "...", "description": "..." } ],
-  "fix_prompt_md": "Full Lovable-ready fix batch prompt (REQUIRED if any P0-P2 exists). Follow the batch skeleton: 'Batch N.M — <name>. Numbered items only, no scope creep.\\n\\n1. ...\\n\\nKeep everything else identical.\\nTypecheck when done.'"${isFinal ? `,
-  "final_qa_prompt_md": "Human QA batch prompt (channel 'human'). Numbered checks the student runs by hand.",
-  "test_script": ["step 1", "step 2", "..."]` : ""}
-}
-
-If verdict is "clean", findings is [] and fix_prompt_md is "".`;
-
-  await admin.from("run_steps").insert({
-    run_id: run.id,
-    user_id: run.user_id,
-    step_key: "audit_chair_merge",
-    round: 2,
-    seat: "chair",
-    status: "queued",
-    request: {
-      json_output: true,
-      reasoning_effort: "high",
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: `THREE SEAT REPORTS\n\n${combined}\n\nProduce your JSON now.` },
-      ],
-    },
-  });
-}
 
 async function finalizeAudit(admin: any, run: any, steps: any[]) {
   const chair = steps.find((x: any) => x.step_key === "audit_chair_merge");
@@ -1529,13 +721,42 @@ async function afterStepComplete(admin: any, runIn: any) {
   }
 
   if (run.kind === "change_request") {
-    // Two rounds: cr_exam_* then cr_verdict_chair
+    // cr_exam_* → cr_verdict_chair → (if approved) cr_review_inspector → (if blocking) cr_revise_chair
     const examsDone = SEATS.every((s) =>
       steps.some((x: any) => x.step_key === `cr_exam_${s}` && x.status === "completed"),
     );
-    const verdictDone = steps.some((x: any) => x.step_key === "cr_verdict_chair" && x.status === "completed");
-    if (verdictDone) {
-      await finalizeChangeRequest(admin, run, steps);
+    const verdictStep = steps.find((x: any) => x.step_key === "cr_verdict_chair" && x.status === "completed");
+    if (verdictStep) {
+      const v = verdictStep.response_json ?? {};
+      // Rejections and invalid verdicts finalize directly — nothing to inspect.
+      if (v.invalid || v.verdict !== "approved") {
+        await finalizeChangeRequest(admin, run, steps);
+        return;
+      }
+      const revise = steps.find((x: any) => x.step_key === "cr_revise_chair");
+      if (revise) {
+        await finalizeChangeRequest(admin, run, steps);
+        return;
+      }
+      const review = steps.find((x: any) => x.step_key === "cr_review_inspector");
+      if (!review) {
+        await queueChangeRequestReview(admin, run, v);
+        fireSelfTick();
+        return;
+      }
+      if (review.status === "completed") {
+        const rj = review.response_json ?? {};
+        const needsRevision = !rj.invalid && (
+          rj.verdict === "revise" ||
+          (Array.isArray(rj.issues) && rj.issues.some((i: any) => i?.severity === "blocking"))
+        );
+        if (needsRevision) {
+          await queueChangeRequestRevise(admin, run, v, rj);
+          fireSelfTick();
+          return;
+        }
+        await finalizeChangeRequest(admin, run, steps);
+      }
       return;
     }
     if (examsDone) {
@@ -1565,9 +786,8 @@ async function afterStepComplete(admin: any, runIn: any) {
       return;
     }
     if (chair) return; // waiting on chair
-    const parallelDone = ["inspector", "contrarian", "strategist"].every((s) =>
-      steps.some((x: any) => x.step_key === `audit_${s}` && x.status === "completed"),
-    );
+    const seatSteps = steps.filter((x: any) => /^audit_(inspector|contrarian|strategist)/.test(x.step_key));
+    const parallelDone = seatSteps.length > 0 && seatSteps.every((x: any) => x.status === "completed");
     if (parallelDone) {
       await queueAuditChairMerge(admin, run, steps);
       fireSelfTick();
@@ -1652,6 +872,16 @@ async function afterStepComplete(admin: any, runIn: any) {
   }
 
   if (round === 3) {
+    // Two-phase synthesis: draft done → queue the decision-log extract;
+    // extract done → move to the vote. Legacy runs (JSON synthesis step,
+    // no draft) go straight to the vote.
+    const draftDone = steps.some((x: any) => x.step_key === `r3_draft_chair_loop${loop}` && x.status === "completed");
+    const extractDone = steps.some((x: any) => x.step_key === `r3_extract_chair_loop${loop}` && x.status === "completed");
+    if (draftDone && !extractDone) {
+      await queueRound3Extract(admin, run, steps, loop);
+      fireSelfTick();
+      return;
+    }
     await queueRound4(admin, run, steps, loop);
     await admin
       .from("boardroom_runs")
@@ -1665,7 +895,8 @@ async function afterStepComplete(admin: any, runIn: any) {
     const votes = steps.filter(
       (x: any) => x.step_key.startsWith("r4_vote_") && x.step_key.endsWith(`_loop${loop}`) && x.status === "completed",
     );
-    const { pass } = checkConsensus(votes, run.kind);
+    const threshold = await resolveConsensusThreshold(admin, run.user_id);
+    const { pass } = checkConsensus(votes, run.kind, threshold);
     if (pass) {
       await lockPlanAndQueueBlueprint(admin, run, steps, "consensus");
       fireSelfTick();
@@ -1698,10 +929,21 @@ async function afterStepComplete(admin: any, runIn: any) {
   }
 
   if (round === 6) {
+    // Two-phase blueprint: PRD draft done → queue the features extract;
+    // extract done → finalize. Legacy JSON blueprints finalize directly.
+    const bp = steps.find((x: any) => x.step_key === "r5_blueprint_chair" && x.status === "completed");
+    const extractDone = steps.some((x: any) => x.step_key === "r5_blueprint_extract_chair" && x.status === "completed");
+    const isLegacyJson = !!bp?.response_json?.prd_md;
+    if (bp && !extractDone && !isLegacyJson) {
+      await queueBlueprintExtract(admin, run, steps);
+      fireSelfTick();
+      return;
+    }
     await finalizeBlueprint(admin, run, steps);
     return;
   }
 }
+
 
 // ============================== Run processing ==============================
 
@@ -1734,7 +976,19 @@ async function processRun(admin: any, runId: string) {
   }
 }
 
+
 async function pipelineTick(admin: any) {
+  // Rescue steps orphaned by a dead invocation: an edge function caps out
+  // near ~400s wall clock, so anything 'running' for 15+ minutes belongs to
+  // an invocation that no longer exists. Requeue it; the atomic claim keeps
+  // double-execution impossible for live invocations.
+  const staleCutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+  await admin
+    .from("run_steps")
+    .update({ status: "queued", started_at: null, error: "requeued_stale" })
+    .eq("status", "running")
+    .lt("started_at", staleCutoff);
+
   const { data: runs } = await admin
     .from("boardroom_runs")
     .select("id")
@@ -1745,6 +999,7 @@ async function pipelineTick(admin: any) {
   }
   return { processed: (runs ?? []).length };
 }
+
 
 // ============================== HTTP ==============================
 

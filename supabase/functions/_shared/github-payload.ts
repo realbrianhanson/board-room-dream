@@ -5,6 +5,27 @@ import { decryptSecret } from "./crypto.ts";
 const BINARY_EXT = /\.(png|jpe?g|gif|webp|ico|svg|pdf|zip|gz|tar|mp3|mp4|mov|woff2?|ttf|otf|eot|wasm|bin)$/i;
 const LOCK_FILES = /(^|\/)(bun\.lockb?|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|deno\.lock)$/i;
 const IGNORE_DIR = /(^|\/)(node_modules|dist|build|\.next|\.git|\.turbo|coverage)(\/|$)/;
+// Never ship credential-bearing files to a model provider, even truncated.
+const SECRET_FILES = /(^|\/)(\.env[^/]*|[^/]*\.(pem|p12|pfx)|id_rsa[^/]*|id_ed25519[^/]*|[^/]*service[-_]?account[^/]*\.json|[^/]*credentials[^/]*)$/i;
+
+// Redact obvious secret material from code before any model call. The marker
+// is deliberately loud so auditors can still flag "a secret was hardcoded
+// here" without ever seeing the value.
+const SECRET_PATTERNS: RegExp[] = [
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+  /\bsk-[A-Za-z0-9_-]{16,}\b/g,
+  /\b[sr]k_(live|test)_[A-Za-z0-9]{16,}\b/g,
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\bgh[pousr]_[A-Za-z0-9]{30,}\b/g,
+  /\bgithub_pat_[A-Za-z0-9_]{30,}\b/g,
+  /\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\b/g,
+];
+
+export function redactSecrets(text: string): string {
+  let out = text;
+  for (const p of SECRET_PATTERNS) out = out.replace(p, "[REDACTED-SECRET]");
+  return out;
+}
 
 export type FilePayload = { path: string; content: string; bytes: number };
 
@@ -102,7 +123,7 @@ export async function assembleFromGithub(
   if (!candidates.length) candidates = treePaths.map((p) => ({ path: p }));
 
   let filtered = candidates.filter(
-    (f) => !BINARY_EXT.test(f.path) && !LOCK_FILES.test(f.path) && !IGNORE_DIR.test(f.path),
+    (f) => !BINARY_EXT.test(f.path) && !LOCK_FILES.test(f.path) && !IGNORE_DIR.test(f.path) && !SECRET_FILES.test(f.path),
   );
 
   if (preferKeyFiles) {
@@ -121,9 +142,10 @@ export async function assembleFromGithub(
     if (c.status >= 300 || Array.isArray(c.body)) { skipped++; continue; }
     const size: number = c.body?.size ?? 0;
     if (size > maxFileBytes) { skipped++; continue; }
-    const content = c.body?.encoding === "base64"
+    const raw = c.body?.encoding === "base64"
       ? atob(String(c.body?.content ?? "").replace(/\n/g, ""))
       : String(c.body?.content ?? "");
+    const content = redactSecrets(raw);
     if (total + content.length > maxTotalBytes) { skipped++; continue; }
     total += content.length;
     files.push({ path: f.path, content, bytes: content.length });

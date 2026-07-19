@@ -25,12 +25,20 @@ improvement plan.
   Every model call — every round, every seat, every audit — goes through
   it. It enforces the model allowlist, the per-run budget, the per-day
   cap, refusal fallback, and cost ledger writes.
-- **Protocol** — Round 1 independent drafts (4 seats in parallel), Round 2
-  cross-examination (≥3 objections + ≥1 steal per seat, "no objections is
-  not an option"), Round 3 Chair synthesis, Round 4 scored vote (consensus
-  = every rubric score ≥8 and zero blocking objections). On failure after 3
-  loops the Chair rules and a dissent ledger is stored. Locked plans then
-  get a Round 5 blueprint (PRD).
+- **Protocol** — Round 1 independent drafts (4 seats in parallel, hot
+  sampling), Round 2 cross-examination (≥3 objections + ≥1 concrete steal
+  per seat, "no objections is not an option"), Round 3 Chair synthesis
+  (two-phase: free-markdown draft + decision-log extract; reads the
+  founder's standing note when present), Round 4 scored vote by the three
+  independent seats — the Chair does not vote on its own synthesis, votes
+  cite verbatim candidate quotes to resolve objections, and consensus =
+  every rubric score ≥ the configured threshold (default 8; per-cohort
+  override) with zero blocking objections. On failure after 3 loops the
+  Chair rules and a dissent ledger is stored. Locked plans then get a
+  Round 5 blueprint (two-phase PRD + features extract).
+  The orchestrator is split into `protocol.ts` (rubrics, validation,
+  consensus), `queues.ts` (prompt builders), and `index.ts` (execution,
+  finalization, HTTP).
 - **Design Council** — same protocol, distinct rubric, produces a design
   brief in `plan_versions.kind='design'`. Screenshots live in the private
   `design-screenshots` bucket, owner-scoped, signed URLs only.
@@ -49,16 +57,36 @@ improvement plan.
   run at high reasoning effort; Round-1 drafts sample hot (0.85), votes cold
   (0.2). Intake validation grounds its verdict with OpenRouter's web plugin
   when available.
-- **Audit engine** — `audit-runner` pulls the batch's code (GitHub or paste,
-  300KB cap), runs Inspector/Contrarian/Strategist in parallel, Chair merges
-  and issues findings. Findings with P0/P1 insert a fix batch numbered `N.1`;
-  P2/P3 can be dismissed by the owner.
+- **Audit engine** — `audit-runner` pulls the batch's code (GitHub diff or
+  paste; secret files are excluded and token patterns redacted before any
+  model call), runs Inspector/Contrarian/Strategist in parallel, Chair
+  merges with an explicit coverage statement and issues findings. Final A-Z
+  audits run map-reduce: up to 1.2MB of repo split into ≤4 chunks, every
+  seat reviews every chunk, Chair dedupes across chunks. Findings with
+  P0/P1 insert a fix batch numbered `N.1` (which becomes the active Runway
+  card until it passes); P2/P3 can be dismissed by the owner.
 - **Import mode** — projects with `is_import=true` skip greenfield gates:
   the A-Z audit is immediately eligible, the Design Council accepts a repo
   or description, and the Boardroom drafts an improvement plan.
 - **Instructor's Eye** — `alerts` table + `alert-scan` cron surface stuck
   students (`stuck_48h`, `audit_loop`, `spend_cap`, `never_locked`).
-  `/cohort` shows the attention strip and members table with drill-in.
+  `/cohort` shows a health strip (locked plans, consensus rate, avg loops,
+  P0+P1 per audit, live runs), the attention strip, and the members table
+  with drill-in. Cohort header edits both the daily cap and the consensus
+  threshold.
+- **Learning flywheel** — `flywheel-miner` (admin-invoked from Settings →
+  Field manual, runs on the admin's BYOK key) has the Chair mine 30 days of
+  audit findings + batch outcomes for recurring Lovable failure patterns.
+  Approved proposals land in `app_settings.field_manual_addenda` and every
+  future batch/blueprint/review/audit prompt inherits them.
+- **Multimodal design** — uploaded screenshots are signed and attached as
+  image content to Design Council Round 1 and synthesis calls, so the board
+  critiques what it can actually see.
+- **Hardening** — pipeline tables are server-write-only (clients keep
+  SELECT for the realtime transcript; owners may update only
+  `boardroom_runs.founder_notes`), steps orphaned by a dead invocation are
+  requeued by the cron tick after 15 minutes, and the intake validator
+  grounds verdicts with OpenRouter's web plugin.
 
 Full table/policy/cron inventory lives in [`DATA_SCHEMA.md`](./DATA_SCHEMA.md).
 
