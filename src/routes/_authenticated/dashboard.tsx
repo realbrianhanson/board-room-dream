@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Plus, ArrowRight, Lightbulb, Package, Trash2 } from "lucide-react";
-import { startGithubConnect } from "@/lib/github-connect";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   component: DashboardPage,
@@ -523,14 +522,7 @@ async function resume(
   if (project.is_import) {
     // Imports skip the greenfield intake ladder.
     if (!project.github_repo) {
-      try {
-        const r = await startGithubConnect({ returnTo: "/dashboard" });
-        if (r === "embedded") {
-          toast("Open the app in its own browser tab to connect GitHub.");
-        }
-      } catch (e) {
-        toast.error((e as Error).message);
-      }
+      navigate({ to: "/audits/$projectId", params: { projectId } });
       return;
     }
     if (!project.has_final_audit) {
