@@ -128,8 +128,8 @@ function AuthenticatedShell() {
 
       {/* Sidebar */}
       <aside
-        className={`fixed inset-y-0 left-0 z-30 flex w-64 flex-col border-r border-border bg-surface-1 transition-transform md:sticky md:top-0 md:h-screen md:translate-x-0 ${
-          mobileOpen ? "translate-x-0" : "-translate-x-full"
+        className={`sticky top-0 z-30 flex h-screen w-64 shrink-0 flex-col border-r border-border bg-surface-1 transition-transform max-md:fixed max-md:inset-y-0 max-md:left-0 md:translate-x-0 ${
+          mobileOpen ? "translate-x-0" : "max-md:-translate-x-full"
         }`}
       >
         <div className="flex h-16 items-center px-6">
@@ -189,7 +189,7 @@ function AuthenticatedShell() {
         />
       )}
 
-      <main className="flex-1 pt-14 md:pt-0">
+      <main className="min-w-0 flex-1 pt-14 md:pt-0">
         <Outlet />
       </main>
     </div>
