@@ -463,39 +463,6 @@ export type Database = {
           },
         ]
       }
-      field_manual_proposals: {
-        Row: {
-          created_at: string
-          created_by: string | null
-          decided_at: string | null
-          evidence: Json | null
-          id: string
-          proposed_rule: string
-          rationale: string | null
-          status: string
-        }
-        Insert: {
-          created_at?: string
-          created_by?: string | null
-          decided_at?: string | null
-          evidence?: Json | null
-          id?: string
-          proposed_rule: string
-          rationale?: string | null
-          status?: string
-        }
-        Update: {
-          created_at?: string
-          created_by?: string | null
-          decided_at?: string | null
-          evidence?: Json | null
-          id?: string
-          proposed_rule?: string
-          rationale?: string | null
-          status?: string
-        }
-        Relationships: []
-      }
       cohorts: {
         Row: {
           consensus_threshold: number | null
@@ -579,6 +546,39 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      field_manual_proposals: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          decided_at: string | null
+          evidence: Json | null
+          id: string
+          proposed_rule: string
+          rationale: string | null
+          status: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          decided_at?: string | null
+          evidence?: Json | null
+          id?: string
+          proposed_rule: string
+          rationale?: string | null
+          status?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          decided_at?: string | null
+          evidence?: Json | null
+          id?: string
+          proposed_rule?: string
+          rationale?: string | null
+          status?: string
+        }
+        Relationships: []
       }
       intakes: {
         Row: {
