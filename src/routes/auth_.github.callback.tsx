@@ -23,7 +23,32 @@ function GitHubCallbackPage() {
   });
   const ran = useRef(false);
 
+  async function getTokenWithRetry(): Promise<string | null> {
+    const first = (await supabase.auth.getSession()).data.session?.access_token;
+    if (first) return first;
+
+    return new Promise<string | null>((resolve) => {
+      let subscription: { unsubscribe: () => void } | null = null;
+      const timer = setTimeout(() => {
+        subscription?.unsubscribe();
+        resolve(null);
+      }, 1000);
+
+      const { data } = supabase.auth.onAuthStateChange((event) => {
+        if (event === "SIGNED_IN" || event === "USER_UPDATED" || event === "INITIAL_SESSION") {
+          clearTimeout(timer);
+          subscription?.unsubscribe();
+          supabase.auth.getSession().then(({ data: session }) => {
+            resolve(session.session?.access_token ?? null);
+          });
+        }
+      });
+      subscription = data.subscription;
+    });
+  }
+
   useEffect(() => {
+
     if (ran.current) return;
     ran.current = true;
     (async () => {
