@@ -257,6 +257,9 @@ export type Database = {
           batch_no: number
           built_at: string | null
           channel: string
+          compile_meta: Json | null
+          compiled_at: string | null
+          compiled_prompt_md: string | null
           created_at: string
           id: string
           is_fix: boolean
@@ -274,6 +277,9 @@ export type Database = {
           batch_no: number
           built_at?: string | null
           channel?: string
+          compile_meta?: Json | null
+          compiled_at?: string | null
+          compiled_prompt_md?: string | null
           created_at?: string
           id?: string
           is_fix?: boolean
@@ -291,6 +297,9 @@ export type Database = {
           batch_no?: number
           built_at?: string | null
           channel?: string
+          compile_meta?: Json | null
+          compiled_at?: string | null
+          compiled_prompt_md?: string | null
           created_at?: string
           id?: string
           is_fix?: boolean

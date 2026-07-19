@@ -97,10 +97,14 @@ suffix denotes fix batch), `title`, `channel` (`lovable`|`supabase`|`human`),
 (`pending`|`sent`|`built`|`auditing`|`fix_needed`|`passed`|`skipped`),
 `is_fix`, `parent_batch_id`, `sent_at`, `built_at`, `outcome_md`
 (owner-reported "what Lovable actually did" — fed into the next audit's
-context), `created_at`.
+context), `compiled_prompt_md` (JIT compiler output — the batch rewritten
+against live code; served by the Runway in place of `prompt_md`),
+`compiled_at`, `compile_meta` (jsonb: status, head_sha, files_analyzed,
+drift_notes, rationale), `created_at`.
 RLS: owner read/update (trigger `batches_guard_content` restricts client
-updates to `status`, `sent_at`, `built_at`, and `outcome_md`); instructor
-cohort read.
+updates to `status`, `sent_at`, `built_at`, and `outcome_md`; the
+`compiled_*` columns are service-role-only, written by `batch-compiler`);
+instructor cohort read.
 
 ### `audits`
 `id`, `project_id`, `user_id`, `batch_id`, `kind` (`batch`|`final`|`reaudit`),

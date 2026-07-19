@@ -49,6 +49,17 @@ improvement plan.
   land. Runway UI activates one at a time and captures an owner-reported
   outcome per batch (`batches.outcome_md`) that the board reads at the next
   audit.
+- **JIT Prompt Compiler** — a batch's `prompt_md` is the roadmap intent,
+  written at plan-lock time against code that doesn't exist yet. Before the
+  student builds a batch, the `batch-compiler` edge function has the Chair
+  recompile it against the LIVE repo (GitHub or paste), the student's prior
+  outcome reports, and open audit findings — emitting a fresh prompt that
+  references the code Lovable actually produced (real component/table/route
+  names), drops already-done work, and folds in fixes. The result lands in
+  `batches.compiled_prompt_md` with a `compile_meta` record (commit SHA,
+  files read, drift notes); the Runway serves it in place of the static
+  prompt, with the original one disclosure-click away. The compiler can also
+  rule a batch `already_done` or `blocked` (missing prerequisite).
 - **Doctrine** — the constitution (`app_settings.constitution`, v2) is the
   first system message of every call; each seat carries a full charter in
   `model_registry.role_prompt`; artifact-writing steps embed the Lovable

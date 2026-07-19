@@ -19,6 +19,7 @@ import {
   ScrollText,
   ShieldCheck,
   SkipForward,
+  Wand2,
   X,
 } from "lucide-react";
 
@@ -39,6 +40,16 @@ type Project = {
 };
 
 
+type CompileMeta = {
+  status: "ready" | "already_done" | "blocked";
+  head_sha: string | null;
+  files_analyzed: number;
+  source: "github" | "paste";
+  based_on?: { outcomes: number; findings: number };
+  drift_notes?: string[];
+  rationale?: string;
+};
+
 type Batch = {
   id: string;
   batch_no: number;
@@ -50,6 +61,9 @@ type Batch = {
   sent_at: string | null;
   built_at: string | null;
   outcome_md: string | null;
+  compiled_prompt_md: string | null;
+  compiled_at: string | null;
+  compile_meta: CompileMeta | null;
 };
 
 type Run = {
@@ -140,6 +154,8 @@ function RunwayPage() {
     | null
   >(null);
   const [starting, setStarting] = useState(false);
+  const [compileModal, setCompileModal] = useState<Batch | null>(null);
+  const [compiling, setCompiling] = useState(false);
 
   const loadAll = useCallback(async () => {
     const [{ data: p }, { data: pv }, { data: dv }, { data: bs }, { data: rs }, { data: au }, { data: fi }] = await Promise.all([
@@ -241,6 +257,39 @@ function RunwayPage() {
       toast.error((e as Error).message);
     } finally {
       setStarting(false);
+    }
+  }
+
+  async function startCompileCall(batch: Batch, source: "github" | "paste", pasted: string | null) {
+    setCompiling(true);
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const token = session.session?.access_token;
+      if (!token) throw new Error("Not signed in");
+      const { data, error } = await supabase.functions.invoke("batch-compiler", {
+        body: { batch_id: batch.id, source, pasted_code: pasted },
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (error) throw error;
+      const res = data as { status?: string; error?: string; rationale?: string };
+      if (res?.error) throw new Error(res.error);
+      if (res?.status === "no_key") {
+        toast.error("Add your OpenRouter key in Settings — the compiler runs on it.");
+        return;
+      }
+      if (res?.status === "already_done") {
+        toast.success("Live code already satisfies this batch — you can mark it passed.");
+      } else if (res?.status === "blocked") {
+        toast("A prerequisite is missing — see the note on the batch.", { icon: "⚠️" });
+      } else {
+        toast.success("Compiled against your live code.");
+      }
+      setCompileModal(null);
+      await loadAll();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setCompiling(false);
     }
   }
 
@@ -491,12 +540,13 @@ function RunwayPage() {
                 auditFindings={auditFindings}
                 fixBatch={fixBatch as Batch | null}
                 ghRepo={ghRepo}
-                onCopyPrompt={() => copy(b.prompt_md, "Paste it into Lovable and let it build.")}
+                onCopyPrompt={() => copy(b.compiled_prompt_md ?? b.prompt_md, "Paste it into Lovable and let it build.")}
                 onAdvance={(next) => advance(b, next)}
                 onOpenRollback={() => setShowRollback(true)}
                 onRequestSkip={() => setShowSkipConfirm(b)}
                 onOpenAudit={() => setAuditModal({ kind: "batch", batch: b, mode: b.is_fix ? "reaudit" : "start" })}
                 onSaveOutcome={(text) => saveOutcome(b, text)}
+                onCompile={() => setCompileModal(b)}
               />
             );
           })}
@@ -529,6 +579,17 @@ function RunwayPage() {
               startAuditCall(action, { batch_id: auditModal.batch.id, source, pasted_code: pasted });
             }
           }}
+        />
+      )}
+
+      {/* Compile modal (source picker) */}
+      {compileModal && (
+        <CompileModal
+          batch={compileModal}
+          ghRepo={ghRepo}
+          compiling={compiling}
+          onClose={() => setCompileModal(null)}
+          onSubmit={(source, pasted) => startCompileCall(compileModal, source, pasted)}
         />
       )}
 
@@ -627,10 +688,131 @@ function EmptyState({
   );
 }
 
+// Explains the JIT compile state on the active batch: what the Chair grounded
+// the prompt in, where the live code drifted from the plan, or why it couldn't
+// compile (already done / blocked).
+function CompileBanner({ batch }: { batch: Batch }) {
+  const meta = batch.compile_meta;
+  if (!meta) return null;
+  const sha = meta.head_sha ? meta.head_sha.slice(0, 7) : null;
+  const drift = meta.drift_notes ?? [];
+
+  if (meta.status === "blocked") {
+    return (
+      <div className="mb-3 rounded-lg border border-[hsl(8_60%_55%/0.4)] bg-[hsl(8_60%_25%/0.15)] p-3">
+        <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[hsl(8_60%_75%)]">Compile blocked — a prerequisite is missing</p>
+        {meta.rationale && <p className="mt-1 text-sm text-foreground/90">{meta.rationale}</p>}
+      </div>
+    );
+  }
+  if (meta.status === "already_done") {
+    return (
+      <div className="mb-3 rounded-lg border border-[hsl(160_45%_48%/0.4)] bg-[hsl(160_45%_28%/0.15)] p-3">
+        <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[hsl(160_45%_65%)]">Live code already satisfies this batch</p>
+        {meta.rationale && <p className="mt-1 text-sm text-foreground/90">{meta.rationale}</p>}
+        <p className="mt-1 text-xs text-muted-foreground">You can mark it built, then run the audit to confirm — or skip it.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="mb-3 rounded-lg border border-primary/30 bg-primary/[0.06] p-3">
+      <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[hsl(38_65%_72%)]">
+        Compiled against your live code{sha ? ` · commit ${sha}` : ""} · {meta.files_analyzed} file{meta.files_analyzed === 1 ? "" : "s"} read
+      </p>
+      {drift.length > 0 && (
+        <div className="mt-2">
+          <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Drift from the plan</p>
+          <ul className="mt-1 space-y-0.5">
+            {drift.map((d, i) => (
+              <li key={i} className="text-xs text-foreground/85">— {d}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CompileModal({
+  batch, ghRepo, compiling, onClose, onSubmit,
+}: {
+  batch: Batch;
+  ghRepo: string | null;
+  compiling: boolean;
+  onClose: () => void;
+  onSubmit: (source: "github" | "paste", pasted: string | null) => void;
+}) {
+  const [source, setSource] = useState<"github" | "paste">(ghRepo ? "github" : "paste");
+  const [pasted, setPasted] = useState("");
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 p-6" onClick={onClose}>
+      <div className="relative w-full max-w-xl rounded-xl border border-border bg-surface-1 p-6" onClick={(e) => e.stopPropagation()}>
+        <button onClick={onClose} className="absolute right-3 top-3 rounded-md p-1 text-muted-foreground hover:text-foreground" aria-label="Close">
+          <X className="h-4 w-4" />
+        </button>
+        <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(38_65%_70%)]">The Chair rewrites the prompt</p>
+        <h3 className="mt-2 font-display text-2xl text-foreground">Compile Batch {batch.batch_no}</h3>
+        <p className="mt-2 text-sm text-muted-foreground">
+          The Chair reads the code Lovable has actually built so far — plus your reports and any open findings — and rewrites this batch to match reality instead of the original plan.
+        </p>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => setSource("github")}
+            disabled={!ghRepo}
+            className={`rounded-lg border p-4 text-left transition-colors ${
+              source === "github" ? "border-primary/60 bg-primary/10" : "border-border bg-surface-2 hover:border-primary/40"
+            } disabled:opacity-50 disabled:hover:border-border`}
+          >
+            <div className="flex items-center gap-2">
+              <Github className="h-4 w-4" />
+              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground">From GitHub</span>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {ghRepo ? `Read the current HEAD of ${ghRepo}` : "Link a repo above first"}
+            </p>
+          </button>
+          <button
+            type="button"
+            onClick={() => setSource("paste")}
+            className={`rounded-lg border p-4 text-left transition-colors ${
+              source === "paste" ? "border-primary/60 bg-primary/10" : "border-border bg-surface-2 hover:border-primary/40"
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <ScrollText className="h-4 w-4" />
+              <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground">Paste code</span>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">Up to ~200KB of pasted source</p>
+          </button>
+        </div>
+
+        {source === "paste" && (
+          <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={5_000_000} />
+        )}
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button onClick={onClose} className="rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground">
+            Cancel
+          </button>
+          <button
+            onClick={() => onSubmit(source, source === "paste" ? pasted : null)}
+            disabled={compiling || (source === "paste" && !pasted.trim()) || (source === "github" && !ghRepo)}
+            className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+          >
+            <Wand2 className="h-4 w-4" /> {compiling ? "Compiling…" : "Compile"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BatchCard({
   batch, active, locked, activeBatchNo, isOwner, lovableUrl,
   latestAudit, auditFindings, fixBatch, ghRepo,
-  onCopyPrompt, onAdvance, onOpenRollback, onRequestSkip, onOpenAudit, onSaveOutcome,
+  onCopyPrompt, onAdvance, onOpenRollback, onRequestSkip, onOpenAudit, onSaveOutcome, onCompile,
 }: {
   batch: Batch;
   active: boolean;
@@ -648,8 +830,10 @@ function BatchCard({
   onRequestSkip: () => void;
   onOpenAudit: () => void;
   onSaveOutcome: (text: string) => void;
+  onCompile: () => void;
 }) {
   const [outcomeDraft, setOutcomeDraft] = useState(batch.outcome_md ?? "");
+  const [showOriginal, setShowOriginal] = useState(false);
 
   const ch = CHANNEL_STYLE[batch.channel];
   const st = STATUS_STYLE[batch.status];
@@ -719,9 +903,23 @@ function BatchCard({
 
       {active && (
         <div className="border-t border-border/60 p-5">
-          <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Prompt</p>
+          <CompileBanner batch={batch} />
+
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+              {batch.compiled_prompt_md ? "Compiled prompt" : "Prompt"}
+            </p>
+            {batch.compiled_prompt_md && (
+              <button
+                onClick={() => setShowOriginal((v) => !v)}
+                className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground underline underline-offset-4 hover:text-foreground"
+              >
+                {showOriginal ? "Show compiled" : "Show original plan"}
+              </button>
+            )}
+          </div>
           <pre className="max-h-[420px] overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-[12px] leading-relaxed text-foreground/90 whitespace-pre-wrap">
-{batch.prompt_md}
+{showOriginal ? batch.prompt_md : (batch.compiled_prompt_md ?? batch.prompt_md)}
           </pre>
 
           {isOwner && (
@@ -732,6 +930,15 @@ function BatchCard({
               >
                 <Copy className="h-4 w-4" /> Copy prompt
               </button>
+              {batch.channel !== "human" && (
+                <button
+                  onClick={onCompile}
+                  title="Rewrite this prompt against the code Lovable has actually produced so far"
+                  className="inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-4 py-2 text-sm text-[hsl(38_65%_75%)] transition-colors hover:border-primary/60"
+                >
+                  <Wand2 className="h-4 w-4" /> {batch.compiled_prompt_md ? "Recompile" : "Compile against live code"}
+                </button>
+              )}
               {lovableUrl ? (
                 <a
                   href={lovableUrl}
