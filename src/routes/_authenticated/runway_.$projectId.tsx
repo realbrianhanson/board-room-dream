@@ -948,7 +948,7 @@ function AuditModal({
         </div>
 
         {source === "paste" && (
-          <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={1_000_000} />
+          <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={5_000_000} />
         )}
 
         <div className="mt-5 flex justify-end gap-2">
