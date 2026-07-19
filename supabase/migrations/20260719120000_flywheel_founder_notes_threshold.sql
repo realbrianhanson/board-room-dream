@@ -41,11 +41,11 @@ GRANT ALL ON public.field_manual_proposals TO service_role;
 ALTER TABLE public.field_manual_proposals ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Admins read field manual proposals" ON public.field_manual_proposals
-  FOR SELECT TO authenticated USING (public.is_admin(auth.uid()));
+  FOR SELECT TO authenticated USING (private.is_admin(auth.uid()));
 CREATE POLICY "Admins update field manual proposals" ON public.field_manual_proposals
   FOR UPDATE TO authenticated
-  USING (public.is_admin(auth.uid()))
-  WITH CHECK (public.is_admin(auth.uid()));
+  USING (private.is_admin(auth.uid()))
+  WITH CHECK (private.is_admin(auth.uid()));
 
 -- ============ 5. Pipeline tables become server-write-only ============
 -- Clients keep SELECT (realtime transcript) but every mutation now flows
