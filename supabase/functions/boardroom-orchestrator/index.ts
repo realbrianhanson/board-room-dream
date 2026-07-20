@@ -150,9 +150,25 @@ async function claimOneStep(admin: any, runId: string) {
 }
 
 
+// Hard ceiling on a single model call, enforced at the ORCHESTRATOR level so a
+// step can never hang the pipeline regardless of what the proxy does.
+const STEP_HARD_TIMEOUT_MS = 210_000;
+
+function withHardTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => {
+      const err = new Error(`Step ${label} exceeded hard timeout ${ms}ms`);
+      (err as any).isHardTimeout = true;
+      reject(err);
+    }, ms);
+    p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
+  });
+}
+
 async function executeStep(admin: any, run: any, step: any) {
   const baseMessages = step.request?.messages ?? [];
   const jsonMode = !!step.request?.json_output;
+  console.log(`[exec] start step=${step.step_key} seat=${step.seat} run=${run.id}`);
 
   let networkAttempt = 0;
   while (true) {
@@ -166,13 +182,19 @@ async function executeStep(admin: any, run: any, step: any) {
 
       // Structured JSON path: one re-prompt on invalid.
       while (true) {
-        const result = await callSeat(run.user_id, step.seat as Seat, messages, {
-          runId: run.id,
-          projectId: run.project_id,
-          temperature: Number(step.request?.temperature ?? 0.4),
-          reasoningEffort: step.request?.reasoning_effort,
-          json: jsonMode,
-        });
+        console.log(`[exec] calling model step=${step.step_key} attempt=${networkAttempt}`);
+        const result = await withHardTimeout(
+          callSeat(run.user_id, step.seat as Seat, messages, {
+            runId: run.id,
+            projectId: run.project_id,
+            temperature: Number(step.request?.temperature ?? 0.4),
+            reasoningEffort: step.request?.reasoning_effort,
+            json: jsonMode,
+          }),
+          STEP_HARD_TIMEOUT_MS,
+          step.step_key,
+        );
+        console.log(`[exec] model returned step=${step.step_key} cost=${result.costUsd} model=${result.model}`);
         content = result.content;
         usage = { tokensIn: result.tokensIn, tokensOut: result.tokensOut, costUsd: result.costUsd };
         if (result.fallback) fallbackMeta = result.fallback;
@@ -259,12 +281,23 @@ async function executeStep(admin: any, run: any, step: any) {
           .eq("id", run.id);
         return;
       }
+      if ((e as any)?.isHardTimeout) {
+        console.log(`[exec] HARD TIMEOUT step=${step.step_key} run=${run.id}`);
+        const tmsg = `Step ${step.step_key} timed out — the model did not respond in time.`;
+        await admin
+          .from("run_steps")
+          .update({ status: "failed", error: "hard_timeout", completed_at: new Date().toISOString() })
+          .eq("id", step.id);
+        await admin.from("boardroom_runs").update({ status: "failed", error: tmsg }).eq("id", run.id);
+        return;
+      }
       if (networkAttempt === 0) {
         networkAttempt++;
         await new Promise((r) => setTimeout(r, 800));
         continue;
       }
       const msg = (e as Error).message ?? String(e);
+      console.log(`[exec] ERROR step=${step.step_key} run=${run.id} msg=${msg}`);
       await admin
         .from("run_steps")
         .update({ status: "failed", error: msg, completed_at: new Date().toISOString() })
