@@ -299,15 +299,6 @@ async function lockPlanAndQueueBlueprint(
   mode: "consensus" | "chair_ruled",
 ) {
   const planKind = run.kind === "design" ? "design" : "plan";
-  const { data: existing } = await admin
-    .from("plan_versions")
-    .select("version")
-    .eq("project_id", run.project_id)
-    .eq("kind", planKind)
-    .order("version", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const nextVersion = (existing?.version ?? 0) + 1;
 
   let contentMd = "";
   let decisionLog: any[] = [];
@@ -333,6 +324,54 @@ async function lockPlanAndQueueBlueprint(
       if (Array.isArray(dl)) decisionLog.push(...dl);
     }
   }
+
+  // Never lock an empty document. A blank content_md means the source step
+  // reported complete but produced no usable plan — locking it strands the
+  // owner with a blank plan (and, before this guard, spawned duplicate empty
+  // versions). Fail loudly and alert instead of finalizing garbage; the run
+  // can be inspected/retried rather than silently "succeeding".
+  if (!contentMd.trim()) {
+    await admin
+      .from("boardroom_runs")
+      .update({ status: "failed", error: "empty_final_document", updated_at: new Date().toISOString() })
+      .eq("id", run.id);
+    await insertAlert(admin, {
+      user_id: run.user_id,
+      project_id: run.project_id,
+      kind: "never_locked",
+      detail: { run_id: run.id, mode, reason: "final document was empty" },
+    });
+    return;
+  }
+
+  // Atomically claim the lock transition. Both a self-tick and the cron
+  // pipeline can reach this point for the same run at the same instant (the
+  // last step of the round completes in two invocations at once); without a
+  // claim both would insert a plan_version, producing duplicate rows. round_no
+  // < 6 is the pre-lock state for every path (round 4 consensus = 4, round 5
+  // chair ruling = 5); flipping it to 6 in one atomic UPDATE lets exactly one
+  // tick win. Design runs ignore round_no afterward, so using it as the claim
+  // token is harmless for them too.
+  const { data: claimRows } = await admin
+    .from("boardroom_runs")
+    .update({ round_no: 6, updated_at: new Date().toISOString() })
+    .eq("id", run.id)
+    .lt("round_no", 6)
+    .select("id");
+  if (!claimRows || claimRows.length === 0) {
+    // Another tick already claimed and locked this run — nothing to do.
+    return;
+  }
+
+  const { data: existing } = await admin
+    .from("plan_versions")
+    .select("version")
+    .eq("project_id", run.project_id)
+    .eq("kind", planKind)
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const nextVersion = (existing?.version ?? 0) + 1;
 
   const voteSteps = steps.filter((x) => x.step_key.startsWith("r4_vote_") && x.status === "completed");
   const latestLoop = Math.max(-1, ...voteSteps.map((v: any) => {
