@@ -7,6 +7,7 @@ import {
   DailyCapExceeded,
   callSeat,
   NoUserKey,
+  SeatBudgetExceeded,
   SeatUnavailable,
 } from "../_shared/openrouter-proxy.ts";
 
@@ -244,6 +245,21 @@ async function executeStep(admin: any, run: any, step: any) {
             project_id: run.project_id,
             kind: "spend_cap",
             detail: { scope: "run", run_kind: run.kind, spent_usd: Number(run.spent_usd ?? 0), budget_usd: Number(run.budget_usd ?? 0) },
+          });
+        }
+        return;
+      }
+      if (e instanceof SeatBudgetExceeded) {
+        // One seat hit its per-run cap — pause the run (the owner can raise the
+        // seat's cap in Settings and resume), same UX as the run budget.
+        await admin.from("run_steps").update({ status: "queued", error: "seat_budget" }).eq("id", step.id);
+        await admin.from("boardroom_runs").update({ status: "paused_budget" }).eq("id", run.id);
+        if (run.project_id && run.user_id) {
+          await insertAlert(admin, {
+            user_id: run.user_id,
+            project_id: run.project_id,
+            kind: "spend_cap",
+            detail: { scope: "seat", seat: e.seat, cap_usd: e.cap, spent_usd: e.spent },
           });
         }
         return;

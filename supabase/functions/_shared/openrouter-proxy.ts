@@ -26,6 +26,30 @@ export class DailyCapExceeded extends Error {
 export class SeatUnavailable extends Error {}
 export class NoUserKey extends Error {}
 
+// Per-seat spend cap (model_registry.max_cost_per_run) hit within a single run.
+export class SeatBudgetExceeded extends Error {
+  seat: string;
+  cap: number;
+  spent: number;
+  constructor(seat: string, cap: number, spent: number) {
+    super(`Seat ${seat} exceeded its per-run cap $${cap.toFixed(2)} (spent $${spent.toFixed(2)})`);
+    this.name = "SeatBudgetExceeded";
+    this.seat = seat;
+    this.cap = cap;
+    this.spent = spent;
+  }
+}
+
+// Abort a model call that hangs past this many ms and fail over to the seat's
+// fallback, instead of letting a dead/stuck model (as Kimi K3 was) orphan the
+// step for 15 minutes. Generous enough for legitimate high-reasoning calls;
+// tunable via the OPENROUTER_TIMEOUT_MS secret, clamped to 30s-290s (must stay
+// under the edge function's own wall-clock limit so the abort fires first).
+const OPENROUTER_TIMEOUT_MS = Math.min(
+  290_000,
+  Math.max(30_000, Number(Deno.env.get("OPENROUTER_TIMEOUT_MS") ?? 150_000)),
+);
+
 // Multimodal content parts (OpenRouter follows the OpenAI shape). Design runs
 // attach signed screenshot URLs so the board critiques what it can actually see.
 export type ContentPart =
@@ -49,7 +73,7 @@ export type ProxyOptions = {
 export type FallbackMeta = {
   fallback_model_used: string;
   primary_model: string;
-  reason: "refusal";
+  reason: "refusal" | "timeout";
 };
 
 export type ProxyResult = {
@@ -86,6 +110,7 @@ type SeatRow = {
   role_prompt: string | null;
   enabled: boolean;
   fallback_model_id: string | null;
+  max_cost_per_run: number | null;
 };
 
 // The model registry and constitution are global (not per-user) and change
@@ -103,7 +128,7 @@ async function loadRegistry(admin: SupabaseClient): Promise<SeatRow[]> {
   if (_registryCache && now - _registryCache.at < SETTINGS_TTL_MS) return _registryCache.rows;
   const { data, error } = await admin
     .from("model_registry")
-    .select("seat, model_id, role_prompt, enabled, fallback_model_id");
+    .select("seat, model_id, role_prompt, enabled, fallback_model_id, max_cost_per_run");
   if (error) throw error;
   const rows = (data ?? []) as SeatRow[];
   _registryCache = { rows, at: now };
@@ -158,6 +183,21 @@ async function checkBudget(admin: SupabaseClient, runId: string) {
   if (Number(data.spent_usd) >= Number(data.budget_usd)) {
     throw new BudgetExceeded();
   }
+}
+
+// Per-seat spend cap within a run (model_registry.max_cost_per_run). A guardrail
+// against one seat running away — with the Chair defaulted higher than the rest
+// since it legitimately does the most work. Skipped when the cap is unset/<=0.
+async function checkSeatBudget(admin: SupabaseClient, runId: string, seat: string, cap: number | null) {
+  const capNum = Number(cap);
+  if (!Number.isFinite(capNum) || capNum <= 0) return;
+  const { data } = await admin
+    .from("cost_ledger")
+    .select("cost_usd")
+    .eq("run_id", runId)
+    .eq("seat", seat);
+  const spent = (data ?? []).reduce((s: number, r: any) => s + Number(r.cost_usd ?? 0), 0);
+  if (spent >= capNum) throw new SeatBudgetExceeded(seat, capNum, spent);
 }
 
 async function resolveDailyCap(admin: SupabaseClient, userId: string): Promise<{ cap: number; scope: "cohort" | "default" }> {
@@ -231,16 +271,33 @@ async function callOpenRouter(
   apiKey: string,
   body: any,
 ): Promise<{ content: string; finishReason: string | undefined; usage: any; raw: any }> {
-  const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "https://boardroom.lovable.app",
-      "X-Title": "BOARDROOM",
-    },
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
+  let r: Response;
+  try {
+    r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://boardroom.lovable.app",
+        "X-Title": "BOARDROOM",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    // A hung model that never responds gets aborted here — tag it so callSeat
+    // fails over to the fallback instead of orphaning the step.
+    if ((e as Error)?.name === "AbortError") {
+      const err = new Error(`OpenRouter call timed out after ${OPENROUTER_TIMEOUT_MS}ms`);
+      (err as any).isTimeout = true;
+      throw err;
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!r.ok) {
     const text = await r.text();
     const err = new Error(`OpenRouter ${r.status}: ${text}`);
@@ -307,6 +364,7 @@ export async function callSeat(
   if (options.runId) await checkBudget(admin, options.runId);
 
   const seatRow = await loadSeat(admin, seat);
+  if (options.runId) await checkSeatBudget(admin, options.runId, seat, seatRow.max_cost_per_run);
   const allowed = await loadAllowedModels(admin);
   if (!allowed.has(seatRow.model_id)) {
     throw new SeatUnavailable(`Model ${seatRow.model_id} not in allowlist`);
@@ -350,18 +408,27 @@ export async function callSeat(
     return { ...res, tokensIn, tokensOut, costUsd, modelId };
   };
 
-  // 1st attempt on primary
-  let attempt = await doCall(seatRow.model_id);
-  let refused = isRefusal(attempt.content, attempt.finishReason, !!options.json);
+  // 1st attempt on primary; a timeout (hung model) routes straight to fallback.
+  let attempt: Awaited<ReturnType<typeof doCall>> | null = null;
+  let refused = false;
+  let timedOut = false;
+  try {
+    attempt = await doCall(seatRow.model_id);
+    refused = isRefusal(attempt.content, attempt.finishReason, !!options.json);
+  } catch (e) {
+    if ((e as any)?.isTimeout) timedOut = true;
+    else throw e;
+  }
 
-  // 2nd attempt on primary (one retry)
-  if (refused) {
+  // One retry on a refusal only — a genuinely hung model won't un-hang, so
+  // don't waste another timeout window; go straight to the fallback.
+  if (refused && !timedOut) {
     attempt = await doCall(seatRow.model_id);
     refused = isRefusal(attempt.content, attempt.finishReason, !!options.json);
   }
 
-  // Fallback model
-  if (refused
+  // Fail over to the fallback model on a refusal OR a timeout.
+  if ((refused || timedOut)
     && seatRow.fallback_model_id
     && seatRow.fallback_model_id !== seatRow.model_id
     && allowed.has(seatRow.fallback_model_id)) {
@@ -376,9 +443,15 @@ export async function callSeat(
       fallback: {
         fallback_model_used: fbAttempt.modelId,
         primary_model: seatRow.model_id,
-        reason: "refusal",
+        reason: timedOut ? "timeout" : "refusal",
       },
     };
+  }
+
+  // Primary timed out and there was no usable fallback — surface it so the step
+  // fails and the requeue rescues it, rather than returning empty content.
+  if (!attempt) {
+    throw new Error(`Seat ${seat} model ${seatRow.model_id} timed out with no available fallback`);
   }
 
   return {
