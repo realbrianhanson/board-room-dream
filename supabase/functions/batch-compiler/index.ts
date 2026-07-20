@@ -254,8 +254,8 @@ Compile this batch now. Produce your JSON.`;
     { role: "user", content: user },
   ];
   let parsed: any = null;
-  try {
-    for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
+  for (let attempt = 0; attempt < 3 && !parsed; attempt++) {
+    try {
       const res = await callSeat(userId, "chair", messages, {
         json: true,
         temperature: 0.3,
@@ -271,12 +271,19 @@ Compile this batch now. Produce your JSON.`;
         { role: "assistant", content: res.content },
         { role: "user", content: `Your previous response failed validation: ${err}\nReturn ONLY the required JSON object, no prose, no code fences.` },
       ];
+    } catch (e) {
+      if (e instanceof NoUserKey) return j(200, { status: "no_key" });
+      if (e instanceof DailyCapExceeded) return j(402, { error: "Daily spend cap reached — try again after 00:00 UTC or raise the cap." });
+      if (e instanceof SeatUnavailable) return j(500, { error: (e as Error).message });
+      // Retry once on a transient OpenRouter error (rate limit / upstream 5xx)
+      // before surfacing a 500 — matches validate-intake and the orchestrator.
+      const status = (e as any)?.status ?? 0;
+      if (attempt < 2 && (status === 429 || status >= 500)) {
+        await new Promise((r) => setTimeout(r, 700));
+        continue;
+      }
+      return j(502, { error: "The compiler hit an upstream error. Try again in a moment." });
     }
-  } catch (e) {
-    if (e instanceof NoUserKey) return j(200, { status: "no_key" });
-    if (e instanceof DailyCapExceeded) return j(402, { error: "Daily spend cap reached — try again after 00:00 UTC or raise the cap." });
-    if (e instanceof SeatUnavailable) return j(500, { error: (e as Error).message });
-    return j(500, { error: (e as Error).message });
   }
 
   if (!parsed) return j(502, { error: "The Chair couldn't return a clean compile. Try again in a moment." });
