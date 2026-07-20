@@ -367,8 +367,8 @@ function RunwayPage() {
     <div className="mx-auto max-w-6xl px-6 py-10 md:px-10 md:py-14">
       <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <Link to="/runway" className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground hover:text-foreground">
-            ← Runway
+          <Link to="/project/$projectId" params={{ projectId }} className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground hover:text-foreground">
+            ← Back to project
           </Link>
           <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">{project.name}</h1>
           <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">The Build Runway</p>

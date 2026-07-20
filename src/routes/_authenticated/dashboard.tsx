@@ -515,69 +515,12 @@ function DashboardPage() {
 
 async function resume(
   projectId: string,
-  project: Project,
+  _project: Project,
   navigate: ReturnType<typeof useNavigate>,
 ) {
-  const status = project.status;
-  if (project.is_import) {
-    // Imports skip the greenfield intake ladder.
-    if (!project.github_repo) {
-      navigate({ to: "/audits/$projectId", params: { projectId } });
-      return;
-    }
-    if (!project.has_final_audit) {
-      navigate({ to: "/audits/$projectId", params: { projectId } });
-      return;
-    }
-    if (!project.has_locked_plan) {
-      navigate({ to: "/boardroom/$projectId", params: { projectId } });
-      return;
-    }
-    if (!project.has_design) {
-      navigate({ to: "/design/$projectId", params: { projectId } });
-      return;
-    }
-    if (!project.has_batches) {
-      navigate({ to: "/runway/$projectId", params: { projectId } });
-      return;
-    }
-    navigate({ to: "/runway/$projectId", params: { projectId } });
-    return;
-  }
-  if (status === "intake" || status === "validated" || status === "killed") {
-    const { data } = await supabase
-      .from("intakes")
-      .select("id")
-      .eq("project_id", projectId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (data) {
-      navigate({ to: "/intake/$intakeId", params: { intakeId: data.id } });
-      return;
-    }
-  }
-  if (status === "locked") {
-    const [{ data: design }, { data: batch }] = await Promise.all([
-      supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "design").limit(1).maybeSingle(),
-      supabase.from("batches").select("id").eq("project_id", projectId).limit(1).maybeSingle(),
-    ]);
-    if (!design) {
-      navigate({ to: "/design/$projectId", params: { projectId } });
-      return;
-    }
-    if (!batch) {
-      navigate({ to: "/runway/$projectId", params: { projectId } });
-      return;
-    }
-    navigate({ to: "/plan/$projectId", params: { projectId } });
-    return;
-  }
-  if (status === "building" || status === "auditing") {
-    navigate({ to: "/runway/$projectId", params: { projectId } });
-    return;
-  }
-  navigate({ to: "/boardroom/$projectId", params: { projectId } });
+  // Every project opens into its guided journey — one page that shows exactly
+  // where they are and the single next action. No more guessing which tab.
+  navigate({ to: "/project/$projectId", params: { projectId } });
 }
 
 function ProjectCard({

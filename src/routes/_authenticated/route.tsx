@@ -9,10 +9,6 @@ import {
 import { useEffect, useState } from "react";
 import {
   LayoutDashboard,
-  Users2,
-  Rocket,
-  ShieldCheck,
-  Palette,
   Settings,
   GraduationCap,
   LogOut,
@@ -44,12 +40,11 @@ export const Route = createFileRoute("/_authenticated")({
 });
 
 
+// Kept intentionally short. Each project's stages (plan, design, build, audit)
+// live inside its guided journey, not as top-level tabs — so the sidebar never
+// asks the owner to figure out the sequence themselves.
 const NAV = [
-  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/boardroom", label: "Boardroom", icon: Users2 },
-  { to: "/runway", label: "Runway", icon: Rocket },
-  { to: "/audits", label: "Audits", icon: ShieldCheck },
-  { to: "/design", label: "Design", icon: Palette },
+  { to: "/dashboard", label: "My Projects", icon: LayoutDashboard },
   { to: "/settings", label: "Settings", icon: Settings },
 ] as const;
 
@@ -118,7 +113,7 @@ function AuthenticatedShell() {
   }, [isInstructor]);
 
   const items = isInstructor
-    ? [...NAV.slice(0, 5), { to: "/cohort", label: "Cohort", icon: GraduationCap }, NAV[5]]
+    ? [NAV[0], { to: "/cohort", label: "Cohort", icon: GraduationCap }, NAV[1]]
     : NAV;
 
 

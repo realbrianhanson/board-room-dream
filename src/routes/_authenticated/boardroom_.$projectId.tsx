@@ -33,8 +33,8 @@ function BoardroomProjectPage() {
   return (
     <div className="mx-auto max-w-6xl px-6 py-10 md:px-10 md:py-14">
       <div className="mb-8">
-        <Link to="/dashboard" className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground hover:text-foreground">
-          ← Dashboard
+        <Link to="/project/$projectId" params={{ projectId }} className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground hover:text-foreground">
+          ← Back to project
         </Link>
         <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">{projectName}</h1>
       </div>

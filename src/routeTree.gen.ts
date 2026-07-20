@@ -23,6 +23,7 @@ import { Route as AuthenticatedBoardroomRouteImport } from './routes/_authentica
 import { Route as AuthenticatedAuditsRouteImport } from './routes/_authenticated/audits'
 import { Route as AuthGithubCallbackRouteImport } from './routes/auth_.github.callback'
 import { Route as AuthenticatedRunwayProjectIdRouteImport } from './routes/_authenticated/runway_.$projectId'
+import { Route as AuthenticatedProjectProjectIdRouteImport } from './routes/_authenticated/project.$projectId'
 import { Route as AuthenticatedPlanProjectIdRouteImport } from './routes/_authenticated/plan.$projectId'
 import { Route as AuthenticatedIntakeIntakeIdRouteImport } from './routes/_authenticated/intake.$intakeId'
 import { Route as AuthenticatedDesignProjectIdRouteImport } from './routes/_authenticated/design_.$projectId'
@@ -101,6 +102,12 @@ const AuthenticatedRunwayProjectIdRoute =
     path: '/runway/$projectId',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedProjectProjectIdRoute =
+  AuthenticatedProjectProjectIdRouteImport.update({
+    id: '/project/$projectId',
+    path: '/project/$projectId',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedPlanProjectIdRoute =
   AuthenticatedPlanProjectIdRouteImport.update({
     id: '/plan/$projectId',
@@ -162,6 +169,7 @@ export interface FileRoutesByFullPath {
   '/design/$projectId': typeof AuthenticatedDesignProjectIdRoute
   '/intake/$intakeId': typeof AuthenticatedIntakeIntakeIdRoute
   '/plan/$projectId': typeof AuthenticatedPlanProjectIdRoute
+  '/project/$projectId': typeof AuthenticatedProjectProjectIdRoute
   '/runway/$projectId': typeof AuthenticatedRunwayProjectIdRoute
   '/auth/github/callback': typeof AuthGithubCallbackRoute
 }
@@ -184,6 +192,7 @@ export interface FileRoutesByTo {
   '/design/$projectId': typeof AuthenticatedDesignProjectIdRoute
   '/intake/$intakeId': typeof AuthenticatedIntakeIntakeIdRoute
   '/plan/$projectId': typeof AuthenticatedPlanProjectIdRoute
+  '/project/$projectId': typeof AuthenticatedProjectProjectIdRoute
   '/runway/$projectId': typeof AuthenticatedRunwayProjectIdRoute
   '/auth/github/callback': typeof AuthGithubCallbackRoute
 }
@@ -208,6 +217,7 @@ export interface FileRoutesById {
   '/_authenticated/design_/$projectId': typeof AuthenticatedDesignProjectIdRoute
   '/_authenticated/intake/$intakeId': typeof AuthenticatedIntakeIntakeIdRoute
   '/_authenticated/plan/$projectId': typeof AuthenticatedPlanProjectIdRoute
+  '/_authenticated/project/$projectId': typeof AuthenticatedProjectProjectIdRoute
   '/_authenticated/runway_/$projectId': typeof AuthenticatedRunwayProjectIdRoute
   '/auth_/github/callback': typeof AuthGithubCallbackRoute
 }
@@ -232,6 +242,7 @@ export interface FileRouteTypes {
     | '/design/$projectId'
     | '/intake/$intakeId'
     | '/plan/$projectId'
+    | '/project/$projectId'
     | '/runway/$projectId'
     | '/auth/github/callback'
   fileRoutesByTo: FileRoutesByTo
@@ -254,6 +265,7 @@ export interface FileRouteTypes {
     | '/design/$projectId'
     | '/intake/$intakeId'
     | '/plan/$projectId'
+    | '/project/$projectId'
     | '/runway/$projectId'
     | '/auth/github/callback'
   id:
@@ -277,6 +289,7 @@ export interface FileRouteTypes {
     | '/_authenticated/design_/$projectId'
     | '/_authenticated/intake/$intakeId'
     | '/_authenticated/plan/$projectId'
+    | '/_authenticated/project/$projectId'
     | '/_authenticated/runway_/$projectId'
     | '/auth_/github/callback'
   fileRoutesById: FileRoutesById
@@ -389,6 +402,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRunwayProjectIdRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/project/$projectId': {
+      id: '/_authenticated/project/$projectId'
+      path: '/project/$projectId'
+      fullPath: '/project/$projectId'
+      preLoaderRoute: typeof AuthenticatedProjectProjectIdRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/plan/$projectId': {
       id: '/_authenticated/plan/$projectId'
       path: '/plan/$projectId'
@@ -457,6 +477,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedDesignProjectIdRoute: typeof AuthenticatedDesignProjectIdRoute
   AuthenticatedIntakeIntakeIdRoute: typeof AuthenticatedIntakeIntakeIdRoute
   AuthenticatedPlanProjectIdRoute: typeof AuthenticatedPlanProjectIdRoute
+  AuthenticatedProjectProjectIdRoute: typeof AuthenticatedProjectProjectIdRoute
   AuthenticatedRunwayProjectIdRoute: typeof AuthenticatedRunwayProjectIdRoute
 }
 
@@ -476,6 +497,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedDesignProjectIdRoute: AuthenticatedDesignProjectIdRoute,
   AuthenticatedIntakeIntakeIdRoute: AuthenticatedIntakeIntakeIdRoute,
   AuthenticatedPlanProjectIdRoute: AuthenticatedPlanProjectIdRoute,
+  AuthenticatedProjectProjectIdRoute: AuthenticatedProjectProjectIdRoute,
   AuthenticatedRunwayProjectIdRoute: AuthenticatedRunwayProjectIdRoute,
 }
 
