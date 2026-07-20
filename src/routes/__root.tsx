@@ -7,7 +7,7 @@ import {
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
@@ -123,6 +123,12 @@ function RootShell({ children }: { children: ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   const router = useRouter();
+  // Mount the toaster only after the client has hydrated. sonner injects a
+  // portal and reads browser APIs; rendering it in the SSR/first-render tree
+  // risks a hydration mismatch that can kill interactivity on every page
+  // (including sign-in). Deferring it keeps hydration purely deterministic.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => { setHydrated(true); }, []);
 
   useEffect(() => {
     const { data } = supabase.auth.onAuthStateChange((event) => {
@@ -136,7 +142,7 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       <Outlet />
-      <Toaster />
+      {hydrated && <Toaster />}
     </QueryClientProvider>
   );
 }
