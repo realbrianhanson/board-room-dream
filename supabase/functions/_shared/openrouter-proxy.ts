@@ -88,30 +88,51 @@ type SeatRow = {
   fallback_model_id: string | null;
 };
 
-async function loadSeat(admin: SupabaseClient, seat: string): Promise<SeatRow> {
+// The model registry and constitution are global (not per-user) and change
+// rarely, yet every seat call re-read them from the DB — the biggest source of
+// redundant query load during a run. Cache both at module scope with a short
+// TTL: warm isolates reuse the cache across invocations, and an admin edit
+// still takes effect within the TTL. The user's API key is deliberately NOT
+// cached — it stays a per-call read.
+const SETTINGS_TTL_MS = 30_000;
+let _registryCache: { rows: SeatRow[]; at: number } | null = null;
+let _constCache: { text: string; at: number } | null = null;
+
+async function loadRegistry(admin: SupabaseClient): Promise<SeatRow[]> {
+  const now = Date.now();
+  if (_registryCache && now - _registryCache.at < SETTINGS_TTL_MS) return _registryCache.rows;
   const { data, error } = await admin
     .from("model_registry")
-    .select("seat, model_id, role_prompt, enabled, fallback_model_id")
-    .eq("seat", seat)
-    .maybeSingle();
+    .select("seat, model_id, role_prompt, enabled, fallback_model_id");
   if (error) throw error;
+  const rows = (data ?? []) as SeatRow[];
+  _registryCache = { rows, at: now };
+  return rows;
+}
+
+async function loadSeat(admin: SupabaseClient, seat: string): Promise<SeatRow> {
+  const data = (await loadRegistry(admin)).find((r) => r.seat === seat);
   if (!data) throw new SeatUnavailable(`Seat ${seat} not configured`);
   if (!data.enabled) throw new SeatUnavailable(`Seat ${seat} is disabled`);
-  return data as SeatRow;
+  return data;
 }
 
 async function loadAllowedModels(admin: SupabaseClient): Promise<Set<string>> {
-  const { data } = await admin.from("model_registry").select("model_id").eq("enabled", true);
-  return new Set((data ?? []).map((r: any) => r.model_id));
+  const rows = await loadRegistry(admin);
+  return new Set(rows.filter((r) => r.enabled).map((r) => r.model_id));
 }
 
 async function loadConstitution(admin: SupabaseClient): Promise<string> {
+  const now = Date.now();
+  if (_constCache && now - _constCache.at < SETTINGS_TTL_MS) return _constCache.text;
   const { data } = await admin
     .from("app_settings")
     .select("value")
     .eq("key", "constitution")
     .maybeSingle();
-  return String((data?.value as any)?.text ?? "");
+  const text = String((data?.value as any)?.text ?? "");
+  _constCache = { text, at: now };
+  return text;
 }
 
 async function loadUserOpenRouterKey(admin: SupabaseClient, userId: string): Promise<string> {

@@ -122,6 +122,7 @@ Add these in **Project Settings → Secrets**. The UI shows a designed
 | `GITHUB_CLIENT_ID` | GitHub OAuth connect from Settings + Runway. |
 | `GITHUB_CLIENT_SECRET` | GitHub OAuth token exchange (`github-oauth` edge function). |
 | `RESEND_API_KEY` | Instructor daily digest email (`instructor-digest`). Without it the digest is composed and logged, never sent. |
+| `MAX_STEP_CONCURRENCY` | Seat steps run concurrently per orchestrator invocation. Defaults to `3` (clamped 1-8). Lower it to `1`-`2` to relieve a loaded instance; raise it for faster runs on a beefier one. |
 
 ## Model registry & refusal fallback
 
