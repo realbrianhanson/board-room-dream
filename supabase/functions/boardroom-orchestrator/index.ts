@@ -55,6 +55,13 @@ const PIPELINE_SECRET = Deno.env.get("PIPELINE_SECRET")!;
 
 const SELF_URL = `${SUPABASE_URL}/functions/v1/boardroom-orchestrator`;
 
+// How many seat steps run concurrently per invocation. Board rounds queue 3-4
+// steps and map-reduce audits up to 12; capping the fan-out keeps peak DB +
+// OpenRouter pressure gentle so a run can't tip a loaded instance over. The
+// rest process on the next self-tick. Tunable without a redeploy via the
+// MAX_STEP_CONCURRENCY secret; clamped to a sane 1-8.
+const MAX_STEP_CONCURRENCY = Math.min(8, Math.max(1, Number(Deno.env.get("MAX_STEP_CONCURRENCY") ?? 3)));
+
 
 function j(status: number, body: any) {
   return new Response(JSON.stringify(body), {
@@ -954,13 +961,14 @@ async function processRun(admin: any, runId: string) {
   if (run.status === "queued") {
     await admin.from("boardroom_runs").update({ status: "running" }).eq("id", runId);
   }
-  // Claim every queued step of the current round and run the seats
-  // concurrently — a round of four drafts takes one seat's latency, not four.
-  // The proxy still checks budget/caps before each call; parallel seats can
-  // overshoot the run budget by at most the in-flight calls, same order of
-  // magnitude as the per-call overshoot the serial path already allowed.
+  // Claim up to MAX_STEP_CONCURRENCY queued steps of the current round and run
+  // them concurrently — a round takes ~one seat's latency instead of four,
+  // without firing every step at the DB/OpenRouter at once. Remaining steps
+  // process on the next self-tick. The proxy still checks budget/caps before
+  // each call; parallel seats can overshoot the run budget by at most the
+  // in-flight calls, the same order of magnitude the serial path allowed.
   const claimed: any[] = [];
-  while (claimed.length < SEATS.length) {
+  while (claimed.length < MAX_STEP_CONCURRENCY) {
     const step = await claimOneStep(admin, runId);
     if (!step) break;
     claimed.push(step);
@@ -983,11 +991,21 @@ async function pipelineTick(admin: any) {
   // an invocation that no longer exists. Requeue it; the atomic claim keeps
   // double-execution impossible for live invocations.
   const staleCutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+  // Steps claimed long ago by an invocation that has since died.
   await admin
     .from("run_steps")
     .update({ status: "queued", started_at: null, error: "requeued_stale" })
     .eq("status", "running")
     .lt("started_at", staleCutoff);
+  // Legacy/pre-migration orphans have no started_at at all — every live claim
+  // now stamps it, so a 'running' row with started_at IS NULL can only be an
+  // orphan. Requeue those too (gated on run age as a belt-and-suspenders).
+  await admin
+    .from("run_steps")
+    .update({ status: "queued", error: "requeued_stale" })
+    .eq("status", "running")
+    .is("started_at", null)
+    .lt("created_at", staleCutoff);
 
   const { data: runs } = await admin
     .from("boardroom_runs")
