@@ -40,22 +40,6 @@ export const Route = createFileRoute("/_authenticated")({
     if (!session?.user) throw redirect({ to: "/auth" });
     return { user: session.user };
   },
-  loader: async () => {
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("id, role, cohort_id, display_name")
-      .maybeSingle();
-    let alertCount = 0;
-    const role = (profile as ProfileRow | null)?.role;
-    if (role === "instructor" || role === "admin") {
-      const { count } = await supabase
-        .from("alerts")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "open");
-      alertCount = count ?? 0;
-    }
-    return { profile: profile as ProfileRow | null, alertCount };
-  },
   component: AuthenticatedShell,
 });
 
@@ -70,13 +54,39 @@ const NAV = [
 ] as const;
 
 function AuthenticatedShell() {
-  const { profile, alertCount: initialAlertCount } = Route.useLoaderData();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [alertCount, setAlertCount] = useState<number>(initialAlertCount ?? 0);
+  const [profile, setProfile] = useState<ProfileRow | null>(null);
+  const [alertCount, setAlertCount] = useState<number>(0);
 
   const isInstructor = profile?.role === "instructor" || profile?.role === "admin";
+
+  // Load the profile (and, for instructors, the open-alert count) WITHOUT
+  // blocking first paint. The shell and the page Outlet render immediately;
+  // the sidebar name/role/badge fill in when this resolves. Previously this
+  // ran as a blocking route loader, so every navigation showed a black screen
+  // until the profile round-trip (plus a second alerts round-trip) returned.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("id, role, cohort_id, display_name")
+        .maybeSingle();
+      if (cancelled) return;
+      const prof = (data as ProfileRow | null) ?? null;
+      setProfile(prof);
+      if (prof?.role === "instructor" || prof?.role === "admin") {
+        const { count } = await supabase
+          .from("alerts")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "open");
+        if (!cancelled) setAlertCount(count ?? 0);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // Onboarding redirect
   useEffect(() => {

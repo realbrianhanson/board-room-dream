@@ -84,11 +84,17 @@ async function verifyUser(token: string): Promise<string | null> {
 
 
 function fireSelfTick(body: any = {}) {
-  fetch(SELF_URL, {
+  // Register the background kick with EdgeRuntime.waitUntil so the platform
+  // keeps the isolate alive to dispatch it. A bare un-awaited fetch is dropped
+  // the instant the handler returns its Response — which silently breaks the
+  // self-chain and stalls the run until the once-a-minute cron happens to
+  // rescue it (or forever, if the cron is also overwhelmed).
+  const p = fetch(SELF_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-pipeline-secret": PIPELINE_SECRET },
     body: JSON.stringify(body),
   }).catch(() => {});
+  try { (globalThis as any).EdgeRuntime?.waitUntil?.(p); } catch { /* not on Edge runtime */ }
 }
 
 
@@ -1025,6 +1031,18 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   if (req.method !== "POST") return j(405, { error: "Method not allowed" });
 
+  try {
+    return await handleRequest(req);
+  } catch (e) {
+    // Never let a transient throw (auth blip, socket error, DB hiccup) escape
+    // as a bare non-2xx with no body/CORS — that surfaces to the client as
+    // "Edge Function returned a non-2xx status code" with nothing to act on.
+    // Return a structured, CORS-headed 500 the frontend can read and retry.
+    return j(500, { error: (e as Error)?.message ?? "Internal error" });
+  }
+});
+
+async function handleRequest(req: Request): Promise<Response> {
   const admin = adminClient();
   const pipelineHeader = req.headers.get("x-pipeline-secret");
 
@@ -1191,4 +1209,4 @@ Deno.serve(async (req) => {
   }
 
   return j(400, { error: "Unknown action" });
-});
+}

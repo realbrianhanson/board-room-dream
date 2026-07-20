@@ -180,11 +180,15 @@ Produce your JSON now.`;
 
 function fireOrchestrator() {
   try {
-    fetch(ORCH_URL, {
+    // waitUntil keeps the isolate alive to actually dispatch this kick; a bare
+    // un-awaited fetch is dropped when the handler returns, leaving the audit
+    // queued but never processed.
+    const p = fetch(ORCH_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-pipeline-secret": PIPELINE_SECRET },
       body: JSON.stringify({}),
     }).catch(() => {});
+    (globalThis as any).EdgeRuntime?.waitUntil?.(p);
   } catch { /* ignore */ }
 }
 
