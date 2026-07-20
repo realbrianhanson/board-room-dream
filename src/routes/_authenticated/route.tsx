@@ -31,9 +31,14 @@ type ProfileRow = {
 export const Route = createFileRoute("/_authenticated")({
   ssr: false,
   beforeLoad: async () => {
-    const { data, error } = await supabase.auth.getUser();
-    if (error || !data.user) throw redirect({ to: "/auth" });
-    return { user: data.user };
+    // Use getSession (reads the persisted session locally — no network round
+    // trip) rather than getUser (which hits /auth/v1/user on every entry).
+    // getUser races session propagation right after password sign-in and can
+    // bounce the user back to /auth; it also adds a blocking network hop to
+    // every authenticated navigation. RLS enforces real security server-side.
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user) throw redirect({ to: "/auth" });
+    return { user: session.user };
   },
   loader: async () => {
     const { data: profile } = await supabase
