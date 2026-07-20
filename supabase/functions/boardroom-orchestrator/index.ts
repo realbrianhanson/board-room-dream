@@ -281,12 +281,23 @@ async function executeStep(admin: any, run: any, step: any) {
           .eq("id", run.id);
         return;
       }
+      if ((e as any)?.isHardTimeout) {
+        console.log(`[exec] HARD TIMEOUT step=${step.step_key} run=${run.id}`);
+        const tmsg = `Step ${step.step_key} timed out — the model did not respond in time.`;
+        await admin
+          .from("run_steps")
+          .update({ status: "failed", error: "hard_timeout", completed_at: new Date().toISOString() })
+          .eq("id", step.id);
+        await admin.from("boardroom_runs").update({ status: "failed", error: tmsg }).eq("id", run.id);
+        return;
+      }
       if (networkAttempt === 0) {
         networkAttempt++;
         await new Promise((r) => setTimeout(r, 800));
         continue;
       }
       const msg = (e as Error).message ?? String(e);
+      console.log(`[exec] ERROR step=${step.step_key} run=${run.id} msg=${msg}`);
       await admin
         .from("run_steps")
         .update({ status: "failed", error: msg, completed_at: new Date().toISOString() })
