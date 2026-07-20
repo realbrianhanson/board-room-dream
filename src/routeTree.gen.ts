@@ -9,31 +9,35 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as ResetPasswordRouteImport } from './routes/reset-password'
-import { Route as AuthRouteImport } from './routes/auth'
-import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
-import { Route as AuthenticatedRunwayRouteImport } from './routes/_authenticated/runway'
-import { Route as AuthenticatedOnboardingRouteImport } from './routes/_authenticated/onboarding'
-import { Route as AuthenticatedDesignRouteImport } from './routes/_authenticated/design'
-import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
-import { Route as AuthenticatedCohortRouteImport } from './routes/_authenticated/cohort'
-import { Route as AuthenticatedBoardroomRouteImport } from './routes/_authenticated/boardroom'
+import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
+import { Route as AuthRouteImport } from './routes/auth'
+import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as AuthenticatedAuditsRouteImport } from './routes/_authenticated/audits'
-import { Route as AuthGithubCallbackRouteImport } from './routes/auth_.github.callback'
-import { Route as AuthenticatedRunwayProjectIdRouteImport } from './routes/_authenticated/runway_.$projectId'
-import { Route as AuthenticatedPlanProjectIdRouteImport } from './routes/_authenticated/plan.$projectId'
-import { Route as AuthenticatedIntakeIntakeIdRouteImport } from './routes/_authenticated/intake.$intakeId'
-import { Route as AuthenticatedDesignProjectIdRouteImport } from './routes/_authenticated/design_.$projectId'
-import { Route as AuthenticatedDebugRunsRouteImport } from './routes/_authenticated/debug.runs'
-import { Route as AuthenticatedCohortProjectIdRouteImport } from './routes/_authenticated/cohort_.$projectId'
-import { Route as AuthenticatedBoardroomProjectIdRouteImport } from './routes/_authenticated/boardroom_.$projectId'
+import { Route as AuthenticatedBoardroomRouteImport } from './routes/_authenticated/boardroom'
+import { Route as AuthenticatedCohortRouteImport } from './routes/_authenticated/cohort'
+import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
+import { Route as AuthenticatedDesignRouteImport } from './routes/_authenticated/design'
+import { Route as AuthenticatedOnboardingRouteImport } from './routes/_authenticated/onboarding'
+import { Route as AuthenticatedRunwayRouteImport } from './routes/_authenticated/runway'
+import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
 import { Route as AuthenticatedAuditsProjectIdRouteImport } from './routes/_authenticated/audits_.$projectId'
+import { Route as AuthenticatedBoardroomProjectIdRouteImport } from './routes/_authenticated/boardroom_.$projectId'
+import { Route as AuthenticatedCohortProjectIdRouteImport } from './routes/_authenticated/cohort_.$projectId'
+import { Route as AuthenticatedDebugRunsRouteImport } from './routes/_authenticated/debug.runs'
+import { Route as AuthenticatedDesignProjectIdRouteImport } from './routes/_authenticated/design_.$projectId'
+import { Route as AuthenticatedIntakeIntakeIdRouteImport } from './routes/_authenticated/intake.$intakeId'
+import { Route as AuthenticatedPlanProjectIdRouteImport } from './routes/_authenticated/plan.$projectId'
+import { Route as AuthenticatedRunwayProjectIdRouteImport } from './routes/_authenticated/runway_.$projectId'
+import { Route as AuthGithubCallbackRouteImport } from './routes/auth_.github.callback'
 
-const ResetPasswordRoute = ResetPasswordRouteImport.update({
-  id: '/reset-password',
-  path: '/reset-password',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
+  id: '/_authenticated',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthRoute = AuthRouteImport.update({
@@ -41,43 +45,14 @@ const AuthRoute = AuthRouteImport.update({
   path: '/auth',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
-  id: '/_authenticated',
+const ResetPasswordRoute = ResetPasswordRouteImport.update({
+  id: '/reset-password',
+  path: '/reset-password',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => AuthenticatedRouteRoute,
-} as any)
-const AuthenticatedRunwayRoute = AuthenticatedRunwayRouteImport.update({
-  id: '/runway',
-  path: '/runway',
-  getParentRoute: () => AuthenticatedRouteRoute,
-} as any)
-const AuthenticatedOnboardingRoute = AuthenticatedOnboardingRouteImport.update({
-  id: '/onboarding',
-  path: '/onboarding',
-  getParentRoute: () => AuthenticatedRouteRoute,
-} as any)
-const AuthenticatedDesignRoute = AuthenticatedDesignRouteImport.update({
-  id: '/design',
-  path: '/design',
-  getParentRoute: () => AuthenticatedRouteRoute,
-} as any)
-const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
-  getParentRoute: () => AuthenticatedRouteRoute,
-} as any)
-const AuthenticatedCohortRoute = AuthenticatedCohortRouteImport.update({
-  id: '/cohort',
-  path: '/cohort',
+const AuthenticatedAuditsRoute = AuthenticatedAuditsRouteImport.update({
+  id: '/audits',
+  path: '/audits',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedBoardroomRoute = AuthenticatedBoardroomRouteImport.update({
@@ -85,49 +60,40 @@ const AuthenticatedBoardroomRoute = AuthenticatedBoardroomRouteImport.update({
   path: '/boardroom',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
-const AuthenticatedAuditsRoute = AuthenticatedAuditsRouteImport.update({
-  id: '/audits',
-  path: '/audits',
+const AuthenticatedCohortRoute = AuthenticatedCohortRouteImport.update({
+  id: '/cohort',
+  path: '/cohort',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
-const AuthGithubCallbackRoute = AuthGithubCallbackRouteImport.update({
-  id: '/auth_/github/callback',
-  path: '/auth/github/callback',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuthenticatedRunwayProjectIdRoute =
-  AuthenticatedRunwayProjectIdRouteImport.update({
-    id: '/runway_/$projectId',
-    path: '/runway/$projectId',
-    getParentRoute: () => AuthenticatedRouteRoute,
-  } as any)
-const AuthenticatedPlanProjectIdRoute =
-  AuthenticatedPlanProjectIdRouteImport.update({
-    id: '/plan/$projectId',
-    path: '/plan/$projectId',
-    getParentRoute: () => AuthenticatedRouteRoute,
-  } as any)
-const AuthenticatedIntakeIntakeIdRoute =
-  AuthenticatedIntakeIntakeIdRouteImport.update({
-    id: '/intake/$intakeId',
-    path: '/intake/$intakeId',
-    getParentRoute: () => AuthenticatedRouteRoute,
-  } as any)
-const AuthenticatedDesignProjectIdRoute =
-  AuthenticatedDesignProjectIdRouteImport.update({
-    id: '/design_/$projectId',
-    path: '/design/$projectId',
-    getParentRoute: () => AuthenticatedRouteRoute,
-  } as any)
-const AuthenticatedDebugRunsRoute = AuthenticatedDebugRunsRouteImport.update({
-  id: '/debug/runs',
-  path: '/debug/runs',
+const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
-const AuthenticatedCohortProjectIdRoute =
-  AuthenticatedCohortProjectIdRouteImport.update({
-    id: '/cohort_/$projectId',
-    path: '/cohort/$projectId',
+const AuthenticatedDesignRoute = AuthenticatedDesignRouteImport.update({
+  id: '/design',
+  path: '/design',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedOnboardingRoute = AuthenticatedOnboardingRouteImport.update({
+  id: '/onboarding',
+  path: '/onboarding',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedRunwayRoute = AuthenticatedRunwayRouteImport.update({
+  id: '/runway',
+  path: '/runway',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedAuditsProjectIdRoute =
+  AuthenticatedAuditsProjectIdRouteImport.update({
+    id: '/audits_/$projectId',
+    path: '/audits/$projectId',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
 const AuthenticatedBoardroomProjectIdRoute =
@@ -136,12 +102,46 @@ const AuthenticatedBoardroomProjectIdRoute =
     path: '/boardroom/$projectId',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
-const AuthenticatedAuditsProjectIdRoute =
-  AuthenticatedAuditsProjectIdRouteImport.update({
-    id: '/audits_/$projectId',
-    path: '/audits/$projectId',
+const AuthenticatedCohortProjectIdRoute =
+  AuthenticatedCohortProjectIdRouteImport.update({
+    id: '/cohort_/$projectId',
+    path: '/cohort/$projectId',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedDebugRunsRoute = AuthenticatedDebugRunsRouteImport.update({
+  id: '/debug/runs',
+  path: '/debug/runs',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedDesignProjectIdRoute =
+  AuthenticatedDesignProjectIdRouteImport.update({
+    id: '/design_/$projectId',
+    path: '/design/$projectId',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedIntakeIntakeIdRoute =
+  AuthenticatedIntakeIntakeIdRouteImport.update({
+    id: '/intake/$intakeId',
+    path: '/intake/$intakeId',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedPlanProjectIdRoute =
+  AuthenticatedPlanProjectIdRouteImport.update({
+    id: '/plan/$projectId',
+    path: '/plan/$projectId',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedRunwayProjectIdRoute =
+  AuthenticatedRunwayProjectIdRouteImport.update({
+    id: '/runway_/$projectId',
+    path: '/runway/$projectId',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthGithubCallbackRoute = AuthGithubCallbackRouteImport.update({
+  id: '/auth_/github/callback',
+  path: '/auth/github/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -291,18 +291,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/reset-password': {
-      id: '/reset-password'
-      path: '/reset-password'
-      fullPath: '/reset-password'
-      preLoaderRoute: typeof ResetPasswordRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/auth': {
-      id: '/auth'
-      path: '/auth'
-      fullPath: '/auth'
-      preLoaderRoute: typeof AuthRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authenticated': {
@@ -312,53 +305,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/auth': {
+      id: '/auth'
+      path: '/auth'
+      fullPath: '/auth'
+      preLoaderRoute: typeof AuthRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_authenticated/settings': {
-      id: '/_authenticated/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof AuthenticatedSettingsRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
+    '/reset-password': {
+      id: '/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof ResetPasswordRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/_authenticated/runway': {
-      id: '/_authenticated/runway'
-      path: '/runway'
-      fullPath: '/runway'
-      preLoaderRoute: typeof AuthenticatedRunwayRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/onboarding': {
-      id: '/_authenticated/onboarding'
-      path: '/onboarding'
-      fullPath: '/onboarding'
-      preLoaderRoute: typeof AuthenticatedOnboardingRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/design': {
-      id: '/_authenticated/design'
-      path: '/design'
-      fullPath: '/design'
-      preLoaderRoute: typeof AuthenticatedDesignRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/dashboard': {
-      id: '/_authenticated/dashboard'
-      path: '/dashboard'
-      fullPath: '/dashboard'
-      preLoaderRoute: typeof AuthenticatedDashboardRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
-    '/_authenticated/cohort': {
-      id: '/_authenticated/cohort'
-      path: '/cohort'
-      fullPath: '/cohort'
-      preLoaderRoute: typeof AuthenticatedCohortRouteImport
+    '/_authenticated/audits': {
+      id: '/_authenticated/audits'
+      path: '/audits'
+      fullPath: '/audits'
+      preLoaderRoute: typeof AuthenticatedAuditsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/boardroom': {
@@ -368,60 +333,53 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedBoardroomRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/_authenticated/audits': {
-      id: '/_authenticated/audits'
-      path: '/audits'
-      fullPath: '/audits'
-      preLoaderRoute: typeof AuthenticatedAuditsRouteImport
+    '/_authenticated/cohort': {
+      id: '/_authenticated/cohort'
+      path: '/cohort'
+      fullPath: '/cohort'
+      preLoaderRoute: typeof AuthenticatedCohortRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/auth_/github/callback': {
-      id: '/auth_/github/callback'
-      path: '/auth/github/callback'
-      fullPath: '/auth/github/callback'
-      preLoaderRoute: typeof AuthGithubCallbackRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/_authenticated/runway_/$projectId': {
-      id: '/_authenticated/runway_/$projectId'
-      path: '/runway/$projectId'
-      fullPath: '/runway/$projectId'
-      preLoaderRoute: typeof AuthenticatedRunwayProjectIdRouteImport
+    '/_authenticated/dashboard': {
+      id: '/_authenticated/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof AuthenticatedDashboardRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/_authenticated/plan/$projectId': {
-      id: '/_authenticated/plan/$projectId'
-      path: '/plan/$projectId'
-      fullPath: '/plan/$projectId'
-      preLoaderRoute: typeof AuthenticatedPlanProjectIdRouteImport
+    '/_authenticated/design': {
+      id: '/_authenticated/design'
+      path: '/design'
+      fullPath: '/design'
+      preLoaderRoute: typeof AuthenticatedDesignRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/_authenticated/intake/$intakeId': {
-      id: '/_authenticated/intake/$intakeId'
-      path: '/intake/$intakeId'
-      fullPath: '/intake/$intakeId'
-      preLoaderRoute: typeof AuthenticatedIntakeIntakeIdRouteImport
+    '/_authenticated/onboarding': {
+      id: '/_authenticated/onboarding'
+      path: '/onboarding'
+      fullPath: '/onboarding'
+      preLoaderRoute: typeof AuthenticatedOnboardingRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/_authenticated/design_/$projectId': {
-      id: '/_authenticated/design_/$projectId'
-      path: '/design/$projectId'
-      fullPath: '/design/$projectId'
-      preLoaderRoute: typeof AuthenticatedDesignProjectIdRouteImport
+    '/_authenticated/runway': {
+      id: '/_authenticated/runway'
+      path: '/runway'
+      fullPath: '/runway'
+      preLoaderRoute: typeof AuthenticatedRunwayRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/_authenticated/debug/runs': {
-      id: '/_authenticated/debug/runs'
-      path: '/debug/runs'
-      fullPath: '/debug/runs'
-      preLoaderRoute: typeof AuthenticatedDebugRunsRouteImport
+    '/_authenticated/settings': {
+      id: '/_authenticated/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AuthenticatedSettingsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/_authenticated/cohort_/$projectId': {
-      id: '/_authenticated/cohort_/$projectId'
-      path: '/cohort/$projectId'
-      fullPath: '/cohort/$projectId'
-      preLoaderRoute: typeof AuthenticatedCohortProjectIdRouteImport
+    '/_authenticated/audits_/$projectId': {
+      id: '/_authenticated/audits_/$projectId'
+      path: '/audits/$projectId'
+      fullPath: '/audits/$projectId'
+      preLoaderRoute: typeof AuthenticatedAuditsProjectIdRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/boardroom_/$projectId': {
@@ -431,12 +389,54 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedBoardroomProjectIdRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/_authenticated/audits_/$projectId': {
-      id: '/_authenticated/audits_/$projectId'
-      path: '/audits/$projectId'
-      fullPath: '/audits/$projectId'
-      preLoaderRoute: typeof AuthenticatedAuditsProjectIdRouteImport
+    '/_authenticated/cohort_/$projectId': {
+      id: '/_authenticated/cohort_/$projectId'
+      path: '/cohort/$projectId'
+      fullPath: '/cohort/$projectId'
+      preLoaderRoute: typeof AuthenticatedCohortProjectIdRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/debug/runs': {
+      id: '/_authenticated/debug/runs'
+      path: '/debug/runs'
+      fullPath: '/debug/runs'
+      preLoaderRoute: typeof AuthenticatedDebugRunsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/design_/$projectId': {
+      id: '/_authenticated/design_/$projectId'
+      path: '/design/$projectId'
+      fullPath: '/design/$projectId'
+      preLoaderRoute: typeof AuthenticatedDesignProjectIdRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/intake/$intakeId': {
+      id: '/_authenticated/intake/$intakeId'
+      path: '/intake/$intakeId'
+      fullPath: '/intake/$intakeId'
+      preLoaderRoute: typeof AuthenticatedIntakeIntakeIdRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/plan/$projectId': {
+      id: '/_authenticated/plan/$projectId'
+      path: '/plan/$projectId'
+      fullPath: '/plan/$projectId'
+      preLoaderRoute: typeof AuthenticatedPlanProjectIdRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/runway_/$projectId': {
+      id: '/_authenticated/runway_/$projectId'
+      path: '/runway/$projectId'
+      fullPath: '/runway/$projectId'
+      preLoaderRoute: typeof AuthenticatedRunwayProjectIdRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/auth_/github/callback': {
+      id: '/auth_/github/callback'
+      path: '/auth/github/callback'
+      fullPath: '/auth/github/callback'
+      preLoaderRoute: typeof AuthGithubCallbackRouteImport
+      parentRoute: typeof rootRouteImport
     }
   }
 }
@@ -492,13 +492,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}
