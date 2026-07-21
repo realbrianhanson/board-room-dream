@@ -144,7 +144,6 @@ export async function queueRound1(admin: any, run: any) {
     } else {
       userContent = `${intakeBlock(intake)}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nWrite your Round 1 design direction now.`;
     }
-  }
   } else if (run.kind === "plan" && isImport) {
     system =
       "Round 1 of the board's improvement deliberation. This app already exists — the owner has brought it to the board. You are drafting INDEPENDENTLY. Produce a PRIORITIZED IMPROVEMENT PLAN: what's broken, what's missing, what to build next, ranked by impact. Be specific, opinionated, and concrete about the code you can see. Do not restart the app from scratch.";
