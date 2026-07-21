@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Plus, ArrowRight, Lightbulb, Package, Trash2 } from "lucide-react";
+import { ProjectJourney } from "@/components/project-journey";
+import { buildJourney } from "@/lib/project-journey";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   component: DashboardPage,
@@ -635,8 +637,11 @@ function ProjectCard({
       <p className="mt-6 text-xs text-muted-foreground">
         Created {new Date(project.created_at).toLocaleDateString()}
       </p>
-      <span className="mt-3 inline-flex items-center gap-1.5 text-xs text-foreground/80 group-hover:text-primary">
-        {nextActionLabel(project)}
+      <div className="mt-5 w-full">
+        <ProjectJourney stages={buildJourney(project)} />
+      </div>
+      <span className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow-sm transition-all group-hover:brightness-110">
+        Next: {nextActionLabel(project)}
         <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
       </span>
     </div>
