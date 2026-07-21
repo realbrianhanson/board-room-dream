@@ -5,6 +5,8 @@ import { toast } from "sonner";
 import { ArrowRight, Check, ScrollText, ShieldCheck } from "lucide-react";
 import { CodeSourcePicker } from "@/components/code-source-picker";
 import { GitHubRepoCard } from "@/components/github-repo-card";
+import { ProjectJourney } from "@/components/project-journey";
+import { useProjectJourney } from "@/hooks/use-project-journey";
 
 export const Route = createFileRoute("/_authenticated/audits_/$projectId")({
   component: AuditCenterPage,
@@ -47,6 +49,7 @@ const SEV_STYLE: Record<Finding["severity"], string> = {
 
 function AuditCenterPage() {
   const { projectId } = Route.useParams();
+  const journey = useProjectJourney(projectId);
   const [projectName, setProjectName] = useState<string>("");
   const [isImport, setIsImport] = useState<boolean>(false);
   const [ghRepo, setGhRepo] = useState<string | null>(null);
@@ -140,6 +143,11 @@ function AuditCenterPage() {
       <Link to="/audits" className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground hover:text-foreground">← Audits</Link>
       <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">{projectName || "Project"}</h1>
       <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">The audit ledger</p>
+      {journey && (
+        <div className="mt-4 mb-2">
+          <ProjectJourney stages={journey} />
+        </div>
+      )}
 
       {/* Open findings */}
       <section className="mt-10">

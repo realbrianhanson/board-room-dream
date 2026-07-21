@@ -6,6 +6,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { BoardroomSession, DESIGN_RUBRIC } from "@/components/boardroom-session";
 import { toast } from "sonner";
 import { ArrowRight, Download, Palette, Upload, X } from "lucide-react";
+import { ProjectJourney } from "@/components/project-journey";
+import { useProjectJourney } from "@/hooks/use-project-journey";
 
 export const Route = createFileRoute("/_authenticated/design_/$projectId")({
   component: DesignStudioPage,
@@ -28,6 +30,7 @@ type PlanVersion = {
 
 function DesignStudioPage() {
   const { projectId } = Route.useParams();
+  const journey = useProjectJourney(projectId);
   const [project, setProject] = useState<Project | null>(null);
   const [hasPlan, setHasPlan] = useState<boolean | null>(null);
   const [locked, setLocked] = useState<PlanVersion | null>(null);
@@ -125,6 +128,11 @@ function DesignStudioPage() {
         </Link>
         <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">{project.name}</h1>
         <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">The Design Council</p>
+        {journey && (
+          <div className="mt-4 mb-2">
+            <ProjectJourney stages={journey} />
+          </div>
+        )}
       </div>
 
       {!hasPlan && !project.is_import ? (

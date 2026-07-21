@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { BoardroomSession, PLAN_RUBRIC } from "@/components/boardroom-session";
 import { ArrowRight } from "lucide-react";
+import { ProjectJourney } from "@/components/project-journey";
+import { useProjectJourney } from "@/hooks/use-project-journey";
 
 export const Route = createFileRoute("/_authenticated/boardroom_/$projectId")({
   component: BoardroomProjectPage,
@@ -15,6 +17,7 @@ const CONVENE_BLOCKED: Record<string, string> = {
 
 function BoardroomProjectPage() {
   const { projectId } = Route.useParams();
+  const journey = useProjectJourney(projectId);
   const [projectName, setProjectName] = useState<string>("Project");
   const [isImport, setIsImport] = useState<boolean>(false);
 
@@ -37,6 +40,11 @@ function BoardroomProjectPage() {
           ← Dashboard
         </Link>
         <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">{projectName}</h1>
+        {journey && (
+          <div className="mt-4 mb-2">
+            <ProjectJourney stages={journey} />
+          </div>
+        )}
       </div>
       <BoardroomSession
         projectId={projectId}

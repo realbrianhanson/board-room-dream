@@ -5,6 +5,8 @@ import { toast } from "sonner";
 import { CodeSourcePicker } from "@/components/code-source-picker";
 import { GitHubRepoCard } from "@/components/github-repo-card";
 import { startGithubConnect } from "@/lib/github-connect";
+import { ProjectJourney } from "@/components/project-journey";
+import { useProjectJourney } from "@/hooks/use-project-journey";
 import {
   AlertTriangle,
   ArrowRight,
@@ -135,6 +137,7 @@ type FindingRow = {
 
 function RunwayPage() {
   const { projectId } = Route.useParams();
+  const journey = useProjectJourney(projectId);
   const [uid, setUid] = useState<string | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [hasPlan, setHasPlan] = useState<boolean | null>(null);
@@ -372,6 +375,11 @@ function RunwayPage() {
           </Link>
           <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">{project.name}</h1>
           <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">The Build Runway</p>
+          {journey && (
+            <div className="mt-4 mb-2">
+              <ProjectJourney stages={journey} />
+            </div>
+          )}
         </div>
         {total > 0 && (
           <div className="flex items-center gap-3 rounded-xl border border-border bg-surface-1 px-4 py-2">
