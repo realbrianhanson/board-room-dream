@@ -83,6 +83,10 @@ async function verifyUser(token: string): Promise<string | null> {
 }
 
 
+// Runtime build stamp, returned on unauthenticated requests so the live build
+// is verifiable with a single curl. Bump on every orchestrator change.
+const BUILD_VERSION = "2026-07-20.storm-fix.1";
+
 function fireSelfTick(body: any = {}) {
   // Register the background kick with EdgeRuntime.waitUntil so the platform
   // keeps the isolate alive to dispatch it. A bare un-awaited fetch is dropped
@@ -316,15 +320,6 @@ async function lockPlanAndQueueBlueprint(
   mode: "consensus" | "chair_ruled",
 ) {
   const planKind = run.kind === "design" ? "design" : "plan";
-  const { data: existing } = await admin
-    .from("plan_versions")
-    .select("version")
-    .eq("project_id", run.project_id)
-    .eq("kind", planKind)
-    .order("version", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const nextVersion = (existing?.version ?? 0) + 1;
 
   let contentMd = "";
   let decisionLog: any[] = [];
@@ -350,6 +345,44 @@ async function lockPlanAndQueueBlueprint(
       if (Array.isArray(dl)) decisionLog.push(...dl);
     }
   }
+
+  // Never lock an empty document: fail loudly instead of finalizing garbage.
+  if (!contentMd.trim()) {
+    await admin
+      .from("boardroom_runs")
+      .update({ status: "failed", error: "empty_final_document", updated_at: new Date().toISOString() })
+      .eq("id", run.id);
+    await insertAlert(admin, {
+      user_id: run.user_id,
+      project_id: run.project_id,
+      kind: "never_locked",
+      detail: { run_id: run.id, mode, reason: "final document was empty" },
+    });
+    return;
+  }
+
+  // Atomically claim the lock transition: two concurrent ticks can both reach
+  // this point; flipping round_no to 6 in one guarded UPDATE lets exactly one
+  // win, so duplicate plan_versions are impossible.
+  const { data: claimRows } = await admin
+    .from("boardroom_runs")
+    .update({ round_no: 6, updated_at: new Date().toISOString() })
+    .eq("id", run.id)
+    .lt("round_no", 6)
+    .select("id");
+  if (!claimRows || claimRows.length === 0) {
+    return;
+  }
+
+  const { data: existing } = await admin
+    .from("plan_versions")
+    .select("version")
+    .eq("project_id", run.project_id)
+    .eq("kind", planKind)
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const nextVersion = (existing?.version ?? 0) + 1;
 
   const voteSteps = steps.filter((x) => x.step_key.startsWith("r4_vote_") && x.status === "completed");
   const latestLoop = Math.max(-1, ...voteSteps.map((v: any) => {
@@ -752,9 +785,17 @@ async function afterStepComplete(admin: any, runIn: any) {
   const run = await getRun(admin, runIn.id);
   if (!run) return;
   const steps = await loadAllSteps(admin, run.id);
-  const active = steps.some((s: any) => s.status === "queued" || s.status === "running");
-  if (active) {
+  // Queued steps = claimable work -> kick one tick to pick them up.
+  if (steps.some((s: any) => s.status === "queued")) {
     fireSelfTick();
+    return;
+  }
+  // Running steps = another invocation is on it. Do NOT self-tick here: that
+  // invocation calls afterStepComplete itself when its step finishes, and the
+  // per-minute cron rescues orphans. Re-firing on merely-running steps created
+  // an infinite tick storm that maxed the instance and kept old warm isolates
+  // permanently busy so redeployed code never took effect.
+  if (steps.some((s: any) => s.status === "running")) {
     return;
   }
 
@@ -1092,7 +1133,7 @@ async function handleRequest(req: Request): Promise<Response> {
 
   const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
   const userId = await verifyUser(token);
-  if (!userId) return j(401, { error: "Missing or invalid user JWT" });
+  if (!userId) return j(401, { error: "Missing or invalid user JWT", version: BUILD_VERSION });
 
   let body: any;
   try { body = await req.json(); } catch { return j(400, { error: "Invalid JSON" }); }
