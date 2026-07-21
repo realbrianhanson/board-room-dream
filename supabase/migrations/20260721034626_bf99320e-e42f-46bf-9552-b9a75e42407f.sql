@@ -1,0 +1,1 @@
+DROP POLICY IF EXISTS "Read model registry" ON public.model_registry;
