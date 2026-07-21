@@ -759,7 +759,7 @@ Return ONLY the same JSON shape as the original draft:
   "batches": [ { "batch_no": 1, "title": "...", "channel": "lovable"|"supabase"|"human", "prompt_md": "..." } ]
 }
 
-Constraints: 6-14 batches, unique ascending integer batch_no starting at 1, every prompt_md non-empty, FULL length, following the batch skeleton exactly (numbered items, acceptance checks for code batches, "Keep everything else identical.", "Typecheck when done." for code batches).`;
+Constraints: 6-16 batches, unique ascending integer batch_no starting at 1, every prompt_md non-empty, FULL length, following the batch skeleton exactly (numbered items, acceptance checks for code batches, "Keep everything else identical.", "Typecheck when done." for code batches). Never delete Enhancement batches to satisfy a reviewer unless the reviewer explicitly flagged them.`;
   const user = `YOUR DRAFT\n\n${JSON.stringify(draftJson?.batches ?? [], null, 2)}\n\nREVIEW ISSUES\n\n${issues}\n\nProduce the revised JSON now.`;
   await admin.from("run_steps").insert({
     run_id: run.id,
