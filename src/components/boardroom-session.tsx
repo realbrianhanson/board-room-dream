@@ -143,7 +143,8 @@ export function BoardroomSession(props: BoardroomSessionProps) {
 
       const { data: seatRows } = await supabase
         .from("model_registry_public")
-        .select("seat, display_name, model_id, enabled");
+        .select("seat, display_name, model_id, enabled")
+        .in("seat", ["chair", "strategist", "contrarian", "inspector"]);
       if (!cancelled) setSeats((seatRows ?? []) as SeatRow[]);
 
       if (uid && uid === proj.user_id) {
