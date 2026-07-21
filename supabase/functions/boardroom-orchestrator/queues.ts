@@ -20,7 +20,7 @@ import {
 export async function loadLockedPlan(admin: any, projectId: string) {
   const { data } = await admin
     .from("plan_versions")
-    .select("content_md, prd_md, features")
+    .select("content_md, prd_md, features, dissent_ledger, decision_log")
     .eq("project_id", projectId)
     .eq("kind", "plan")
     .order("version", { ascending: false })
@@ -616,7 +616,7 @@ export async function queueBatchesStep(admin: any, run: any) {
     ? `LOCKED DESIGN BRIEF\n\n${design.content_md}\n\nBatch 1 MUST install these design tokens (CSS variables, Tailwind config, font imports) BEFORE any feature work.`
     : `NO LOCKED DESIGN BRIEF — do not fabricate one. The student will convene the Design Council later.`;
 
-  const system = `You are the Chair, sequencing this student's build for their Lovable project. Produce 6-14 dependency-safe, single-concern build batches that turn the locked plan + PRD into a shippable app.
+  const system = `You are the Chair, sequencing this student's build for their Lovable project. Produce 6-16 dependency-safe, single-concern build batches that turn the locked plan + PRD into a shippable app — core batches first, then clearly-labeled Enhancement batches so lower-priority value is never silently dropped.
 
 ${manual}
 
@@ -629,6 +629,8 @@ Rules for EVERY batch:
 - Channel 'human' = things only the student can do in external consoles (Stripe, DNS, OAuth apps, App Store, domain purchase) — write plain-language numbered steps, no code, no acceptance checks, no typecheck line.
 - Channel 'lovable' = frontend + integration work the student will paste into Lovable.
 - Sequence so nothing depends on a later batch. Auth/data foundations early. Polish/SEO/analytics late.
+- EVERY feature in the FEATURES list must land in some batch. Must-have/high-priority features go in the core batches; lower-priority features go in final batches titled "Enhancement — <name>" (same skeleton, same rigor). Never silently drop a listed feature.
+- If a DEFERRED VALUE section is provided, harvest the still-valuable ideas that do not contradict the locked plan into the Enhancement batches too — the student paid for that thinking; do not lose it. Never resurrect anything the board explicitly rejected as harmful.
 - Every prompt_md follows this skeleton:
   """
   Batch N — <one-line batch name>. Numbered items only, no scope creep.
@@ -652,13 +654,21 @@ Return ONLY valid JSON:
   ]
 }
 
-Constraints: 6-14 batches, unique ascending integer batch_no starting at 1, every prompt_md non-empty, FULL length, and following the skeleton exactly.`;
+Constraints: 6-16 batches, unique ascending integer batch_no starting at 1, every prompt_md non-empty, FULL length, and following the skeleton exactly.`;
 
   const featuresBlock = Array.isArray(plan?.features) && plan!.features.length
     ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
     : "(none listed)";
 
-  const user = `LOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nProduce the JSON now.`;
+  const deferredRaw = {
+    decision_log: (plan as any)?.decision_log ?? null,
+    dissent_ledger: (plan as any)?.dissent_ledger ?? null,
+  };
+  const deferredBlock = (deferredRaw.decision_log || deferredRaw.dissent_ledger)
+    ? `\n\nDEFERRED VALUE (board decision log + dissent ledger) — ideas debated and not adopted into the core plan. Harvest anything still valuable and consistent with the locked plan into the final Enhancement batches:\n${JSON.stringify(deferredRaw).slice(0, 4000)}`
+    : "";
+
+  const user = `LOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}${deferredBlock}\n\nProduce the JSON now.`;
 
   await admin.from("run_steps").insert({
     run_id: run.id,
@@ -696,6 +706,7 @@ Verdict "approve" only if there are zero blocking issues. Be specific — name t
   const prompts: Record<string, string> = {
     inspector: `Batches review — Inspector. Check the drafted build sequence for coverage and dependency integrity:
 - Every MVP feature in the PRD lands in some batch; name any orphan (blocking).
+- Every OTHER feature in the FEATURES list lands in some batch (core or Enhancement); name any silently-dropped feature (major).
 - No batch references a table, route, component, or function created in a LATER batch (blocking).
 - Design tokens are installed before any feature work that uses them.
 - Code batches carry acceptance checks a non-coder can run by clicks alone; skeleton followed exactly.
@@ -707,7 +718,7 @@ ${shape}`,
 - Any single batch too big for Lovable to execute faithfully in one paste (mixes concerns, >~5 files, vague items) — blocking; say how to split.
 - Any table created without explicit access rules stated in plain words — blocking.
 - Human-channel work (Stripe, OAuth, DNS) hidden inside a code batch — blocking.
-- Scope creep beyond the locked plan — major; name the cut.
+- Scope creep beyond the locked plan — major; name the cut. (Clearly-labeled Enhancement batches carrying FEATURES-list items or DEFERRED VALUE are NOT scope creep — but newly invented scope inside them is.)
 
 ${manual}
 
