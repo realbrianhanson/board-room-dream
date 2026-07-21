@@ -68,6 +68,8 @@ export type ProxyOptions = {
   reasoningEffort?: "low" | "medium" | "high";
   /** Attach OpenRouter's web plugin so the model can ground claims in live search. */
   online?: boolean;
+  /** Use the seat's fallback model as the primary for this call (watchdog retries). */
+  forceFallback?: boolean;
 };
 
 export type FallbackMeta = {
@@ -408,12 +410,21 @@ export async function callSeat(
     return { ...res, tokensIn, tokensOut, costUsd, modelId };
   };
 
+  // Watchdog retries can force the fallback model as primary — a step whose
+  // primary model keeps outliving the platform's ~150s invocation window gets
+  // re-claimed with force_fallback and answered by the fast fallback instead.
+  const primaryId = options.forceFallback
+    && seatRow.fallback_model_id
+    && allowed.has(seatRow.fallback_model_id)
+      ? seatRow.fallback_model_id
+      : seatRow.model_id;
+
   // 1st attempt on primary; a timeout (hung model) routes straight to fallback.
   let attempt: Awaited<ReturnType<typeof doCall>> | null = null;
   let refused = false;
   let timedOut = false;
   try {
-    attempt = await doCall(seatRow.model_id);
+    attempt = await doCall(primaryId);
     refused = isRefusal(attempt.content, attempt.finishReason, !!options.json);
   } catch (e) {
     if ((e as any)?.isTimeout) timedOut = true;
@@ -423,7 +434,7 @@ export async function callSeat(
   // One retry on a refusal only — a genuinely hung model won't un-hang, so
   // don't waste another timeout window; go straight to the fallback.
   if (refused && !timedOut) {
-    attempt = await doCall(seatRow.model_id);
+    attempt = await doCall(primaryId);
     refused = isRefusal(attempt.content, attempt.finishReason, !!options.json);
   }
 

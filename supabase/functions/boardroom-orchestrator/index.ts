@@ -85,7 +85,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-20.storm-fix.1";
+const BUILD_VERSION = "2026-07-21.watchdog.1";
 
 function fireSelfTick(body: any = {}) {
   // Register the background kick with EdgeRuntime.waitUntil so the platform
@@ -194,6 +194,7 @@ async function executeStep(admin: any, run: any, step: any) {
             temperature: Number(step.request?.temperature ?? 0.4),
             reasoningEffort: step.request?.reasoning_effort,
             json: jsonMode,
+            forceFallback: !!step.request?.force_fallback,
           }),
           STEP_HARD_TIMEOUT_MS,
           step.step_key,
@@ -1070,13 +1071,43 @@ async function pipelineTick(admin: any) {
   // near ~400s wall clock, so anything 'running' for 15+ minutes belongs to
   // an invocation that no longer exists. Requeue it; the atomic claim keeps
   // double-execution impossible for live invocations.
-  const staleCutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
-  // Steps claimed long ago by an invocation that has since died.
-  await admin
+  // Nothing legitimate runs longer than the platform's ~150s invocation
+  // window, so a step 'running' for 4+ minutes belongs to a dead invocation.
+  // Escalate per rescue: attempt 2+ forces the seat's fallback model (the
+  // primary keeps outliving the window); attempt 4 fails the run loudly
+  // instead of looping forever. This watchdog runs from the per-minute cron,
+  // so unlike in-isolate timers it cannot be killed mid-flight.
+  const staleCutoff = new Date(Date.now() - 4 * 60 * 1000).toISOString();
+  const { data: staleSteps } = await admin
     .from("run_steps")
-    .update({ status: "queued", started_at: null, error: "requeued_stale" })
+    .select("id, run_id, step_key, request")
     .eq("status", "running")
     .lt("started_at", staleCutoff);
+  for (const st of staleSteps ?? []) {
+    const attempts = Number(st.request?._attempts ?? 0) + 1;
+    if (attempts >= 4) {
+      await admin
+        .from("run_steps")
+        .update({ status: "failed", error: "stuck_model_call", completed_at: new Date().toISOString() })
+        .eq("id", st.id)
+        .eq("status", "running");
+      await admin
+        .from("boardroom_runs")
+        .update({ status: "failed", error: `Step ${st.step_key} kept timing out — even the fallback model could not answer in time.` })
+        .eq("id", st.run_id);
+      continue;
+    }
+    await admin
+      .from("run_steps")
+      .update({
+        status: "queued",
+        started_at: null,
+        error: "requeued_stale",
+        request: { ...(st.request ?? {}), _attempts: attempts, force_fallback: attempts >= 2 },
+      })
+      .eq("id", st.id)
+      .eq("status", "running");
+  }
   // Legacy/pre-migration orphans have no started_at at all — every live claim
   // now stamps it, so a 'running' row with started_at IS NULL can only be an
   // orphan. Requeue those too (gated on run age as a belt-and-suspenders).
