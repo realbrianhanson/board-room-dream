@@ -133,12 +133,18 @@ export async function queueRound1(admin: any, run: any) {
     const plan = await loadLockedPlan(admin, run.project_id);
     system =
       "Round 1 of the Design Council. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best design direction for this app. You MUST include: concept/mood; palette as specific HSL values; type pairing with specific font names; spacing and shape language; ONE distinctive signature element (a structural design move — non-negotiable, this is the point); and motion rules. Be specific, opinionated, and premium. Avoid generic AI-slop aesthetics.";
-    if (isImport && !plan) {
-      const sample = await loadRepoSample(admin, project, 10);
-      userContent = `${intakeBlock(intake)}\n\nCODE FILES FROM THE OWNER'S REPO (frontend-biased sample)\n${formatFiles(sample.files)}\n\nThis is an existing app — critique what's there and propose a design direction that elevates it. Write your Round 1 design direction now.`;
+    if (isImport) {
+      const sample = await loadRepoSample(admin, project, 12);
+      const treeBlock = sample.fileTree.length ? sample.fileTree.join("\n") : "(no repo files available)";
+      const codeBlock = sample.files.length ? formatFiles(sample.files) : "(no repo files available)";
+      const planBlock = plan?.content_md?.trim()
+        ? `LOCKED PLAN\n\n${plan.content_md}\n\nPRD\n\n${plan.prd_md ?? "(no PRD)"}`
+        : "LOCKED PLAN\n(none yet — base your direction on the real code above)";
+      userContent = `${intakeBlock(intake)}\n\nREPO FILE TREE (top ${sample.fileTree.length})\n${treeBlock}\n\nKEY FILES (frontend-biased sample)\n${codeBlock}\n\n${planBlock}\n\nThis is an existing app — critique the real UI in the code above and propose a design direction that elevates it without a full rebuild. Write your Round 1 design direction now.`;
     } else {
       userContent = `${intakeBlock(intake)}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nWrite your Round 1 design direction now.`;
     }
+  }
   } else if (run.kind === "plan" && isImport) {
     system =
       "Round 1 of the board's improvement deliberation. This app already exists — the owner has brought it to the board. You are drafting INDEPENDENTLY. Produce a PRIORITIZED IMPROVEMENT PLAN: what's broken, what's missing, what to build next, ranked by impact. Be specific, opinionated, and concrete about the code you can see. Do not restart the app from scratch.";
