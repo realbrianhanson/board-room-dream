@@ -870,6 +870,8 @@ Return ONLY valid JSON:
 
 If verdict is "clean", findings is [] and fix_prompt_md is "".
 
+Size discipline: keep total output tight — max ~25 findings (merge duplicates aggressively; prefer the highest-severity instance), descriptions one to two sentences each, and fix_prompt_md focused on P0-P2 items only. You are being generated under a hard time limit; a complete concise answer beats a truncated thorough one.
+
 Coverage honesty: the summary must state how much of the app was actually read (the CODE COVERAGE line below). Never imply full A-Z coverage beyond what the seats reviewed.`;
 
   await admin.from("run_steps").insert({
@@ -881,7 +883,7 @@ Coverage honesty: the summary must state how much of the app was actually read (
     status: "queued",
     request: {
       json_output: true,
-      reasoning_effort: "high",
+      reasoning_effort: "medium",
       messages: [
         { role: "system", content: system },
         { role: "user", content: `CODE COVERAGE: ${Number(run.consensus?.files_analyzed ?? 0) || "unknown"} files were read across the seat steps.\n\nSEAT REPORTS (${seatSteps.length})\n\n${combined}\n\nProduce your JSON now.` },
