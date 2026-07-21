@@ -85,7 +85,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-21.watchdog.1";
+const BUILD_VERSION = "2026-07-21.watchdog.2";
 
 function fireSelfTick(body: any = {}) {
   // Register the background kick with EdgeRuntime.waitUntil so the platform
@@ -1077,7 +1077,7 @@ async function pipelineTick(admin: any) {
   // primary keeps outliving the window); attempt 4 fails the run loudly
   // instead of looping forever. This watchdog runs from the per-minute cron,
   // so unlike in-isolate timers it cannot be killed mid-flight.
-  const staleCutoff = new Date(Date.now() - 4 * 60 * 1000).toISOString();
+  const staleCutoff = new Date(Date.now() - 3 * 60 * 1000).toISOString();
   const { data: staleSteps } = await admin
     .from("run_steps")
     .select("id, run_id, step_key, request")
@@ -1103,7 +1103,7 @@ async function pipelineTick(admin: any) {
         status: "queued",
         started_at: null,
         error: "requeued_stale",
-        request: { ...(st.request ?? {}), _attempts: attempts, force_fallback: attempts >= 2 },
+        request: { ...(st.request ?? {}), _attempts: attempts, force_fallback: attempts >= 1 },
       })
       .eq("id", st.id)
       .eq("status", "running");
