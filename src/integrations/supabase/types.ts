@@ -932,6 +932,7 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      get_compiler_schema_inventory: { Args: never; Returns: Json }
       join_cohort: { Args: { code: string }; Returns: string }
       record_model_call_atomic: {
         Args: {

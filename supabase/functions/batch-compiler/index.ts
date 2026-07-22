@@ -19,7 +19,7 @@ import { assembleFromGithub, formatFiles, ghToken, redactSecrets } from "../_sha
 import { loadFieldManual } from "../_shared/lovable-field-manual.ts";
 import { batchAuthorityError, shapeError, type Parsed } from "./validators.ts";
 
-const BUILD_VERSION = "2026-07-22.compile-authority.f1";
+const BUILD_VERSION = "2026-07-22.compile-authority.f1b";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -106,46 +106,59 @@ async function loadCurrentBatches(admin: any, projectId: string) {
   return data ?? [];
 }
 
-// Live DB inventory: table names + RPC names + migration files. Powers the
-// schema authority check (existing objects can never be told to CREATE).
-async function loadSchemaInventory(admin: any): Promise<{
-  tables: string[];
-  columnsByTable: Record<string, string[]>;
-  rpcs: string[];
+// Live DB inventory via SECURITY DEFINER RPC (service-role-only). Powers the
+// schema authority check: existing objects can never be told to CREATE. This
+// path MUST fail closed — an empty/malformed inventory blocks ready compiles.
+export type SchemaInventory = {
+  tables: { name: string; columns: { name: string; type: string; nullable: boolean; default: string | null }[] }[];
+  routines: { name: string; args: string; result: string }[];
   objectsLower: Set<string>;
-}> {
+  ok: boolean;
+  reason?: string;
+};
+
+async function loadSchemaInventory(admin: any): Promise<SchemaInventory> {
+  const empty: SchemaInventory = { tables: [], routines: [], objectsLower: new Set(), ok: false };
+  let data: any = null;
+  try {
+    const res = await admin.rpc("get_compiler_schema_inventory");
+    if (res.error) return { ...empty, reason: `RPC error: ${res.error.message}` };
+    data = res.data;
+  } catch (e) {
+    return { ...empty, reason: `RPC threw: ${(e as Error).message}` };
+  }
+  if (!data || typeof data !== "object" || !Array.isArray(data.tables) || !Array.isArray(data.routines)) {
+    return { ...empty, reason: "inventory RPC returned malformed payload" };
+  }
+  const tables = data.tables.filter((t: any) => t && typeof t.name === "string" && Array.isArray(t.columns)) as SchemaInventory["tables"];
+  const routines = data.routines.filter((r: any) => r && typeof r.name === "string") as SchemaInventory["routines"];
   const objectsLower = new Set<string>();
-  const tables: string[] = [];
-  const columnsByTable: Record<string, string[]> = {};
-  const rpcs: string[] = [];
-  try {
-    const { data: cols } = await admin
-      .schema("information_schema")
-      .from("columns")
-      .select("table_name, column_name")
-      .eq("table_schema", "public")
-      .limit(4000);
-    for (const c of (cols ?? []) as Array<{ table_name: string; column_name: string }>) {
-      const t = c.table_name;
-      if (!columnsByTable[t]) { columnsByTable[t] = []; tables.push(t); objectsLower.add(t.toLowerCase()); }
-      columnsByTable[t].push(c.column_name);
-    }
-  } catch { /* schema may be inaccessible in some envs; treat as empty */ }
-  try {
-    const { data: fns } = await admin
-      .schema("information_schema")
-      .from("routines")
-      .select("routine_name")
-      .eq("routine_schema", "public")
-      .eq("routine_type", "FUNCTION")
-      .limit(500);
-    for (const f of (fns ?? []) as Array<{ routine_name: string }>) {
-      rpcs.push(f.routine_name);
-      objectsLower.add(f.routine_name.toLowerCase());
-    }
-  } catch { /* ignore */ }
-  return { tables, columnsByTable, rpcs, objectsLower };
+  for (const t of tables) objectsLower.add(t.name.toLowerCase());
+  for (const r of routines) objectsLower.add(r.name.toLowerCase());
+  // Sanity floor: this app must at minimum have public.batches + public.audit_findings + ≥1 known public routine.
+  const has = (n: string) => objectsLower.has(n);
+  if (!has("batches") || !has("audit_findings") || routines.length < 1) {
+    return { ...empty, tables, routines, objectsLower, reason: `inventory too small (tables=${tables.length}, routines=${routines.length}, has_batches=${has("batches")}, has_audit_findings=${has("audit_findings")})` };
+  }
+  // Every table must have at least one column.
+  for (const t of tables) {
+    if (!t.columns.length) return { ...empty, tables, routines, objectsLower, reason: `table "${t.name}" reported zero columns` };
+  }
+  return { tables, routines, objectsLower, ok: true };
 }
+
+function renderInventory(inv: SchemaInventory): string {
+  if (!inv.ok) return "(unavailable)";
+  const tables = inv.tables.map((t) => {
+    const cols = t.columns.slice(0, 24).map((c) => `${c.name} ${c.type}${c.nullable ? "" : " NOT NULL"}${c.default ? ` DEFAULT ${String(c.default).slice(0, 40)}` : ""}`).join(", ");
+    const more = t.columns.length > 24 ? `, … (+${t.columns.length - 24} more)` : "";
+    return `- public.${t.name}(${cols}${more})`;
+  }).join("\n");
+  const rpcs = inv.routines.map((r) => `- public.${r.name}(${r.args}) → ${r.result}`).join("\n");
+  return `TABLES (${inv.tables.length}):\n${tables}\n\nRPCs (${inv.routines.length}):\n${rpcs}`;
+}
+
+
 
 const SHAPE = `Return ONLY valid JSON:
 {
@@ -250,7 +263,7 @@ Deno.serve(async (req) => {
     loadOpenFindings(admin, batch.project_id),
     loadFieldManual(admin),
     loadCurrentBatches(admin, batch.project_id),
-    source === "github" ? loadSchemaInventory(admin) : Promise.resolve({ tables: [] as string[], columnsByTable: {} as Record<string, string[]>, rpcs: [] as string[], objectsLower: new Set<string>() }),
+    source === "github" ? loadSchemaInventory(admin) : Promise.resolve({ tables: [], routines: [], objectsLower: new Set<string>(), ok: false, reason: "paste source: schema inventory not loaded" } as SchemaInventory),
     admin.from("batches").select("id", { count: "exact", head: true }).eq("project_id", batch.project_id),
   ]);
 
@@ -269,10 +282,34 @@ Deno.serve(async (req) => {
   const currentBatchesBlock = currentBatches.length
     ? currentBatches.map((b: any) => `${b.batch_no === batch.batch_no ? "→" : " "} Batch ${b.batch_no} "${b.title}" · channel ${b.channel} · ${b.status}`).join("\n")
     : "(no batches yet)";
+  // Fail closed: GitHub compiles REQUIRE a healthy inventory. Never let a
+  // zero/malformed inventory silently degrade to a ready compile.
+  if (source === "github" && !schemaInv.ok) {
+    const meta = {
+      status: "blocked",
+      head_sha: headSha,
+      files_analyzed: filesAnalyzed,
+      source,
+      original_batch_no: Number(batch.batch_no),
+      original_title: batch.title,
+      original_channel: batch.channel,
+      reason: "Live database schema inventory unavailable",
+      inventory_reason: schemaInv.reason ?? "unknown",
+      build_version: BUILD_VERSION,
+    };
+    await admin
+      .from("batches")
+      .update({ compiled_prompt_md: null, compiled_at: null, compile_meta: meta })
+      .eq("id", batch.id);
+    return j(503, {
+      status: "blocked",
+      error: "Live database schema inventory unavailable — the compiler will not emit a prompt without it. Please retry in a moment; the batch has been reset for recompile.",
+      inventory_reason: schemaInv.reason ?? "unknown",
+      retryable: true,
+    });
+  }
   const schemaBlock = source === "github"
-    ? (schemaInv.tables.length || schemaInv.rpcs.length
-        ? `TABLES:\n${schemaInv.tables.map((t) => `- ${t}(${(schemaInv.columnsByTable[t] ?? []).slice(0, 12).join(", ")}${(schemaInv.columnsByTable[t] ?? []).length > 12 ? ", …" : ""})`).join("\n")}\nRPCs:\n${schemaInv.rpcs.map((r) => `- ${r}()`).join("\n")}`
-        : "(schema inventory unavailable)")
+    ? renderInventory(schemaInv)
     : "(schema inventory not shown for paste source — assume any database object may already exist and BLOCK on uncertainty rather than emitting a CREATE)";
 
   const system = `You are the Chair, compiling the NEXT build prompt for a non-technical founder's Lovable project. You do not write a plan from scratch — you take THIS ONE Runway batch (the arrow-marked row in CURRENT RUNWAY SEQUENCE) and re-express it against the code that now actually exists.
@@ -285,7 +322,13 @@ Authority rules (F1):
 - Add only the smallest prerequisite strictly required to complete THIS batch's intent. Every added item goes in added_prerequisites with reason + evidence.
 - Never introduce unrelated features, refactors, CI/GitHub Actions scripts, package.json scripts, or repo-wide sweeps unless they are a proved dependency of the current batch intent.
 - Preserve every still-needed numbered item from the original prompt_md in preserved_intents; deliberately omitted items go in satisfied_items with concrete evidence.
-- Keep the batch skeleton: numbered items, click-only acceptance checks, "Keep everything else identical.", "Typecheck when done." (code batches only).
+- Keep the batch skeleton exactly (ENFORCED):
+  * First line: \`Batch ${batch.batch_no} — <title semantically matching the current title>. Numbered items only, no scope creep.\`
+  * Then the numbered items, each starting with \`1.\`, \`2.\`, … — no bullets, no free-form paragraphs.
+  * If channel is "code": include an "Acceptance" section with 2–4 click-only checks (one per line).
+  * Ends EXACTLY with the two lines:\n    Keep everything else identical.\n    Typecheck when done.
+  * Total length 900–3200 characters.
+  * NEVER merely echo the original prompt when live reality (repo/schema) contradicts it — rewrite to match the live code.
 
 Ground every claim:
 - Every UPDATE/VERIFY path must be listed in touched_paths and exist verbatim in the LIVE REPO CONTRACT file tree.
@@ -293,9 +336,10 @@ Ground every claim:
 - Every asserted fact about how the app currently behaves must have an evidence item citing a real file path and what in that file grounds the claim.
 - A filename alone is NEVER proof of an exposed secret. Public Supabase anon/publishable keys are NOT secrets.
 - Any shell or SQL command you include MUST fail loudly when its check fails. Reject any command containing "|| exit 0", "|| true", or "; true".
+- If the DB SCHEMA INVENTORY lists a table/function/policy the batch wants to CREATE, you MUST convert it to ALTER/VERIFY or move it to satisfied_items with current-column evidence. This applies to bare, schema-qualified, quoted, and backticked identifiers alike, and to narrative phrasings like "Create a Postgres RPC name(...)".
 
 Decide a status:
-- "ready": emit compiled_prompt_md whose first heading matches the current batch title, with non-empty touched_paths, evidence, and preserved_intents.
+- "ready": emit compiled_prompt_md that satisfies the skeleton above, with non-empty touched_paths, evidence, and preserved_intents.
 - "already_done": the live code already satisfies THIS batch's intent — empty prompt/paths/evidence, rationale cites the concrete files that already implement it; satisfied_items lists each intent with evidence.
 - "blocked": a prerequisite the batch depends on is missing — empty prompt/paths/evidence, rationale names exactly what must exist first.
 
@@ -412,7 +456,7 @@ Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=
     rationale: parsed.rationale,
     touched_paths: parsed.touched_paths,
     evidence: parsed.evidence,
-    schema_inventory_size: { tables: schemaInv.tables.length, rpcs: schemaInv.rpcs.length },
+    schema_inventory_size: { tables: schemaInv.tables.length, routines: schemaInv.routines.length, ok: schemaInv.ok },
     build_version: BUILD_VERSION,
   };
 
