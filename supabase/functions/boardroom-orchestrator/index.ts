@@ -304,10 +304,7 @@ async function executeStep(admin: any, run: any, step: any) {
           .from("run_steps")
           .update({ status: "failed", error: (e as Error).message, completed_at: new Date().toISOString() })
           .eq("id", step.id);
-        await admin
-          .from("boardroom_runs")
-          .update({ status: "failed", error: (e as Error).message })
-          .eq("id", run.id);
+        await failRun(admin, run, (e as Error).message);
         return;
       }
       if ((e as any)?.isHardTimeout) {
@@ -317,7 +314,7 @@ async function executeStep(admin: any, run: any, step: any) {
           .from("run_steps")
           .update({ status: "failed", error: "hard_timeout", completed_at: new Date().toISOString() })
           .eq("id", step.id);
-        await admin.from("boardroom_runs").update({ status: "failed", error: tmsg }).eq("id", run.id);
+        await failRun(admin, run, tmsg);
         return;
       }
       if (networkAttempt === 0) {
@@ -331,7 +328,7 @@ async function executeStep(admin: any, run: any, step: any) {
         .from("run_steps")
         .update({ status: "failed", error: msg, completed_at: new Date().toISOString() })
         .eq("id", step.id);
-      await admin.from("boardroom_runs").update({ status: "failed", error: msg }).eq("id", run.id);
+      await failRun(admin, run, msg);
       return;
     }
   }
