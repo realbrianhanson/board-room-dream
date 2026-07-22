@@ -279,7 +279,9 @@ export async function loadCompactBatchRepoContract(admin: any, project: any): Pr
 }
 
 
-
+// Signed URLs for the founder's uploaded screenshots (newest first, max 4).
+// 24h expiry comfortably covers queue → execution, including budget pauses.
+export async function loadScreenshotParts(admin: any, userId: string, projectId: string): Promise<any[]> {
   try {
     const prefix = `${userId}/${projectId}`;
     const { data: files } = await admin.storage
