@@ -413,11 +413,13 @@ Resolution discipline: an objection is "resolved" ONLY if you can quote the exac
         json_output: true,
         // Voting is a judgment call, not a creative act — keep it cold.
         temperature: 0.2,
+        max_tokens: 3500,
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
         ],
       },
+
     };
   });
   await admin.from("run_steps").insert(rows);
