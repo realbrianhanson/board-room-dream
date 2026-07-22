@@ -71,6 +71,8 @@ function makeFakeAdmin(state: { runs: Run[]; steps: Step[]; audits: any[]; rpcCa
     ctx.is = (col: string, val: any) => { ctx.filters.push((r: any) => r[col] === val); return ctx; };
     ctx.in = (col: string, vals: any[]) => { ctx.filters.push((r: any) => vals.includes(r[col])); return ctx; };
     ctx.lt = (col: string, val: any) => { ctx.filters.push((r: any) => r[col] < val); return ctx; };
+    ctx.limit = (_n: number) => ctx;
+    ctx.maybeSingle = () => ({ then: (resolve: any) => resolve({ data: applyFilters(rows())[0] ?? null, error: null }) });
     ctx.not = (col: string, op: string, val: any) => {
       if (op === "in") {
         const list = String(val).replace(/^\(|\)$/g, "").split(",");
@@ -78,6 +80,7 @@ function makeFakeAdmin(state: { runs: Run[]; steps: Step[]; audits: any[]; rpcCa
       }
       return ctx;
     };
+
     // Terminal .select() after .update() returns affected rows.
     const commitUpdate = () => {
       const affected = applyFilters(rows());
