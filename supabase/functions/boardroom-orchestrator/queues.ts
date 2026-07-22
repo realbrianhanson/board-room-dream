@@ -285,7 +285,7 @@ export async function queueRound1(admin: any, run: any) {
       ],
     },
   }));
-  await admin.from("run_steps").insert(rows);
+  await queueSteps(admin, run, rows);
 }
 
 
