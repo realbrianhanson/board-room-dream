@@ -119,12 +119,12 @@ function AuthPage() {
 
         <div className="rounded-xl border border-border bg-surface-1 p-8 shadow-2xl shadow-black/40">
           <h1 className="font-display text-3xl text-foreground">
-            {isSignup ? "Request a seat" : "The board is in session."}
+            {isSignup ? "Create your account" : "Welcome back."}
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
             {isSignup
-              ? "Create your account to enter the boardroom."
-              : "Sign in to continue."}
+              ? "App Blueprint is the quality layer between your idea and Lovable — specialist models challenge assumptions against real code."
+              : "Sign in to open your Blueprints."}
           </p>
 
           <form onSubmit={handleSubmit} className="mt-6 space-y-4">
@@ -214,7 +214,7 @@ function AuthPage() {
           )}
 
           <p className="mt-6 text-center text-xs text-muted-foreground">
-            {isSignup ? "Already have a seat?" : "New to the boardroom?"}{" "}
+            {isSignup ? "Already have an account?" : "New here?"}{" "}
             <button
               type="button"
               onClick={() => {

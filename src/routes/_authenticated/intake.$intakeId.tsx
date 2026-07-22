@@ -10,81 +10,120 @@ export const Route = createFileRoute("/_authenticated/intake/$intakeId")({
 
 type Answers = {
   idea?: string;
+  positioning?: string;
   buyer?: string;
+  acquisition_channel?: string;
   pain?: string;
   money?: "one_time" | "subscription" | "service_enabler";
   paid_offer?: string;
   price_anchor?: string;
   upgrade_trigger?: string;
   inspiration?: string;
+  activation_moment?: string;
+  wow_moment?: string;
 };
 
 type Scores = Record<string, { score: number; evidence: string }>;
 type ValidationScores = { scores: Scores; total: number; pivot: string | null };
 
-const DIMS: { key: keyof Scores; label: string }[] = [
-  { key: "painful_problem", label: "Painful problem" },
-  { key: "reachable_buyer", label: "Reachable buyer" },
-  { key: "monetization_path", label: "Monetization path" },
-  { key: "buildable_scope", label: "Buildable scope" },
-  { key: "differentiation", label: "Differentiation" },
+const DIM_LABELS: Record<string, string> = {
+  painful_problem: "Painful problem",
+  reachable_buyer: "Reachable buyer",
+  monetization_path: "Monetization path",
+  buildable_scope: "Buildable scope",
+  differentiation: "Differentiation",
+  activation_value: "Activation & wow",
+};
+
+// Ordered list used for new six-dimension results. Legacy five-dim intakes
+// are rendered from whatever keys the stored `scores` object actually has,
+// so they never crash by requesting the missing sixth key.
+const DIM_ORDER: string[] = [
+  "painful_problem",
+  "reachable_buyer",
+  "monetization_path",
+  "buildable_scope",
+  "differentiation",
+  "activation_value",
 ];
 
-const STEPS = [
+type StepDef = {
+  id: string;
+  eyebrow: string;
+  title: string;
+  hint: string;
+  kind: "idea" | "buyer" | "pain" | "money" | "inspiration";
+};
+
+const STEPS: StepDef[] = [
   {
-    field: "idea" as const,
+    id: "idea",
     eyebrow: "Step 1 of 5 · The idea",
     title: "What does the app do, in plain words?",
     hint: "Two or three sentences. Say it like you'd say it to a friend at dinner.",
-    kind: "textarea" as const,
+    kind: "idea",
   },
   {
-    field: "buyer" as const,
+    id: "buyer",
     eyebrow: "Step 2 of 5 · The buyer",
-    title: "Who pays for this?",
-    hint: 'Name the kind of person — not "everyone." Be specific enough that you could DM ten of them tomorrow.',
-    kind: "textarea" as const,
+    title: "Who pays for this — and how do you reach them?",
+    hint: 'Name the kind of person — not "everyone." Then tell us where you can actually reach them.',
+    kind: "buyer",
   },
   {
-    field: "pain" as const,
+    id: "pain",
     eyebrow: "Step 3 of 5 · The pain",
     title: "What painful problem does it kill?",
     hint: "What happens the week they DON'T have it? Concrete cost, missed money, or wasted hours.",
-    kind: "textarea" as const,
+    kind: "pain",
   },
   {
-    field: "money" as const,
+    id: "money",
     eyebrow: "Step 4 of 5 · Money",
     title: "How does it earn?",
     hint: "Pick the closest fit. You can refine with the board later.",
-    kind: "money" as const,
+    kind: "money",
   },
   {
-    field: "inspiration" as const,
-    eyebrow: "Step 5 of 5 · Inspiration",
-    title: "Name 1–3 apps that feel like what you want.",
-    hint: "Tone, model, or shape — whatever matches. Comma-separated is fine.",
-    kind: "textarea" as const,
+    id: "inspiration",
+    eyebrow: "Step 5 of 5 · Inspiration & first result",
+    title: "What should feel familiar — and what should wow them?",
+    hint: "Reference apps that share the tone, then say what a new user gets in the first 90 seconds and what would make them show a friend.",
+    kind: "inspiration",
   },
 ];
 
 const MONEY_OPTIONS = [
-  {
-    value: "one_time" as const,
-    title: "One-time sale",
-    body: "They pay once and own it.",
-  },
-  {
-    value: "subscription" as const,
-    title: "Subscription",
-    body: "They pay monthly or yearly for ongoing value.",
-  },
-  {
-    value: "service_enabler" as const,
-    title: "Service-enabler",
-    body: "It powers a service you sell for a bigger check.",
-  },
+  { value: "one_time" as const, title: "One-time sale", body: "They pay once and own it." },
+  { value: "subscription" as const, title: "Subscription", body: "They pay monthly or yearly for ongoing value." },
+  { value: "service_enabler" as const, title: "Service-enabler", body: "It powers a service you sell for a bigger check." },
 ];
+
+const trimmed = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+
+function canProceedFromStep(kind: StepDef["kind"], a: Answers): boolean {
+  switch (kind) {
+    case "idea":
+      return trimmed(a.idea).length > 3 && trimmed(a.positioning).length > 1;
+    case "buyer":
+      return trimmed(a.buyer).length > 3 && trimmed(a.acquisition_channel).length > 1;
+    case "pain":
+      return trimmed(a.pain).length > 3;
+    case "money":
+      return (
+        !!a.money &&
+        trimmed(a.paid_offer).length > 2 &&
+        trimmed(a.price_anchor).length > 0 &&
+        trimmed(a.upgrade_trigger).length > 2
+      );
+    case "inspiration":
+      return (
+        trimmed(a.inspiration).length > 3 &&
+        trimmed(a.activation_moment).length > 1 &&
+        trimmed(a.wow_moment).length > 1
+      );
+  }
+}
 
 function IntakePage() {
   const { intakeId } = Route.useParams();
@@ -130,23 +169,12 @@ function IntakePage() {
 
   const progress = useMemo(() => (step + 1) / STEPS.length, [step]);
   const current = STEPS[step];
-  const currentValue = current ? (answers as Record<string, unknown>)[current.field] : undefined;
-  const trimmed = (v: unknown) => (typeof v === "string" ? v.trim() : "");
-  const canProceed =
-    current?.kind === "money"
-      ? Boolean(answers.money) &&
-        trimmed(answers.paid_offer).length > 2 &&
-        trimmed(answers.price_anchor).length > 0 &&
-        trimmed(answers.upgrade_trigger).length > 2
-      : typeof currentValue === "string" && currentValue.trim().length > 3;
+  const canProceed = canProceedFromStep(current.kind, answers);
 
   async function persist(next: Answers) {
     setAnswers(next);
     setSaving(true);
-    const { error } = await supabase
-      .from("intakes")
-      .update({ answers: next })
-      .eq("id", intakeId);
+    const { error } = await supabase.from("intakes").update({ answers: next }).eq("id", intakeId);
     setSaving(false);
     if (error) toast.error(error.message);
   }
@@ -154,14 +182,15 @@ function IntakePage() {
   async function next() {
     if (!canProceed) return;
     if (step < STEPS.length - 1) {
+      await persist(answers);
       setStep(step + 1);
       return;
     }
-    // Run validation
     setRunning(true);
     setRunError(null);
     setNoKey(false);
     try {
+      await persist(answers);
       const { data: session } = await supabase.auth.getSession();
       const token = session.session?.access_token;
       if (!token) throw new Error("Not signed in");
@@ -178,10 +207,7 @@ function IntakePage() {
         pivot?: string | null;
         error?: string;
       };
-      if (payload?.status === "no_key") {
-        setNoKey(true);
-        return;
-      }
+      if (payload?.status === "no_key") { setNoKey(true); return; }
       if (payload?.error) throw new Error(payload.error);
       if (payload?.verdict && payload.scores && typeof payload.total === "number") {
         setVerdict(payload.verdict);
@@ -195,11 +221,7 @@ function IntakePage() {
     }
   }
 
-  function reviseIdea() {
-    setVerdict(null);
-    setScores(null);
-    setStep(0);
-  }
+  function reviseIdea() { setVerdict(null); setScores(null); setStep(0); }
 
   if (loading) {
     return (
@@ -209,7 +231,6 @@ function IntakePage() {
     );
   }
 
-  // Verdict view
   if (verdict && scores) {
     return (
       <VerdictView
@@ -222,31 +243,22 @@ function IntakePage() {
     );
   }
 
-  // No-key state
   if (noKey) {
     return (
       <div className="mx-auto flex min-h-screen w-full max-w-xl flex-col justify-center px-6 py-16">
         <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
           Board unavailable
         </span>
-        <h1 className="mt-3 font-display text-4xl leading-tight text-foreground">
-          Seat the board first.
-        </h1>
+        <h1 className="mt-3 font-display text-4xl leading-tight text-foreground">Seat the board first.</h1>
         <p className="mt-3 text-sm text-muted-foreground">
           The board needs your OpenRouter key to convene. Add it in Settings and we'll pick this
           intake back up — your answers are saved.
         </p>
         <div className="mt-6 flex gap-3">
-          <Link
-            to="/settings"
-            className="rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
-          >
+          <Link to="/settings" className="rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:brightness-110">
             Open Settings
           </Link>
-          <button
-            onClick={() => setNoKey(false)}
-            className="text-sm text-muted-foreground hover:text-foreground"
-          >
+          <button onClick={() => setNoKey(false)} className="text-sm text-muted-foreground hover:text-foreground">
             Back to intake
           </button>
         </div>
@@ -260,9 +272,7 @@ function IntakePage() {
         {STEPS.map((_, i) => (
           <span
             key={i}
-            className={`h-1.5 flex-1 rounded-full transition-colors ${
-              i <= step ? "bg-primary" : "bg-border"
-            }`}
+            className={`h-1.5 flex-1 rounded-full transition-colors ${i <= step ? "bg-primary" : "bg-border"}`}
           />
         ))}
       </div>
@@ -270,25 +280,65 @@ function IntakePage() {
       <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
         {current.eyebrow} · {projectName}
       </span>
-      <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">
-        {current.title}
-      </h1>
+      <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">{current.title}</h1>
       <p className="mt-3 text-sm text-muted-foreground">{current.hint}</p>
 
-      <div className="mt-8">
-        {current.kind === "textarea" ? (
-          <textarea
-            key={current.field}
-            value={(answers[current.field] as string) ?? ""}
-            onChange={(e) =>
-              setAnswers((a) => ({ ...a, [current.field]: e.target.value } as Answers))
-            }
+      <div className="mt-8 space-y-5">
+        {current.kind === "idea" && (
+          <>
+            <TextArea
+              label="The idea, in plain words"
+              value={answers.idea ?? ""}
+              rows={6}
+              onChange={(v) => setAnswers((a) => ({ ...a, idea: v }))}
+              onBlur={() => persist(answers)}
+              placeholder="Type here…"
+            />
+            <TextInput
+              label="Unlike what alternative, why this?"
+              hint="Name the closest thing they'd use today and why yours is different. A best guess is fine."
+              value={answers.positioning ?? ""}
+              onChange={(v) => setAnswers((a) => ({ ...a, positioning: v }))}
+              onBlur={() => persist(answers)}
+              placeholder='e.g. "Unlike a generic PDF report, this flags the client-specific risk in one glance."'
+              required
+              missing={!trimmed(answers.positioning)}
+            />
+          </>
+        )}
+        {current.kind === "buyer" && (
+          <>
+            <TextArea
+              label="Who pays for this?"
+              value={answers.buyer ?? ""}
+              rows={4}
+              onChange={(v) => setAnswers((a) => ({ ...a, buyer: v }))}
+              onBlur={() => persist(answers)}
+              placeholder="Type here…"
+            />
+            <TextInput
+              label="Where can you reach your first 10 buyers in 30 days?"
+              hint="One concrete channel you can actually use. Best guess is allowed."
+              value={answers.acquisition_channel ?? ""}
+              onChange={(v) => setAnswers((a) => ({ ...a, acquisition_channel: v }))}
+              onBlur={() => persist(answers)}
+              placeholder='e.g. "LinkedIn DMs to advisers I already follow" or "a niche subreddit"'
+              required
+              missing={!trimmed(answers.acquisition_channel)}
+            />
+          </>
+        )}
+        {current.kind === "pain" && (
+          <TextArea
+            label="The painful problem"
+            value={answers.pain ?? ""}
+            rows={6}
+            onChange={(v) => setAnswers((a) => ({ ...a, pain: v }))}
             onBlur={() => persist(answers)}
-            rows={current.field === "idea" || current.field === "pain" ? 6 : 4}
             placeholder="Type here…"
-            className="w-full rounded-md border border-border bg-surface-1 px-4 py-3 text-base text-foreground outline-none focus:border-primary"
           />
-        ) : (
+        )}
+        {current.kind === "money" && (
           <div className="space-y-6">
             <div className="grid gap-3 md:grid-cols-3">
               {MONEY_OPTIONS.map((opt) => {
@@ -299,9 +349,7 @@ function IntakePage() {
                     type="button"
                     onClick={() => persist({ ...answers, money: opt.value })}
                     className={`rounded-xl border p-5 text-left transition-all ${
-                      active
-                        ? "border-primary bg-surface-2"
-                        : "border-border bg-surface-1 hover:bg-surface-2"
+                      active ? "border-primary bg-surface-2" : "border-border bg-surface-1 hover:bg-surface-2"
                     }`}
                   >
                     <p className="font-display text-lg text-foreground">{opt.title}</p>
@@ -311,7 +359,7 @@ function IntakePage() {
               })}
             </div>
             <div className="space-y-4">
-              <MoneyDetail
+              <TextInput
                 label="What exactly do they pay for?"
                 hint="One concrete deliverable — e.g. “access to the weekly research briefing PDF.”"
                 value={answers.paid_offer ?? ""}
@@ -320,7 +368,7 @@ function IntakePage() {
                 required
                 missing={!trimmed(answers.paid_offer)}
               />
-              <MoneyDetail
+              <TextInput
                 label="Best starting-price guess"
                 hint={'A number is best. If you truly don\'t know, type "not set — recommend one" and the board will propose one.'}
                 value={answers.price_anchor ?? ""}
@@ -329,7 +377,7 @@ function IntakePage() {
                 required
                 missing={!trimmed(answers.price_anchor)}
               />
-              <MoneyDetail
+              <TextInput
                 label="What makes them buy now, renew, or move up?"
                 hint="One trigger — a deadline, an outcome they hit, a moment of pain."
                 value={answers.upgrade_trigger ?? ""}
@@ -341,11 +389,41 @@ function IntakePage() {
             </div>
           </div>
         )}
+        {current.kind === "inspiration" && (
+          <>
+            <TextArea
+              label="Name 1–3 apps that feel like what you want."
+              value={answers.inspiration ?? ""}
+              rows={4}
+              onChange={(v) => setAnswers((a) => ({ ...a, inspiration: v }))}
+              onBlur={() => persist(answers)}
+              placeholder="Comma-separated is fine."
+            />
+            <TextInput
+              label="What useful result should a new user get in the first 90 seconds?"
+              hint="One concrete result — not a feature list. A best guess is fine."
+              value={answers.activation_moment ?? ""}
+              onChange={(v) => setAnswers((a) => ({ ...a, activation_moment: v }))}
+              onBlur={() => persist(answers)}
+              placeholder='e.g. "They paste one client scenario and see the flagged risks."'
+              required
+              missing={!trimmed(answers.activation_moment)}
+            />
+            <TextInput
+              label="What result would make them immediately show someone?"
+              hint="The screenshot-worthy moment. A best guess is fine."
+              value={answers.wow_moment ?? ""}
+              onChange={(v) => setAnswers((a) => ({ ...a, wow_moment: v }))}
+              onBlur={() => persist(answers)}
+              placeholder='e.g. "The one-page risk summary they show a client."'
+              required
+              missing={!trimmed(answers.wow_moment)}
+            />
+          </>
+        )}
       </div>
 
-      {runError && (
-        <p className="mt-4 text-sm text-[hsl(8_60%_65%)]">{runError}</p>
-      )}
+      {runError && <p className="mt-4 text-sm text-[hsl(8_60%_65%)]">{runError}</p>}
 
       <div className="mt-10 flex items-center justify-between">
         <button
@@ -365,11 +443,7 @@ function IntakePage() {
             disabled={!canProceed || running}
             className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
           >
-            {running
-              ? "The board is scoring…"
-              : step === STEPS.length - 1
-              ? "Submit to the board"
-              : "Continue"}
+            {running ? "The board is scoring…" : step === STEPS.length - 1 ? "Submit to the board" : "Continue"}
             {!running && <ArrowRight className="h-3.5 w-3.5" />}
           </button>
         </div>
@@ -383,22 +457,29 @@ function IntakePage() {
   );
 }
 
-function MoneyDetail({
-  label,
-  hint,
-  value,
-  onChange,
-  onBlur,
-  required,
-  missing,
+function TextArea({
+  label, value, onChange, onBlur, rows, placeholder,
+}: { label: string; value: string; onChange: (v: string) => void; onBlur: () => void; rows: number; placeholder?: string }) {
+  return (
+    <label className="block">
+      <span className="text-sm text-foreground">{label}</span>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
+        rows={rows}
+        placeholder={placeholder}
+        className="mt-2 w-full rounded-md border border-border bg-surface-1 px-4 py-3 text-base text-foreground outline-none focus:border-primary"
+      />
+    </label>
+  );
+}
+
+function TextInput({
+  label, hint, value, onChange, onBlur, required, missing, placeholder,
 }: {
-  label: string;
-  hint: string;
-  value: string;
-  onChange: (v: string) => void;
-  onBlur: () => void;
-  required?: boolean;
-  missing?: boolean;
+  label: string; hint?: string; value: string; onChange: (v: string) => void;
+  onBlur: () => void; required?: boolean; missing?: boolean; placeholder?: string;
 }) {
   return (
     <label className="block">
@@ -406,13 +487,13 @@ function MoneyDetail({
         {label}
         {required && <span className="ml-1 text-primary">*</span>}
       </span>
-      <span className="mt-1 block text-xs text-muted-foreground">{hint}</span>
+      {hint && <span className="mt-1 block text-xs text-muted-foreground">{hint}</span>}
       <input
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onBlur={onBlur}
-        placeholder="Type here…"
+        placeholder={placeholder ?? "Type here…"}
         className={`mt-2 w-full rounded-md border bg-surface-1 px-3 py-2 text-sm text-foreground outline-none focus:border-primary ${
           missing ? "border-[hsl(8_60%_45%)]" : "border-border"
         }`}
@@ -422,17 +503,30 @@ function MoneyDetail({
 }
 
 function scoreColor(s: number) {
-  if (s >= 8) return "hsl(160 45% 48%)"; // jade
-  if (s <= 4) return "hsl(8 60% 55%)"; // oxblood
-  return "hsl(38 65% 55%)"; // brass
+  if (s >= 8) return "hsl(160 45% 48%)";
+  if (s <= 4) return "hsl(8 60% 55%)";
+  return "hsl(38 65% 55%)";
+}
+
+// Legacy stored intakes may have exactly the five original dimensions and a
+// total capped at 50. New intakes have six dimensions and total /60. Choose
+// the displayed dimensions and denominator from what's actually present so
+// legacy results still render cleanly.
+export function pickDisplayedDimensions(scores: Scores | null | undefined): string[] {
+  if (!scores) return [];
+  const present = Object.keys(scores).filter((k) => scores[k] && Number.isFinite(scores[k].score));
+  // Preserve canonical order; append any unknown-but-present keys at the end.
+  const ordered = DIM_ORDER.filter((k) => present.includes(k));
+  const extras = present.filter((k) => !ordered.includes(k));
+  return [...ordered, ...extras];
+}
+
+export function displayedMaxTotal(scores: Scores | null | undefined): number {
+  return pickDisplayedDimensions(scores).length * 10;
 }
 
 function VerdictView({
-  projectName,
-  verdict,
-  scores,
-  onEnterBoardroom,
-  onRevise,
+  projectName, verdict, scores, onEnterBoardroom, onRevise,
 }: {
   projectName: string;
   verdict: "pass" | "kill";
@@ -440,15 +534,15 @@ function VerdictView({
   onEnterBoardroom: () => void;
   onRevise: () => void;
 }) {
+  const dims = pickDisplayedDimensions(scores.scores);
+  const maxTotal = dims.length * 10;
   return (
     <div className="mx-auto w-full max-w-2xl px-6 py-16">
       <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
         Verdict · {projectName}
       </span>
       <h1 className="mt-3 font-display text-4xl leading-tight text-foreground md:text-5xl">
-        {verdict === "pass"
-          ? "The board will see you now."
-          : "This one doesn't clear the bar."}
+        {verdict === "pass" ? "The board will see you now." : "This one doesn't clear the bar."}
       </h1>
       <p className="mt-3 text-sm text-muted-foreground">
         {verdict === "pass"
@@ -458,32 +552,26 @@ function VerdictView({
 
       {verdict === "kill" && scores.pivot && (
         <div className="mt-6 rounded-xl border border-[hsl(8_60%_45%/0.4)] bg-[hsl(8_60%_45%/0.08)] p-5">
-          <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(8_60%_65%)]">
-            Suggested pivot
-          </p>
+          <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(8_60%_65%)]">Suggested pivot</p>
           <p className="mt-2 text-base text-foreground">{scores.pivot}</p>
         </div>
       )}
 
       <div className="mt-10 space-y-5">
-        {DIMS.map(({ key, label }) => {
+        {dims.map((key) => {
           const entry = scores.scores[key];
           if (!entry) return null;
           const pct = (entry.score / 10) * 100;
           const color = scoreColor(entry.score);
+          const label = DIM_LABELS[key] ?? key.replace(/_/g, " ");
           return (
             <div key={key}>
               <div className="mb-1.5 flex items-baseline justify-between">
                 <span className="text-sm text-foreground">{label}</span>
-                <span className="font-mono text-sm" style={{ color }}>
-                  {entry.score}/10
-                </span>
+                <span className="font-mono text-sm" style={{ color }}>{entry.score}/10</span>
               </div>
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
-                <div
-                  className="h-full rounded-full transition-all"
-                  style={{ width: `${pct}%`, backgroundColor: color }}
-                />
+                <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: color }} />
               </div>
               <p className="mt-2 text-xs text-muted-foreground">{entry.evidence}</p>
             </div>
@@ -493,12 +581,10 @@ function VerdictView({
 
       <div className="mt-10 flex items-center justify-between border-t border-border pt-6">
         <div>
-          <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
-            Total
-          </p>
+          <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Total</p>
           <p className="mt-1 font-mono text-2xl text-foreground">
             {scores.total}
-            <span className="text-muted-foreground">/50</span>
+            <span className="text-muted-foreground">/{maxTotal}</span>
           </p>
         </div>
         {verdict === "pass" ? (
