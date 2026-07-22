@@ -183,15 +183,18 @@ export function formatFiles(files: FilePayload[]): string {
 // -------- Target-repo migration ledger (JIT compiler schema authority) --------
 //
 // Fetches every supabase/migrations/*.sql file from the linked target repo
-// and returns the ordered list plus a compact status. NEVER uses the platform
-// database as evidence for the target project's schema.
+// and returns the ordered list plus compact provenance. NEVER uses the
+// platform database as evidence for the target project's schema.
+//
+// TARGET-SCHEMA-LEDGER-R2: strict fail-closed. Any GitHub tree failure,
+// malformed/non-array tree, zero matching paths, or any per-file fetch/
+// decoding failure produces {ok:false}. No skips, no partial ledgers.
 
 import {
-  MIGRATION_MAX_FILE_BYTES,
+  finalizeMigrationLedger,
   MIGRATION_MAX_FILES,
-  MIGRATION_MAX_TOTAL_BYTES,
   type LedgerFetchStatus,
-  type MigrationFile,
+  type MigrationAttempt,
 } from "./target-schema-inventory.ts";
 
 export async function fetchTargetMigrations(
@@ -208,37 +211,55 @@ export async function fetchTargetMigrations(
     if (headRes.status >= 300) {
       return { ok: false, code: "SCHEMA_LEDGER_FETCH_FAILED", message: `head: ${headRes.body?.message ?? headRes.status}` };
     }
-    const headSha: string = headRes.body?.sha;
+    const headSha: string = String(headRes.body?.sha ?? "");
+    if (!headSha) {
+      return { ok: false, code: "SCHEMA_LEDGER_FETCH_FAILED", message: "head commit missing sha" };
+    }
     const tree = await gh(token, `/repos/${repo}/git/trees/${headSha}?recursive=1`);
-    const paths: string[] = tree.status < 300 && Array.isArray(tree.body?.tree)
-      ? tree.body.tree
-          .filter((t: any) => t.type === "blob" && /^supabase\/migrations\/[^/]+\.sql$/i.test(String(t.path ?? "")))
-          .map((t: any) => String(t.path))
-      : [];
+    if (tree.status >= 300) {
+      return { ok: false, code: "SCHEMA_LEDGER_FETCH_FAILED", message: `tree: ${tree.body?.message ?? tree.status}` };
+    }
+    if (!tree.body || !Array.isArray(tree.body.tree)) {
+      return { ok: false, code: "SCHEMA_LEDGER_FETCH_FAILED", message: "tree: malformed response (missing tree array)" };
+    }
+    const paths: string[] = tree.body.tree
+      .filter((t: any) => t && t.type === "blob" && /^supabase\/migrations\/[^/]+\.sql$/i.test(String(t.path ?? "")))
+      .map((t: any) => String(t.path));
     paths.sort();
+    if (paths.length === 0) {
+      return {
+        ok: false,
+        code: "SCHEMA_LEDGER_FETCH_FAILED",
+        message: "no migration ledger: linked repo has zero supabase/migrations/*.sql files at HEAD — add the migrations folder and retry",
+      };
+    }
     if (paths.length > MIGRATION_MAX_FILES) {
       return { ok: false, code: "SCHEMA_LEDGER_TOO_LARGE", message: `target repo has ${paths.length} migrations (cap ${MIGRATION_MAX_FILES})` };
     }
-    const files: MigrationFile[] = [];
-    let total = 0;
+    const attempts: MigrationAttempt[] = [];
     for (const p of paths) {
       const c = await gh(token, `/repos/${repo}/contents/${encodeURI(p)}?ref=${headSha}`);
-      if (c.status >= 300 || Array.isArray(c.body)) continue;
-      const size: number = c.body?.size ?? 0;
-      if (size > MIGRATION_MAX_FILE_BYTES) {
-        return { ok: false, code: "SCHEMA_LEDGER_TOO_LARGE", message: `migration ${p} is ${size} bytes (cap ${MIGRATION_MAX_FILE_BYTES})` };
+      if (c.status >= 300) {
+        attempts.push({ ok: false, path: p, reason: `HTTP ${c.status}: ${c.body?.message ?? "content fetch failed"}` });
+        break;
       }
-      const sql = c.body?.encoding === "base64"
-        ? decodeGithubBase64(String(c.body?.content ?? ""))
-        : String(c.body?.content ?? "");
-      total += sql.length;
-      if (total > MIGRATION_MAX_TOTAL_BYTES) {
-        return { ok: false, code: "SCHEMA_LEDGER_TOO_LARGE", message: `migrations exceed ${MIGRATION_MAX_TOTAL_BYTES} bytes` };
+      if (Array.isArray(c.body)) {
+        attempts.push({ ok: false, path: p, reason: "path resolved to a directory listing" });
+        break;
       }
-      files.push({ path: p, sql });
+      const encoding = c.body?.encoding;
+      const rawContent = c.body?.content;
+      if (encoding !== "base64" || typeof rawContent !== "string") {
+        attempts.push({ ok: false, path: p, reason: `unsupported or missing content encoding (${encoding ?? "none"})` });
+        break;
+      }
+      const sql = decodeGithubBase64(rawContent);
+      const reportedBytes = typeof c.body?.size === "number" ? c.body.size : null;
+      attempts.push({ ok: true, path: p, sql, reportedBytes });
     }
-    return { ok: true, files, totalBytes: total };
+    return finalizeMigrationLedger({ headSha, attempts });
   } catch (e) {
     return { ok: false, code: "SCHEMA_LEDGER_FETCH_FAILED", message: (e as Error).message };
   }
 }
+
