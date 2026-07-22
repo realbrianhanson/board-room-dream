@@ -355,10 +355,17 @@ async function executeStep(admin: any, run: any, step: any) {
       try { candidate = JSON.parse(content); } catch { candidate = null; }
       const err = candidate ? validateStepJson(step.step_key, candidate, run.kind) : "Response was not parseable JSON.";
       if (err) {
-        // Invocation-safe correction: NEVER mark completed with invalid
-        // output and NEVER make two long model calls in one invocation.
-        // Queue the correction into a fresh invocation, allowing exactly
-        // one retry before failing the run loudly.
+        // Detect truncation: provider finish_reason of length/max_tokens, OR
+        // unparseable JSON whose content is close to the requested max_tokens
+        // ceiling (heuristic: >=95% of max_tokens * ~4 chars/token).
+        const finishReason = (result as any)?.finishReason;
+        const maxTokens = Number(step.request?.max_tokens) > 0 ? Number(step.request.max_tokens) : 0;
+        const nearMax = !candidate && maxTokens > 0 && content.length >= Math.floor(maxTokens * 4 * 0.95);
+        const truncated = finishReason === "length" || finishReason === "max_tokens" || nearMax;
+
+        // Invocation-safe correction: NEVER mark completed with invalid output
+        // and NEVER make two long model calls in one invocation. Queue the
+        // correction into a fresh invocation, exactly one retry before failing.
         const validationAttempts = Number(step.request?._validation_attempts ?? 0);
         if (validationAttempts >= 1) {
           const vmsg = `Step ${step.step_key} produced invalid JSON after one correction pass: ${err}`;
@@ -366,7 +373,7 @@ async function executeStep(admin: any, run: any, step: any) {
             .from("run_steps")
             .update({
               status: "failed",
-              error: "invalid_json_after_correction",
+              error: truncated ? "truncated_after_correction" : "invalid_json_after_correction",
               response_text: content,
               tokens_in: usage.tokensIn,
               tokens_out: usage.tokensOut,
@@ -377,7 +384,7 @@ async function executeStep(admin: any, run: any, step: any) {
           await failRun(admin, run, vmsg);
           return;
         }
-        await requeueForValidation(admin, step, baseMessages, content, err);
+        await requeueForValidation(admin, step, baseMessages, content, err, truncated);
         return;
       }
       let parsed: any = candidate;
