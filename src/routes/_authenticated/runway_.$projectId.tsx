@@ -186,17 +186,7 @@ function RunwayPage() {
     setBatches((bs ?? []) as Batch[]);
     {
       const runList = (rs ?? []) as Run[];
-      const active = runList.filter((r) => ["queued","running","paused","paused_budget"].includes(r.status));
-      // Active tie-break: prefer greatest spent (most progress), then oldest.
-      active.sort((a, b) => {
-        const sa = Number(a.spent_usd ?? 0), sb = Number(b.spent_usd ?? 0);
-        if (sb !== sa) return sb - sa;
-        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-      });
-      // Newest-run terminal selection: runList is already created_at DESC,
-      // so the first terminal row is the most recent one.
-      const latestTerminal = runList.find((r) => !["queued","running","paused","paused_budget"].includes(r.status)) ?? null;
-      setRun(active[0] ?? latestTerminal);
+      setRun(selectDisplayedRun(runList));
     }
 
     const auditRows = (au ?? []) as AuditRow[];
