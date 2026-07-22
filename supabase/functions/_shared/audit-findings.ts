@@ -386,10 +386,12 @@ export function tryCloseJsonTail(
   }
   if (inString) return { ok: false, reason: "unterminated string" };
   if (stack.length === 0) {
-    // Already balanced — try to parse as is; if this fails the caller falls
-    // through to correction.
-    try { return { ok: true, value: JSON.parse(s), closed: "" }; }
+    let parsed: unknown;
+    try { parsed = JSON.parse(s); }
     catch (e) { return { ok: false, reason: `parse failed after balanced scan: ${(e as Error).message}` }; }
+    const shapeErr = validateRescuedShape(parsed);
+    if (shapeErr) return { ok: false, reason: shapeErr };
+    return { ok: true, value: parsed, closed: "" };
   }
   // Require the last non-whitespace token to be a value terminator. Explicit
   // reject list: ",", ":", "{", "[" — those all imply a missing value or key
