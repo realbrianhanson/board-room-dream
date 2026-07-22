@@ -160,14 +160,15 @@ function DashboardPage() {
     let finalAuditSet = new Set<string>();
     if (ids.length) {
       const [{ data: pvs }, { data: bs }, { data: au }] = await Promise.all([
-        supabase.from("plan_versions").select("project_id, kind").in("project_id", ids),
+        supabase.from("plan_versions").select("project_id, kind").in("project_id", ids).eq("is_build_safe", true),
         supabase.from("batches").select("project_id, batch_no, status").in("project_id", ids),
-        supabase.from("audits").select("project_id, kind").in("project_id", ids).eq("kind", "final_az"),
+        supabase.from("audits").select("project_id, kind, status").in("project_id", ids).eq("kind", "final_az").in("status", ["clean", "findings"]),
       ]);
       for (const r of (pvs ?? []) as Array<{ project_id: string; kind: string }>) {
         if (r.kind === "design") designSet.add(r.project_id);
         if (r.kind === "plan") planSet.add(r.project_id);
       }
+
       const byProject = new Map<string, Array<{ batch_no: number; status: string }>>();
       for (const r of (bs ?? []) as Array<{ project_id: string; batch_no: number; status: string }>) {
         batchSet.add(r.project_id);
