@@ -260,7 +260,7 @@ Deno.serve(async (req) => {
     filesAnalyzed = 1;
   }
 
-  const [plan, designBrief, outcomes, findings, manual, currentBatches, schemaInv, { count: totalBatches }] = await Promise.all([
+  const [plan, designBrief, outcomes, findings, manual, currentBatches, schemaInv, { count: totalBatches }, authority] = await Promise.all([
     loadPlan(admin, batch.project_id),
     loadDesignBrief(admin, batch.project_id),
     loadOutcomes(admin, batch.project_id, Number(batch.batch_no)),
@@ -269,6 +269,11 @@ Deno.serve(async (req) => {
     loadCurrentBatches(admin, batch.project_id),
     source === "github" ? loadSchemaInventory(admin) : Promise.resolve({ tables: [], routines: [], objectsLower: new Set<string>(), ok: false, reason: "paste source: schema inventory not loaded" } as SchemaInventory),
     admin.from("batches").select("id", { count: "exact", head: true }).eq("project_id", batch.project_id),
+    // Compiler INDEPENDENTLY reloads owner authority; it never trusts an
+    // upstream "reviewed" flag from a locked plan or batch draft. Founder
+    // notes live on runs, not batches, so we pass none here — the compiler's
+    // authorization pool is intake + approved change_requests only.
+    loadOwnerAuthority(admin, { projectId: batch.project_id }),
   ]);
 
   const outcomesBlock = outcomes.length
