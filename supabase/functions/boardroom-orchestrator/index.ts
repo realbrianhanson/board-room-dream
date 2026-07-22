@@ -1293,9 +1293,12 @@ async function processRun(admin: any, runId: string) {
   // process on the next self-tick. The proxy still checks budget/caps before
   // each call; parallel seats can overshoot the run budget by at most the
   // in-flight calls, the same order of magnitude the serial path allowed.
+  // The RPC enforces the aggregate cap across overlapping invocations, so this
+  // invocation may request up to MAX_STEP_CONCURRENCY but never pushes the run
+  // above the per-run limit.
   const claimed: any[] = [];
   while (claimed.length < MAX_STEP_CONCURRENCY) {
-    const step = await claimOneStep(admin, runId);
+    const step = await claimOneStep(admin, runId, MAX_STEP_CONCURRENCY);
     if (!step) break;
     claimed.push(step);
   }
