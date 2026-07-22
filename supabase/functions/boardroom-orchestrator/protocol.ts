@@ -236,9 +236,9 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
     if (!parsed || !Array.isArray(parsed.batches)) return "Missing batches array.";
     const b = parsed.batches;
     if (b.length < 6 || b.length > 8) return "batches must contain 6-8 items (strongly prefer 6). Merge overlapping concerns rather than adding another batch.";
-    // Payload size ceiling — total serialized batches must fit under 32,000 chars.
+    // Payload size ceiling — total serialized batches must fit under 24,000 chars.
     const payloadLen = JSON.stringify(b).length;
-    if (payloadLen > 32000) return `Total serialized batches payload is ${payloadLen} characters — exceeds 32,000. Trim repeated context and prose without cutting scope.`;
+    if (payloadLen > 24000) return `Total serialized batches payload is ${payloadLen} characters — exceeds 24,000. Trim repeated context and prose without cutting scope.`;
     for (let i = 0; i < b.length; i++) {
       const item = b[i];
       if (!item || typeof item !== "object") return "Each batch must be an object.";
@@ -250,7 +250,7 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
       const promptLen = item.prompt_md.length;
       const isCode = item.channel === "lovable" || item.channel === "supabase";
       if (isCode) {
-        if (promptLen < 900 || promptLen > 3200) return `Batch ${n} prompt_md is ${promptLen} chars — code batches must be 900-3,200 characters.`;
+        if (promptLen < 900 || promptLen > 2600) return `Batch ${n} prompt_md is ${promptLen} chars — code batches must be 900-2,600 characters.`;
         if (!/Acceptance checks:/.test(item.prompt_md)) return `Batch ${n} (code) must include an "Acceptance checks:" line.`;
         // Count numbered items (1. 2. …) beneath the Acceptance checks: line, until blank line / "Keep everything else…" — must be 2–4.
         const idx = item.prompt_md.search(/Acceptance checks:\s*$/m);
