@@ -633,7 +633,7 @@ Every section header must appear exactly as written. Be specific: name concrete 
 
 Respond with the markdown document ONLY — no JSON, no preamble.`;
   const user = `${intakeBlock(intake)}\n\nLOCKED PLAN\n\n${contentMd}\n\nWrite the PRD now.`;
-  await admin.from("run_steps").insert({
+  await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
     step_key: "r5_blueprint_chair",
