@@ -472,11 +472,11 @@ function RunwayPage() {
         project?.is_import ? (
           <EmptyState
             icon={<Lock className="h-6 w-6 text-muted-foreground" />}
-            title="The board plans imports in the Boardroom."
-            subtitle="Run the A–Z audit first, then convene the improvement board to lock what to build next."
-            actionTo="/boardroom/$projectId"
+            title="Imported apps start with the A–Z audit."
+            subtitle="Run the required A–Z audit against the current code, then the Boardroom will convene to lock the improvement plan."
+            actionTo="/audits/$projectId"
             actionParams={{ projectId }}
-            actionLabel="To the Boardroom"
+            actionLabel="Run the A–Z audit"
           />
         ) : (
           <EmptyState
