@@ -1,6 +1,10 @@
 // Pure validators + helpers for batch-compiler. Kept import-free of Deno.serve
 // or supabase clients so they can be exercised deterministically from tests.
 
+import { ownerAuthorityError, type OwnerAuthority } from "../_shared/owner-authority.ts";
+export { ownerAuthorityError } from "../_shared/owner-authority.ts";
+export type { OwnerAuthority } from "../_shared/owner-authority.ts";
+
 export type TouchedPath = { path: string; action: "update" | "create" | "verify"; reason: string };
 export type EvidenceItem = { claim: string; path: string; detail: string };
 export type SatisfiedItem = { item: string; evidence: string };
