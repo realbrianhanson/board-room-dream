@@ -186,9 +186,9 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
     if (!["approve", "revise"].includes(parsed.verdict)) return "Missing/invalid verdict.";
     if (!Array.isArray(parsed.issues)) return "Missing issues array.";
     const issues = parsed.issues;
-    if (issues.length > 10) return `issues has ${issues.length} entries — max 10. Merge duplicates and keep only the highest-severity items.`;
+    if (issues.length > 8) return `issues has ${issues.length} entries — max 8. Merge duplicates and keep only the highest-severity items.`;
     const payloadLen = JSON.stringify(parsed).length;
-    if (payloadLen > 6000) return `Total serialized review JSON is ${payloadLen} characters — exceeds 6,000. Trim wording without dropping blocking issues.`;
+    if (payloadLen > 4500) return `Total serialized review JSON is ${payloadLen} characters — exceeds 4,500. Trim wording without dropping blocking issues.`;
     for (let i = 0; i < issues.length; i++) {
       const iss = issues[i];
       if (!iss || typeof iss !== "object") return `issues[${i}] must be an object.`;
@@ -198,7 +198,7 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
       }
       if (typeof iss.text !== "string") return `issues[${i}].text must be a string.`;
       const t = iss.text.trim();
-      if (t.length < 10 || t.length > 350) return `issues[${i}].text is ${t.length} chars — must be 10-350.`;
+      if (t.length < 10 || t.length > 280) return `issues[${i}].text is ${t.length} chars — must be 10-280.`;
     }
     return null;
   }
@@ -236,9 +236,9 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
     if (!parsed || !Array.isArray(parsed.batches)) return "Missing batches array.";
     const b = parsed.batches;
     if (b.length < 6 || b.length > 8) return "batches must contain 6-8 items (strongly prefer 6). Merge overlapping concerns rather than adding another batch.";
-    // Payload size ceiling — total serialized batches must fit under 32,000 chars.
+    // Payload size ceiling — total serialized batches must fit under 24,000 chars.
     const payloadLen = JSON.stringify(b).length;
-    if (payloadLen > 32000) return `Total serialized batches payload is ${payloadLen} characters — exceeds 32,000. Trim repeated context and prose without cutting scope.`;
+    if (payloadLen > 24000) return `Total serialized batches payload is ${payloadLen} characters — exceeds 24,000. Trim repeated context and prose without cutting scope.`;
     for (let i = 0; i < b.length; i++) {
       const item = b[i];
       if (!item || typeof item !== "object") return "Each batch must be an object.";
@@ -250,7 +250,7 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
       const promptLen = item.prompt_md.length;
       const isCode = item.channel === "lovable" || item.channel === "supabase";
       if (isCode) {
-        if (promptLen < 900 || promptLen > 3200) return `Batch ${n} prompt_md is ${promptLen} chars — code batches must be 900-3,200 characters.`;
+        if (promptLen < 900 || promptLen > 2600) return `Batch ${n} prompt_md is ${promptLen} chars — code batches must be 900-2,600 characters.`;
         if (!/Acceptance checks:/.test(item.prompt_md)) return `Batch ${n} (code) must include an "Acceptance checks:" line.`;
         // Count numbered items (1. 2. …) beneath the Acceptance checks: line, until blank line / "Keep everything else…" — must be 2–4.
         const idx = item.prompt_md.search(/Acceptance checks:\s*$/m);
@@ -288,10 +288,10 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
 export function correctionForStep(stepKey: string): string {
   const key = String(stepKey ?? "");
   if (key === "batches_chair" || key === "batches_revise_chair") {
-    return "Your JSON was truncated. Return exactly 6 batches; each prompt_md <=2,800 characters; total JSON <=28,000 characters. Preserve required coverage but remove repeated context.";
+    return "Your JSON was truncated. Return exactly 6 batches unless a 7th/8th is strictly required; each prompt_md 900-2,600 characters; total JSON <=24,000 characters. Preserve required coverage but remove repeated context.";
   }
   if (key === "batches_review_inspector" || key === "batches_review_contrarian") {
-    return "Your review JSON was truncated. Return ONLY {verdict, issues}; max 10 issues; each issue.text <=350 characters; total JSON <=6,000 characters. Preserve every blocking issue, merge duplicates, no prose.";
+    return "Your review JSON was truncated. Return ONLY {verdict, issues}; max 8 issues; each issue.text 10-280 characters; total JSON <=4,500 characters. Preserve every blocking issue, merge duplicates, no prose.";
   }
   if (key === "audit_chair_merge") {
     return "Your audit merge JSON was truncated. Preserve the required merge schema; max 30 deduplicated findings; keep every P0/P1; compress evidence; total JSON <=18,000 characters.";

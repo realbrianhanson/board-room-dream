@@ -10,6 +10,15 @@ import {
   type OwnerAuthority,
 } from "../_shared/owner-authority.ts";
 import {
+  assertBatchRequestSize,
+  BatchContextTooLarge,
+  compactMarkdown,
+  COMPACT_ARTIFACT_CAP,
+  isBatchGenerationStep,
+  renderCompactRepoContract,
+} from "../_shared/batch-context.ts";
+export { BatchContextTooLarge } from "../_shared/batch-context.ts";
+import {
   SEATS,
   type Seat,
   SEAT_LABEL,
@@ -73,14 +82,22 @@ async function queueSteps(admin: any, run: any, rowsIn: any | any[]): Promise<an
   const rows = Array.isArray(rowsIn) ? rowsIn : [rowsIn];
   for (const row of rows) {
     const msgs = row?.request?.messages;
-    if (!Array.isArray(msgs)) continue;
-    for (const m of msgs) {
-      if (m?.role === "system" && typeof m.content === "string") {
-        m.content = `${OWNER_AUTHORITY_RULES}\n\n${m.content}`;
-      } else if (m?.role === "user") {
-        const injected = injectOwnerAuthority("", m.content, authority);
-        m.content = injected.user;
+    if (Array.isArray(msgs)) {
+      for (const m of msgs) {
+        if (m?.role === "system" && typeof m.content === "string") {
+          m.content = `${OWNER_AUTHORITY_RULES}\n\n${m.content}`;
+        } else if (m?.role === "user") {
+          const injected = injectOwnerAuthority("", m.content, authority);
+          m.content = injected.user;
+        }
       }
+    }
+    // Hard request-size invariant for batch-generation steps. Measured AFTER
+    // owner-authority injection so what we count is exactly what ships. Fails
+    // closed via BatchContextTooLarge — never silently drops authority /
+    // FEATURES / draft.
+    if (isBatchGenerationStep(row?.step_key)) {
+      assertBatchRequestSize(String(row.step_key), row.request);
     }
   }
   return admin.from("run_steps").insert(rowsIn);
@@ -208,6 +225,58 @@ KEY FILES (${res.files.length}, frontend + backend biased)
 ${formatFiles(res.files)}`;
 }
 
+
+
+// Compact variant of the live repo contract used ONLY by batch draft/review/
+// revise. Same failure semantics as loadLiveRepoContract for imports (repo
+// token, non-empty tree, at least one readable key file) — but the render is
+// deterministically capped to <=24 KiB of key evidence and up to 250 tree
+// paths. The JIT batch-compiler regrounds each individual batch against the
+// full live code/schema before Copy is enabled, so we do not need to ship
+// 25 whole files to reviewers.
+export async function loadCompactBatchRepoContract(admin: any, project: any): Promise<string> {
+  const isImport = !!project?.is_import;
+  if (!isImport) {
+    return `LIVE REPO CONTRACT\n(none — this is a fresh project; every path, table, and function must be labelled CREATE/ADD and sequenced so its dependencies come first.)`;
+  }
+  if (!project?.github_repo) {
+    throw new RepoContractUnavailable(
+      "This import project has no linked GitHub repo, so the board cannot ground batches in the real code. Link the repo in Settings and try again.",
+    );
+  }
+  const token = await ghToken(admin, project.user_id);
+  if (!token) {
+    throw new RepoContractUnavailable(
+      "GitHub is not connected for this owner, so the board cannot read the real repo. Reconnect GitHub in Settings and try again.",
+    );
+  }
+  let res: Awaited<ReturnType<typeof assembleFromGithub>>;
+  try {
+    res = await assembleFromGithub(token, project.github_repo, {
+      // We only need architectural evidence — the renderer's 24 KiB cap
+      // trims further. Keep per-file bytes small so no single file drowns
+      // out manifests / router roots / migrations.
+      maxFiles: 40,
+      maxFileBytes: 32 * 1024,
+      maxTotalBytes: 200 * 1024,
+      preferKeyFiles: true,
+    });
+  } catch (e) {
+    throw new RepoContractUnavailable(
+      `The board could not read the linked repo ${project.github_repo}: ${(e as Error).message}. Fix repo access and retry.`,
+    );
+  }
+  if (!res.files.length || !res.fileTree.length) {
+    throw new RepoContractUnavailable(
+      `The board could not read any files from ${project.github_repo}. The repo may be empty, private without access, or renamed. Fix and retry.`,
+    );
+  }
+  return renderCompactRepoContract({
+    repo: project.github_repo,
+    fileTree: res.fileTree,
+    files: res.files,
+  });
+}
 
 
 // Signed URLs for the founder's uploaded screenshots (newest first, max 4).
@@ -770,24 +839,29 @@ export async function queueBatchesStep(admin: any, run: any) {
     .limit(1)
     .maybeSingle();
 
-  const designSection = design?.content_md
-    ? `LOCKED DESIGN BRIEF\n\n${design.content_md}\n\nBatch 1 MUST install these design tokens (CSS variables, Tailwind config, font imports) BEFORE any feature work.`
+  const compactDesign = compactMarkdown(design?.content_md ?? "", COMPACT_ARTIFACT_CAP);
+  const designSection = compactDesign
+    ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}\n\nBatch 1 MUST install these design tokens (CSS variables, Tailwind config, font imports) BEFORE any feature work.`
     : `NO LOCKED DESIGN BRIEF — do not fabricate one. The student will convene the Design Council later.`;
 
-  // May throw RepoContractUnavailable for import projects — the caller
-  // catches and fails the run with a human-readable error.
-  const repoContract = await loadLiveRepoContract(admin, project);
+  // Compact repo contract for batch-generation only. The JIT batch-compiler
+  // regrounds each specific batch against the full live code/schema before
+  // Copy is enabled — this stage only needs enough evidence to spot invented
+  // paths and stack mismatches. May throw RepoContractUnavailable for imports.
+  const repoContract = await loadCompactBatchRepoContract(admin, project);
+  const compactPlan = compactMarkdown(plan?.content_md ?? "", COMPACT_ARTIFACT_CAP);
+  const compactPrd = compactMarkdown(plan?.prd_md ?? "", COMPACT_ARTIFACT_CAP);
 
   const system = `You are the Chair, sequencing this student's build for their Lovable project. Produce 6-8 dependency-safe, single-concern build batches (STRONGLY PREFER 6) that turn the locked plan + PRD into a shippable app — core batches first, then clearly-labeled Enhancement batches so lower-priority value is never silently dropped.
 
 ${manual}
 
 OUTPUT DISCIPLINE (hard limits — the run FAILS if you exceed them):
-- 6-8 batches total. Aim for 6. Merge overlapping concerns rather than adding a 9th batch.
-- Each prompt_md: 900-3,200 characters, MAX 8 numbered implementation items.
+- Exactly 6 batches unless a 7th or 8th is strictly required to keep any single batch below its size limit. Prefer merging overlapping concerns.
+- Each prompt_md: 900-2,600 characters, MAX 8 numbered implementation items.
 - Code batches: 2-4 acceptance checks (not 5).
 - Do NOT restate plan/PRD prose, feature lists, or design tokens verbatim in prompts. Reference them by name.
-- Total serialized JSON payload: <=32,000 characters. If you approach that, cut prose — not scope.
+- Total serialized JSON payload: <=24,000 characters. If you approach that, cut prose — not scope.
 
 Rules for EVERY batch:
 - Numbered items with EXACT scope — no wishlists. Name exact routes, components, tables, and columns from the PRD in every item.
@@ -838,7 +912,7 @@ Constraints: 6-8 batches (prefer 6), unique ascending integer batch_no starting 
     ? `\n\nDEFERRED VALUE (board decision log + dissent ledger) — ideas debated and not adopted into the core plan. Harvest anything still valuable and consistent with the locked plan into the final Enhancement batches:\n${JSON.stringify(deferredRaw).slice(0, 4000)}`
     : "";
 
-  const user = `${repoContract}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}${deferredBlock}\n\nProduce the JSON now.`;
+  const user = `${repoContract}\n\nLOCKED PLAN (compact — full text is in the plan_versions table)\n\n${compactPlan || "(no plan)"}\n\nPRD (compact — full text is in plan_versions.prd_md)\n\n${compactPrd || "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}${deferredBlock}\n\nProduce the JSON now.`;
 
   await queueSteps(admin, run, {
     run_id: run.id,
@@ -868,7 +942,7 @@ export async function queueBatchesReview(admin: any, run: any, draftJson: any) {
   const manual = await loadFieldManual(admin);
   const plan = await loadLockedPlan(admin, run.project_id);
   const project = await loadProjectMeta(admin, run.project_id);
-  const repoContract = await loadLiveRepoContract(admin, project);
+  const repoContract = await loadCompactBatchRepoContract(admin, project);
   const { data: design } = await admin
     .from("plan_versions")
     .select("content_md")
@@ -888,9 +962,9 @@ export async function queueBatchesReview(admin: any, run: any, draftJson: any) {
 }
 
 Hard output limits (enforced by validator):
-- issues array: MAX 10 items. Merge duplicates. Drop minor items if you must trim.
-- issue.text: 10-350 characters. One tight sentence naming the batch, the exact problem, and the fix. No restating the draft or the plan.
-- Total serialized JSON: <=6,000 characters. If close, cut wording, not blocking findings.
+- issues array: MAX 8 items. Merge duplicates. Drop minor items if you must trim.
+- issue.text: 10-280 characters. One tight sentence naming the batch, the exact problem, and the fix. No restating the draft or the plan.
+- Total serialized JSON: <=4,500 characters. If close, cut wording, not blocking findings.
 
 Verdict "approve" only if there are zero blocking issues. Every issue must cite either a live path from the LIVE REPO CONTRACT or the missing CREATE/ADD instruction it depends on.
 
@@ -923,10 +997,13 @@ ${manual}
 
 ${shape}`,
   };
-  const designSection = design?.content_md
-    ? `LOCKED DESIGN BRIEF\n\n${design.content_md}`
+  const compactPlan = compactMarkdown(plan?.content_md ?? "", COMPACT_ARTIFACT_CAP);
+  const compactPrd = compactMarkdown(plan?.prd_md ?? "", COMPACT_ARTIFACT_CAP);
+  const compactDesign = compactMarkdown(design?.content_md ?? "", COMPACT_ARTIFACT_CAP);
+  const designSection = compactDesign
+    ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}`
     : `NO LOCKED DESIGN BRIEF.`;
-  const user = `${repoContract}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nDRAFT BATCHES\n\n${draftBlock}\n\nProduce your JSON now.`;
+  const user = `${repoContract}\n\nLOCKED PLAN (compact)\n\n${compactPlan || "(no plan)"}\n\nPRD (compact)\n\n${compactPrd || "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nDRAFT BATCHES\n\n${draftBlock}\n\nProduce your JSON now.`;
   const rows = (["inspector", "contrarian"] as const).map((seat) => ({
     run_id: run.id,
     user_id: run.user_id,
@@ -953,7 +1030,7 @@ export async function queueBatchesRevise(admin: any, run: any, draftJson: any, r
   const manual = await loadFieldManual(admin);
   const plan = await loadLockedPlan(admin, run.project_id);
   const project = await loadProjectMeta(admin, run.project_id);
-  const repoContract = await loadLiveRepoContract(admin, project);
+  const repoContract = await loadCompactBatchRepoContract(admin, project);
   const { data: design } = await admin
     .from("plan_versions")
     .select("content_md")
@@ -973,10 +1050,10 @@ export async function queueBatchesRevise(admin: any, run: any, draftJson: any, r
 ${manual}
 
 OUTPUT DISCIPLINE (hard limits — the run FAILS if you exceed them):
-- 6-8 batches total. Aim for 6. Merge overlapping concerns rather than adding a 9th batch.
-- Each prompt_md: 900-3,200 characters, MAX 8 numbered items, 2-4 acceptance checks for code batches.
+- Exactly 6 batches unless a 7th/8th is strictly required. Merge overlapping concerns.
+- Each prompt_md: 900-2,600 characters, MAX 8 numbered items, 2-4 acceptance checks for code batches.
 - Do NOT restate plan/PRD prose, feature lists, or design tokens verbatim. Reference them by name.
-- Total serialized JSON payload: <=32,000 characters. If you approach that, cut prose — not scope.
+- Total serialized JSON payload: <=24,000 characters. If you approach that, cut prose — not scope.
 
 Return ONLY the same JSON shape as the original draft:
 {
@@ -984,10 +1061,13 @@ Return ONLY the same JSON shape as the original draft:
 }
 
 Constraints: 6-8 batches (prefer 6), unique ascending integer batch_no starting at 1, every prompt_md within character limits, following the batch skeleton exactly (numbered items, acceptance checks for code batches, "Keep everything else identical.", "Typecheck when done." for code batches). Never delete Enhancement batches to satisfy a reviewer unless the reviewer explicitly flagged them.`;
-  const designSection = design?.content_md
-    ? `LOCKED DESIGN BRIEF\n\n${design.content_md}`
+  const compactPlan = compactMarkdown(plan?.content_md ?? "", COMPACT_ARTIFACT_CAP);
+  const compactPrd = compactMarkdown(plan?.prd_md ?? "", COMPACT_ARTIFACT_CAP);
+  const compactDesign = compactMarkdown(design?.content_md ?? "", COMPACT_ARTIFACT_CAP);
+  const designSection = compactDesign
+    ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}`
     : `NO LOCKED DESIGN BRIEF.`;
-  const user = `${repoContract}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nYOUR DRAFT\n\n${JSON.stringify(draftJson?.batches ?? [], null, 2)}\n\nREVIEW ISSUES\n\n${issues}\n\nProduce the revised JSON now.`;
+  const user = `${repoContract}\n\nLOCKED PLAN (compact)\n\n${compactPlan || "(no plan)"}\n\nPRD (compact)\n\n${compactPrd || "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nYOUR DRAFT\n\n${JSON.stringify(draftJson?.batches ?? [], null, 2)}\n\nREVIEW ISSUES\n\n${issues}\n\nProduce the revised JSON now.`;
   await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
