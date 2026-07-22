@@ -397,7 +397,10 @@ async function executeStep(admin: any, run: any, step: any) {
         const decision = decideTransportRequeue(step);
         console.log(`[exec] BODY_TRANSPORT step=${step.step_key} run=${run.id} decision=${decision.action} attempts=${decision.attempts}`);
         if (decision.action === "requeue") {
-          await requeueForBodyTransport(admin, step, decision.attempts);
+          const outcome = await requeueForBodyTransport(admin, step, decision.attempts);
+          if (outcome === "cancelled_parent_terminal") {
+            console.log(`[exec] BODY_TRANSPORT step=${step.step_key} parent already terminal — step cancelled`);
+          }
           return;
         }
         await admin
@@ -407,7 +410,8 @@ async function executeStep(admin: any, run: any, step: any) {
             error: "transport_retry_exhausted",
             completed_at: new Date().toISOString(),
           })
-          .eq("id", step.id);
+          .eq("id", step.id)
+          .eq("status", "running");
         await failRun(admin, run, decision.message);
         return;
       }
