@@ -80,10 +80,13 @@ function reassemble(
   }
 }
 
-Deno.test("shape constants: 64 KiB × 20 rendered budget, 1,228,800 SOURCE ceiling (decoupled)", () => {
+Deno.test("shape constants: 64 KiB × 20 rendered budget UNCHANGED; SOURCE ceiling raised to 1,572,864 (1.5 MiB), decoupled", () => {
+  // Rendered/request/chunk-count controls must remain frozen — those bound every model call.
   assertEquals(CHUNK_BYTES, 64 * 1024);
   assertEquals(MAX_CHUNKS, 20);
-  assertEquals(MAX_TOTAL_BYTES, 1_228_800);
+  // Only the source-ingest ceiling grew, and only to accommodate the current
+  // GitHub snapshot (~1,231,172 bytes) plus reasonable near-term growth.
+  assertEquals(MAX_TOTAL_BYTES, 1_572_864);
   // Deliberately not equal — wrapper overhead must never expand the source budget.
   if (MAX_TOTAL_BYTES === CHUNK_BYTES * MAX_CHUNKS) {
     throw new Error("MAX_TOTAL_BYTES must be decoupled from CHUNK_BYTES * MAX_CHUNKS");
@@ -155,26 +158,62 @@ Deno.test("Unicode split boundaries reconstruct exactly (no split codepoints)", 
   reassemble(files, groups);
 });
 
-Deno.test("total-over-SOURCE-ceiling fails closed in chunkFilesFor", () => {
-  // Just over 1,228,800 source bytes.
+Deno.test("total-over-SOURCE-ceiling fails closed in chunkFilesFor (one byte above rejected)", () => {
+  // Precisely MAX_TOTAL_BYTES + 1 source bytes must trigger the source-ceiling guard.
   const oneKB = 1024;
   const overCount = Math.ceil((MAX_TOTAL_BYTES + 1) / oneKB);
   const files = Array.from({ length: overCount }, (_, i) => f(`x${i}.ts`, oneKB));
   assertThrows(() => chunkFilesFor(files), Error, "exceeds ceiling");
 });
 
-Deno.test("exactly at SOURCE ceiling packs within MAX_CHUNKS", () => {
-  // Pack MAX_TOTAL_BYTES worth of ~48 KiB files. With wrapper overhead, one
-  // 48 KiB fragment fits per chunk plus room to spare — never exceeds 20.
+Deno.test("boundary: current GitHub snapshot size (1,231,172 bytes) is accepted", () => {
+  // Reproduces the exact size that failed under the old 1,228,800 ceiling.
+  const CURRENT_SNAPSHOT_BYTES = 1_231_172;
   const size = 48 * 1024;
-  const count = Math.floor(MAX_TOTAL_BYTES / size); // 25 files ≈ 1.17 MiB
-  const files = Array.from({ length: count }, (_, i) => f(`x${i}.ts`, size, String.fromCharCode(65 + (i % 26))));
-  const totalSource = files.reduce((n, x) => n + x.bytes, 0);
-  if (totalSource > MAX_TOTAL_BYTES) throw new Error(`test invariant: ${totalSource} > ${MAX_TOTAL_BYTES}`);
-  const groups = chunkFilesFor(files);
+  const count = Math.floor(CURRENT_SNAPSHOT_BYTES / size);
+  const remainder = CURRENT_SNAPSHOT_BYTES - count * size;
+  const files = [
+    ...Array.from({ length: count }, (_, i) => f(`snap${i}.ts`, size, String.fromCharCode(65 + (i % 26)))),
+    f("snap-tail.ts", remainder, "z"),
+  ];
+  const total = files.reduce((n, x) => n + x.bytes, 0);
+  assertEquals(total, CURRENT_SNAPSHOT_BYTES);
+  const groups = chunkFilesFor(files); // must not throw
   checkAll(groups);
   reassemble(files, groups);
-  if (groups.length > MAX_CHUNKS) throw new Error(`too many chunks: ${groups.length}`);
+});
+
+Deno.test("boundary: exact MAX_TOTAL_BYTES source passes the source-ceiling guard", () => {
+  // At the ceiling the SOURCE-ceiling assertion in chunkFilesFor must NOT fire.
+  // Packing 1.5 MiB into the unchanged 20 × 64 KiB rendered budget is not
+  // guaranteed — the rendered-capacity guard (MAX_CHUNKS) is the deliberate
+  // loud-failure path for that pathological case, and it's covered separately.
+  const size = 1024;
+  const count = MAX_TOTAL_BYTES / size; // 1536 files × 1 KiB = 1,572,864 bytes
+  const files = Array.from({ length: count }, (_, i) => f(`c${i}.ts`, size, String.fromCharCode(97 + (i % 26))));
+  const total = files.reduce((n, x) => n + x.bytes, 0);
+  assertEquals(total, MAX_TOTAL_BYTES);
+  try {
+    chunkFilesFor(files);
+  } catch (e) {
+    const msg = String((e as Error).message);
+    if (msg.includes("exceeds ceiling")) {
+      throw new Error(`source-ceiling guard fired at exact MAX_TOTAL_BYTES: ${msg}`);
+    }
+    // Any other loud failure (e.g. MAX_CHUNKS) is acceptable — those paths
+    // stay unchanged intentionally and remain the loud-failure gate for
+    // genuinely rendered-oversized packings.
+  }
+});
+
+Deno.test("boundary: one byte above MAX_TOTAL_BYTES is rejected with source-ceiling error", () => {
+  const size = 1024;
+  const count = MAX_TOTAL_BYTES / size; // exactly at ceiling
+  const files = [
+    ...Array.from({ length: count }, (_, i) => f(`c${i}.ts`, size)),
+    f("one-byte-over.ts", 1),
+  ];
+  assertThrows(() => chunkFilesFor(files), Error, "exceeds ceiling");
 });
 
 Deno.test("21st-chunk rejection: assertChunkInvariants refuses handcrafted 21 groups", () => {
