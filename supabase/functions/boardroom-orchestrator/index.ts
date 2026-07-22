@@ -8,7 +8,9 @@ import {
   callSeat,
   NoUserKey,
   SeatUnavailable,
+  shouldQuickRetry,
 } from "../_shared/openrouter-proxy.ts";
+
 
 import {
   SEATS,
@@ -87,7 +89,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-22.timeout-failover.1";
+const BUILD_VERSION = "2026-07-22.streamed-body-timeout.1";
 
 // Terminal-fail a run and, when it drives an audit, fail the audit row in
 // lockstep so audits/runs never drift. Budget pauses and recoverable requeues
@@ -325,8 +327,10 @@ async function executeStep(admin: any, run: any, step: any) {
         await requeueForTimeout(admin, step);
         return;
       }
-      // Pre-response 429/5xx/network blip: one quick same-invocation retry.
-      if (networkAttempt === 0) {
+      // Strictly classified quick retry: ONLY pre-response network failures,
+      // 429, or 5xx. Any other 4xx, validation, budget, or unexpected error
+      // fails the step immediately — no blind same-invocation retry.
+      if (networkAttempt === 0 && shouldQuickRetry(e)) {
         networkAttempt++;
         await new Promise((r) => setTimeout(r, 800));
         continue;
