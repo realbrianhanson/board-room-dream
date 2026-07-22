@@ -21,13 +21,16 @@ import { injectOwnerAuthority, loadOwnerAuthority, OWNER_AUTHORITY_RULES } from 
 import { batchAuthorityError, shapeError, type Parsed } from "./validators.ts";
 import {
   batchTouchesSchema,
+  decideLedgerAuthority,
+  MIGRATION_PROVENANCE_MAX_ENTRIES,
   parseMigrationsToInventory,
   renderTargetInventory,
   toCollisionSet,
+  type ProvenanceEntry,
   type TargetSchemaInventory,
 } from "../_shared/target-schema-inventory.ts";
 
-const BUILD_VERSION = "2026-07-29.target-schema-authority.r1";
+const BUILD_VERSION = "2026-07-30.target-schema-ledger.r2";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -291,20 +294,26 @@ Deno.serve(async (req) => {
   // proceed with an empty inventory; batches that touch schema fail closed
   // when the ledger is missing or oversized.
   let targetInv: TargetSchemaInventory = { tables: new Set(), functions: new Set(), policies: new Set(), indexes: new Set(), views: new Set(), columns: new Map() };
-  let targetInvOk = source !== "github";
-  let targetInvReason: string | null = source === "github" ? null : "paste source: target schema inventory not fetched";
-  let targetMigrationsProvenance: { files: number; total_bytes: number } | null = null;
+  let ledgerOk = false;
+  let ledgerFileCount = 0;
+  let ledgerHeadSha: string | null = null;
+  let ledgerTotalBytes = 0;
+  let ledgerProvenance: ProvenanceEntry[] = [];
+  let targetInvReason: string | null =
+    source === "github" ? null : "paste source: target schema inventory not fetched";
   if (source === "github") {
     const ghtok = await ghToken(admin, userId);
     if (!ghtok) return j(400, { error: "GitHub not connected." });
     const ledger = await fetchTargetMigrations(ghtok, project.github_repo!);
     if (ledger.ok) {
       targetInv = parseMigrationsToInventory(ledger.files);
-      targetInvOk = true;
-      targetMigrationsProvenance = { files: ledger.files.length, total_bytes: ledger.totalBytes };
+      ledgerOk = true;
+      ledgerFileCount = ledger.files.length;
+      ledgerHeadSha = ledger.headSha;
+      ledgerTotalBytes = ledger.totalBytes;
+      ledgerProvenance = ledger.provenance;
     } else {
       targetInvReason = ledger.message;
-      targetInvOk = false;
     }
   }
 
@@ -339,9 +348,29 @@ Deno.serve(async (req) => {
   // Decide whether this batch's intent depends on the target schema at all.
   const roadmapText = String((batch as any).prompt_md ?? "");
   const schemaTouching = batchTouchesSchema({ channel: String(batch.channel), compiledOrRoadmap: roadmapText });
+  const authorityDecision = decideLedgerAuthority({
+    source,
+    schemaTouching,
+    ledgerOk,
+    ledgerFileCount,
+  });
+  const targetInvOk = authorityDecision.targetInvOk;
+
+  // Compact ordered provenance persisted to compile_meta (capped).
+  const provenanceKept = ledgerProvenance.slice(0, MIGRATION_PROVENANCE_MAX_ENTRIES);
+  const provenanceOmitted = Math.max(0, ledgerProvenance.length - provenanceKept.length);
+  const targetMigrationsMeta = ledgerOk
+    ? {
+        source_commit: ledgerHeadSha,
+        files: ledgerFileCount,
+        total_bytes: ledgerTotalBytes,
+        provenance: provenanceKept,
+        provenance_omitted: provenanceOmitted,
+      }
+    : null;
 
   // Fail closed only when the batch NEEDS the schema ledger to be safe.
-  if (source === "github" && schemaTouching && !targetInvOk) {
+  if (authorityDecision.blocked) {
     const meta = {
       status: "blocked",
       head_sha: headSha,
@@ -351,7 +380,9 @@ Deno.serve(async (req) => {
       original_title: batch.title,
       original_channel: batch.channel,
       reason: "Target-repo schema ledger unavailable for a schema-touching batch",
+      target_repo_migrations: targetMigrationsMeta,
       target_repo_migrations_reason: targetInvReason,
+      schema_touching_batch: schemaTouching,
       build_version: BUILD_VERSION,
     };
     await admin
@@ -367,7 +398,7 @@ Deno.serve(async (req) => {
   }
 
   const schemaBlock = source === "github" && targetInvOk
-    ? `TARGET-REPO SCHEMA INVENTORY (derived from supabase/migrations/*, ${targetMigrationsProvenance?.files ?? 0} files, ${targetMigrationsProvenance?.total_bytes ?? 0} bytes):\n${renderTargetInventory(targetInv)}`
+    ? `TARGET-REPO SCHEMA INVENTORY (derived from supabase/migrations/*, ${ledgerFileCount} files, ${ledgerTotalBytes} bytes, commit ${ledgerHeadSha ?? "unknown"}):\n${renderTargetInventory(targetInv)}`
     : source === "github"
       ? "(target-repo schema inventory not available — UI-only batch; do NOT assert any target DB object exists or is missing)"
       : "(schema inventory not shown for paste source — assume any database object may already exist and BLOCK on uncertainty rather than emitting a CREATE)";
