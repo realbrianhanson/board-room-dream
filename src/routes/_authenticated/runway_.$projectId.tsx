@@ -348,6 +348,29 @@ function RunwayPage() {
     }
   }
 
+  async function regenerateSafely() {
+    if (!confirm(
+      "Archive the current build sequence and regenerate from scratch?\n\n" +
+      "Your current batches will be snapshotted for the record, then removed so the board can produce a fresh sequence grounded in your live repo. This only runs while no batch has been touched yet.",
+    )) return;
+    setGenerating(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("boardroom-orchestrator", {
+        body: { action: "regenerate_batches", project_id: projectId },
+      });
+      if (error) throw error;
+      if ((data as any)?.error) throw new Error((data as any).error);
+      const n = (data as any)?.archived_count ?? 0;
+      toast.success(`Archived ${n} batches. The Chair is sequencing a fresh build…`);
+      await loadAll();
+    } catch (err: any) {
+      toast.error(err?.message ?? "Failed to regenerate");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+
   async function resumeRun(runId: string) {
     setGenerating(true);
     try {
