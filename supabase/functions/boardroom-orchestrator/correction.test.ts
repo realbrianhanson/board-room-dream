@@ -7,7 +7,7 @@ Deno.test("correctionForStep — batch generation routes to batches copy", () =>
   for (const k of ["batches_chair", "batches_revise_chair"]) {
     const c = correctionForStep(k);
     assertStringIncludes(c, "exactly 6 batches");
-    assertStringIncludes(c, "<=28,000 characters");
+    assertStringIncludes(c, "<=24,000 characters");
   }
 });
 
@@ -15,8 +15,8 @@ Deno.test("correctionForStep — batch review routes to review copy (never batch
   for (const k of ["batches_review_inspector", "batches_review_contrarian"]) {
     const c = correctionForStep(k);
     assertStringIncludes(c, "{verdict, issues}");
-    assertStringIncludes(c, "max 10 issues");
-    assertStringIncludes(c, "<=6,000 characters");
+    assertStringIncludes(c, "max 8 issues");
+    assertStringIncludes(c, "<=4,500 characters");
     assert(!c.includes("6 batches"), `reviewer must not receive batch-schema copy (got: ${c})`);
   }
 });
