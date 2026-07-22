@@ -661,6 +661,9 @@ Return ONLY valid JSON:
 {
   "features": [ { "name": "...", "description": "...", "priority": "mvp" | "later" } ]
 }`;
+  // DIRECT INSERT (allow-listed): pure extraction — lifts the ## Features
+  // section from the Chair's PRD into structured JSON. Cannot introduce
+  // executable scope; owner-authority injection is unnecessary.
   await admin.from("run_steps").insert({
     run_id: run.id,
     user_id: run.user_id,
