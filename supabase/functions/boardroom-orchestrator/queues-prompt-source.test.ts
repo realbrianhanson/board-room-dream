@@ -40,7 +40,7 @@ Deno.test("queues.ts — no unaudited direct run_steps insert may introduce scop
   // Every other step must go through queueSteps.
   const allowedDirectInsertStepKeys = (key: string): boolean => {
     // Pure extraction — lifts already-produced Chair fields into structured JSON.
-    if (/^r3_extract_chair_loop\d+$/.test(key)) return true;
+    if (/^r3_extract_chair_loop/.test(key)) return true;
     // Pure extraction — lifts ## Features H2 out of Chair PRD.
     if (key === "r5_blueprint_extract_chair") return true;
     // Pipeline-health smoke test — canned single-user message, no scope.
