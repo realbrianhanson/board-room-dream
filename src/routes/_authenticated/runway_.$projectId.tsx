@@ -500,14 +500,47 @@ function RunwayPage() {
         </div>
       )}
 
-      {/* State C: generation in flight */}
-      {hasPlan && total === 0 && runInFlight && (
+      {/* State C: generation in flight (queued/running) */}
+      {hasPlan && total === 0 && runInFlight && !runPaused && (
         <div className="rounded-xl border border-border bg-surface-1 p-8 text-center">
           <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
           <p className="font-display text-2xl text-foreground">The Chair is sequencing your build…</p>
           <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
             Status · {run?.status}
           </p>
+        </div>
+      )}
+
+      {/* State C: generation paused (paused / paused_budget) */}
+      {hasPlan && total === 0 && runPaused && run && (
+        <div className="mt-4 rounded-xl border border-[hsl(38_65%_55%/0.4)] bg-[hsl(38_65%_25%/0.12)] p-6">
+          <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(38_65%_72%)]">
+            <AlertTriangle className="h-4 w-4" /> The run is paused · {run.status}
+          </p>
+          <p className="mt-3 whitespace-pre-line text-sm text-foreground/85">
+            {run.error ?? (run.status === "paused_budget"
+              ? "This run hit its spend cap."
+              : "This run was paused.")}
+          </p>
+          {run.status === "paused_budget" && (
+            <div className="mt-3">
+              <Link
+                to="/settings"
+                className="inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.24em] text-[hsl(38_65%_72%)] hover:brightness-125"
+              >
+                Open Settings <ArrowRight className="h-3 w-3" />
+              </Link>
+            </div>
+          )}
+          {isOwner && (
+            <button
+              onClick={() => resumeRun(run.id)}
+              disabled={generating}
+              className="mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+            >
+              <Rocket className="h-4 w-4" /> {generating ? "Resuming…" : "Resume the run"}
+            </button>
+          )}
         </div>
       )}
 
