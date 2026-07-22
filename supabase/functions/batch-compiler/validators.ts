@@ -185,12 +185,9 @@ export function batchAuthorityError(
       }
     }
   }
-  // Skeleton enforcement for code channel only ("supabase" and "human" are
-  // free-form; the code batches are what get pasted verbatim to Lovable).
-  if (batch.channel === "code") {
-    const sk = skeletonError(p.compiled_prompt_md, batch);
-    if (sk) return sk;
-  }
+  // Skeleton enforcement — all ready compiles (human batches are rejected upstream).
+  const sk = skeletonError(p.compiled_prompt_md, batch);
+  if (sk) return sk;
   return null;
 }
 
