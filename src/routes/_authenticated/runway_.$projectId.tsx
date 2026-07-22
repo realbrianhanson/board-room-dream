@@ -178,7 +178,19 @@ function RunwayPage() {
     setHasPlan(((pv ?? []).length ?? 0) > 0);
     setHasDesign(((dv ?? []).length ?? 0) > 0);
     setBatches((bs ?? []) as Batch[]);
-    setRun(((rs ?? [])[0] as Run) ?? null);
+    {
+      const runList = (rs ?? []) as Run[];
+      const active = runList.filter((r) => ["queued","running","paused","paused_budget"].includes(r.status));
+      // Ordering already: spent_usd DESC, created_at DESC. For active tie-break
+      // we want older created_at first (most progress) — flip that here.
+      active.sort((a, b) => {
+        const sa = Number(a.spent_usd ?? 0), sb = Number(b.spent_usd ?? 0);
+        if (sb !== sa) return sb - sa;
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
+      const latestTerminal = runList.find((r) => !["queued","running","paused","paused_budget"].includes(r.status)) ?? null;
+      setRun(active[0] ?? latestTerminal);
+    }
     setAudits((au ?? []) as AuditRow[]);
     setFindings((fi ?? []) as FindingRow[]);
     if (p && !urlEdit) setUrlEdit((p as Project).lovable_project_url ?? "");
