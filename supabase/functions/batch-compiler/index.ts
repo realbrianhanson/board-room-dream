@@ -114,11 +114,13 @@ async function loadDesignBrief(admin: any, projectId: string): Promise<string | 
     .select("content_md")
     .eq("project_id", projectId)
     .eq("kind", "design")
+    .eq("is_build_safe", true)
     .order("version", { ascending: false })
     .limit(1)
     .maybeSingle();
   return data?.content_md ?? null;
 }
+
 
 async function loadOutcomes(admin: any, projectId: string, uptoBatchNo: number) {
   const { data } = await admin
