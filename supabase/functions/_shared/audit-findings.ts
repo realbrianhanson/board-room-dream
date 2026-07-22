@@ -97,6 +97,8 @@ Client-side vs server-side authorization:
 
 Do NOT invent a security-contract requirement. In particular, storing a role column on profiles is not automatically unsafe when database triggers/policies prevent self-mutation; a separate user_roles table is one architecture, not a universal requirement.
 
+Preserve SERVER_AUTH and OWNER_CONTRACT markers verbatim from seat findings within the evidence character cap — the shared validator uses them to keep client-surface security and product-strategy findings at P0/P1 severity. Never strip them during merge.
+
 Cross-file composition is real evidence:
 - Prompts, wrappers, and providers commonly compose across files. Before claiming "seats receive the identical prompt" or "no constitution is prepended", verify with a QUOTE from the actual wrapper (for example callSeat in supabase/functions/_shared/openrouter-proxy.ts prepends the constitution and each model_registry.role_prompt). Contradictory current source wins over any model claim of absence.
 
@@ -275,9 +277,29 @@ export function hasSchemaLedgerMarker(ev: string): boolean { return /\bSCHEMA_LE
 export function hasRuntimeFailureMarker(ev: string): boolean { return /\bRUNTIME_FAILURE:\s*\S/.test(String(ev ?? "")); }
 export function hasCallerMarker(ev: string): boolean { return /\bCALLER:\s*\S/.test(String(ev ?? "")); }
 
+// R3 — client-surface security claim corroboration marker.
+// A P0/P1 that alleges an auth/admin/RLS/privilege bypass from a frontend
+// (src/*) file MUST include a compact SERVER_AUTH quote of the current
+// vulnerable server-side boundary (RLS policy, RPC, edge function,
+// security-definer function). Without it the claim is a UI-only observation
+// and is deterministically downgraded to P2.
+export function hasServerAuthMarker(ev: string): boolean { return /\bSERVER_AUTH:\s*\S/.test(String(ev ?? "")); }
+
+// R3 — product-strategy / copy claim corroboration marker.
+// Copy, positioning, acquisition, pricing/monetization, onboarding activation,
+// or buyer-reach findings cannot be P0/P1 unless the evidence quotes a verbatim
+// OWNER_CONTRACT (owner intake / founder note / locked-PRD requirement) OR a
+// RUNTIME_FAILURE for a truly broken flow.
+export function hasOwnerContractMarker(ev: string): boolean { return /\bOWNER_CONTRACT:\s*\S/.test(String(ev ?? "")); }
+
 export function isMigrationPath(fp: string | null): boolean {
   const t = String(fp ?? "").trim().toLowerCase().replace(/^\.?\/+/, "");
   return t.startsWith("supabase/migrations/");
+}
+
+export function isFrontendPath(fp: string | null): boolean {
+  const t = String(fp ?? "").trim().toLowerCase().replace(/^\.?\/+/, "");
+  return t.startsWith("src/");
 }
 
 const MISSING_OBJECT_RX_A =
@@ -291,9 +313,45 @@ export function looksLikeMissingObjectClaim(title: string, description: string):
 
 const UNIVERSAL_HELPER_RX =
   /\b(all|every|universally|globally|always|each)\b[^.\n]{0,80}\b(seat|caller|call ?site|route|request|function|batch|module|component|invocation|human batch)s?\b/i;
+// R3 — extended universal-helper detection. Live regression: an audit finding
+// titled "Human channel batches incorrectly require typecheck footer" with
+// description "footer check is outside isCodeChannel, applying to human
+// batches" is universal-scope reasoning about every human batch reaching the
+// footer check. Match it without requiring an "all/every" quantifier so the
+// CALLER-marker gate applies deterministically.
+const UNIVERSAL_HELPER_RX_R3 =
+  /\b(human\s+(?:channel\s+)?batches|non[- ]code\s+batches|human\s+channel|isCodeChannel|footer\s+check|typecheck\s+footer)\b/i;
 export function looksLikeUniversalHelperClaim(title: string, description: string): boolean {
   const t = `${title}\n${description}`;
-  return UNIVERSAL_HELPER_RX.test(t);
+  return UNIVERSAL_HELPER_RX.test(t) || UNIVERSAL_HELPER_RX_R3.test(t);
+}
+
+// R3 — client-surface security claim detector. Fires only when the file_path
+// is a frontend src/* file AND the title/description describes an
+// authorization / privilege / direct-SELECT bypass concern. A concrete server
+// bypass proof (SERVER_AUTH marker) must accompany the finding to keep P0/P1.
+const CLIENT_SURFACE_CONCERN_RX =
+  /\b(auth\s+bypass|admin\s+bypass|rls\s+bypass|privilege\s+escalation|unauthori[sz]ed\s+(?:access|read|write|query|select)|direct\s+select|direct\s+query|bypass(?:es|ed)?\s+(?:rls|auth|policy|policies|security)|admin\s+(?:only\s+)?(?:page|route|debug|panel|dashboard))\b/i;
+export function looksLikeClientSurfaceSecurityClaim(
+  title: string,
+  description: string,
+  filePath: string | null,
+): boolean {
+  if (!isFrontendPath(filePath)) return false;
+  const t = `${title}\n${description}`;
+  return CLIENT_SURFACE_CONCERN_RX.test(t);
+}
+
+// R3 — product-strategy / copy claim detector. Covers copy, positioning,
+// acquisition, pricing/monetization, onboarding activation, and buyer-reach
+// concerns. These are legitimate product-quality findings but must not carry
+// P0/P1 severity without an OWNER_CONTRACT (verbatim owner/PRD requirement)
+// or a RUNTIME_FAILURE marker.
+const PRODUCT_STRATEGY_RX =
+  /\b(copy|wording|tone|positioning|value\s+prop(?:osition)?|acquisition|pricing|price\s+anchor|monetiz(?:e|ation|ing)|paid\s+offer|upgrade\s+trigger|onboarding|activation|first[- ]?90|wow\s+moment|buyer|hero\s+section|landing\s+(?:page|copy|hero)|CTA|call[- ]to[- ]action|cohort[- ]first|marketing)\b/i;
+export function looksLikeProductStrategyClaim(title: string, description: string): boolean {
+  const t = `${title}\n${description}`;
+  return PRODUCT_STRATEGY_RX.test(t);
 }
 
 // Speculation guard: WHY clauses that lean on hedges ("appears", "may",
@@ -342,6 +400,28 @@ export function downgradeUnsupported(
         && looksLikeUniversalHelperClaim(f.title, f.description)
         && !hasCallerMarker(f.evidence)) {
       push(sev, "P2", "universal-helper claim lacks CALLER: corroboration from a reachable caller");
+      return { ...f, severity: "P2" as Severity };
+    }
+
+    // Rule 4b (R3): client-surface security claim (frontend src/* alleging
+    // auth/admin/RLS/privilege/unauthorized/direct-SELECT bypass) requires a
+    // SERVER_AUTH marker quoting the current vulnerable server construct.
+    if ((sev === "P0" || sev === "P1")
+        && looksLikeClientSurfaceSecurityClaim(f.title, f.description, f.file_path)
+        && !hasServerAuthMarker(f.evidence)) {
+      push(sev, "P2", "client-surface security claim lacks SERVER_AUTH: quote of the current vulnerable server construct");
+      return { ...f, severity: "P2" as Severity };
+    }
+
+    // Rule 4c (R3): product-strategy / copy / positioning / pricing /
+    // onboarding / buyer-reach claims cannot be P0/P1 without OWNER_CONTRACT
+    // (verbatim owner or locked-PRD requirement) OR a RUNTIME_FAILURE marker.
+    // They remain visible as P2 product-quality findings.
+    if ((sev === "P0" || sev === "P1")
+        && looksLikeProductStrategyClaim(f.title, f.description)
+        && !hasOwnerContractMarker(f.evidence)
+        && !hasRuntimeFailureMarker(f.evidence)) {
+      push(sev, "P2", "product-strategy/copy claim lacks OWNER_CONTRACT: or RUNTIME_FAILURE: corroboration");
       return { ...f, severity: "P2" as Severity };
     }
 
@@ -437,6 +517,33 @@ export function evaluateChairMergeCandidate(parsed: unknown): ChairMergeEvaluati
   return { error, findings, downgrades, summary, verdict };
 }
 
+// R3 — audit-summary reconciliation. Given the Chair's raw summary text and
+// the POST-downgrade severity counts persisted alongside it, guarantee the
+// persisted summary text never asserts a severity class that the counts do
+// not support. Live regression (audit 2d953efb): counts.P0 === 0 but the
+// summary text said "P0". Deterministic policy:
+//   - If counts.P0 === 0 and the raw text contains a "P0" token, drop the
+//     raw text entirely and replace it with a derived counts sentence so
+//     the persisted summary cannot mislead a reader about severity mix.
+//   - Otherwise, prefix the raw text with a compact counts sentence and
+//     truncate to the merge summary cap.
+export type AuditCounts = { P0: number; P1: number; P2: number; P3: number };
+export function reconcileAuditSummaryText(rawText: string, counts: AuditCounts): string {
+  const text = String(rawText ?? "").trim();
+  const countsSentence =
+    `Validated counts: P0=${counts.P0}, P1=${counts.P1}, P2=${counts.P2}, P3=${counts.P3}.`;
+  const mentionsP0 = /\bP0\b/.test(text);
+  if (counts.P0 === 0 && mentionsP0) {
+    // The Chair's summary claims a P0 the counts contradict — refuse to
+    // persist that. Use derived text alone.
+    return countsSentence.slice(0, CAPS.mergeSummaryMax);
+  }
+  const combined = text ? `${countsSentence} ${text}` : countsSentence;
+  return combined.length > CAPS.mergeSummaryMax
+    ? combined.slice(0, CAPS.mergeSummaryMax - 1) + "…"
+    : combined;
+}
+
 export function validateSeatReport(findings: CleanFinding[]): string | null {
   if (findings.length > CAPS.seatFindingsMax) {
     return `seat findings has ${findings.length} entries — max ${CAPS.seatFindingsMax}.`;
@@ -516,6 +623,16 @@ the evidence. Partial-chunk absence is NOT proof. Missing marker → downgraded 
 Universal-helper claim rule: any claim that a helper/validator/middleware "applies to all X" or
 "every call goes through Y" requires 'CALLER: <quote from a reachable current caller>'. Missing
 marker → downgraded to P2.
+
+Client-surface security claim rule (frontend src/*): any P0/P1 that alleges an auth/admin/RLS/privilege/
+unauthorized/direct-SELECT bypass and cites a src/* frontend file MUST include a compact
+'SERVER_AUTH: <quote of the current vulnerable server RLS/RPC/edge/security-definer construct>' marker.
+UI-only observation without SERVER_AUTH is downgraded to P2.
+
+Product-strategy/copy claim rule: findings about copy, positioning, acquisition, pricing/monetization,
+onboarding activation, or buyer-reach cannot be P0/P1 without either 'OWNER_CONTRACT: <verbatim owner
+intake / founder note / locked-PRD requirement>' or 'RUNTIME_FAILURE: <error>'. Without one, they are
+downgraded to P2 (still visible as product-quality findings).
 
 Cumulative-ledger rule: SQL migrations are a cumulative ledger. An older migration is NOT proof of the current effective state. Corroborate any P0/P1 based on a migration against later migrations / current grants / current RLS policies / current triggers / current code — the QUOTE must come from the CURRENT effective definition, not a superseded one. Otherwise downgrade to P2 or drop.
 

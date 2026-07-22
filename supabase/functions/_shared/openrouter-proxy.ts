@@ -128,7 +128,7 @@ function estimateCost(modelId: string, tokensIn: number, tokensOut: number): num
   return (tokensIn * p.in + tokensOut * p.out) / 1_000_000;
 }
 
-type SeatRow = {
+export type SeatRow = {
   seat: string;
   model_id: string;
   role_prompt: string | null;
@@ -166,9 +166,28 @@ async function loadSeat(admin: SupabaseClient, seat: string): Promise<SeatRow> {
   return data;
 }
 
+// Pure helper: collect every model id the registry authorizes callSeat to
+// use — both the primary model_id and the non-blank fallback_model_id of
+// every ENABLED seat. Disabled seats contribute nothing. Duplicates are
+// deduped, and null / undefined / whitespace-only ids are excluded. Exported
+// so the R3 CORE-TRUTHFULNESS-R3 test suite can pin the semantics.
+export function collectAllowedModelIds(rows: SeatRow[]): string[] {
+  const set = new Set<string>();
+  for (const r of rows) {
+    if (!r || !r.enabled) continue;
+    const primary = typeof r.model_id === "string" ? r.model_id.trim() : "";
+    const fallback = typeof (r as any).fallback_model_id === "string"
+      ? String((r as any).fallback_model_id).trim()
+      : "";
+    if (primary) set.add(primary);
+    if (fallback) set.add(fallback);
+  }
+  return [...set];
+}
+
 async function loadAllowedModels(admin: SupabaseClient): Promise<Set<string>> {
   const rows = await loadRegistry(admin);
-  return new Set(rows.filter((r) => r.enabled).map((r) => r.model_id));
+  return new Set(collectAllowedModelIds(rows));
 }
 
 async function loadConstitution(admin: SupabaseClient): Promise<string> {

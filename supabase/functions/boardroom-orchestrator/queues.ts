@@ -497,6 +497,10 @@ Return ONLY valid JSON:
   "decision_log": [ { "from_seat": "...", "objection": "...", "decision": "accepted"|"rejected", "reason": "..." } ],
   "steals_adopted": [ "..." ]
 }`;
+  // DIRECT INSERT (allow-listed): pure extraction — copies structured fields
+  // (decision_log, steals_adopted) out of the Chair's already-produced candidate
+  // markdown. No new decisions, no generative scope. Owner-authority injection
+  // is unnecessary because this step cannot introduce executable scope.
   await admin.from("run_steps").insert({
     run_id: run.id,
     user_id: run.user_id,
@@ -629,7 +633,7 @@ Every section header must appear exactly as written. Be specific: name concrete 
 
 Respond with the markdown document ONLY — no JSON, no preamble.`;
   const user = `${intakeBlock(intake)}\n\nLOCKED PLAN\n\n${contentMd}\n\nWrite the PRD now.`;
-  await admin.from("run_steps").insert({
+  await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
     step_key: "r5_blueprint_chair",
@@ -657,6 +661,9 @@ Return ONLY valid JSON:
 {
   "features": [ { "name": "...", "description": "...", "priority": "mvp" | "later" } ]
 }`;
+  // DIRECT INSERT (allow-listed): pure extraction — lifts the ## Features
+  // section from the Chair's PRD into structured JSON. Cannot introduce
+  // executable scope; owner-authority injection is unnecessary.
   await admin.from("run_steps").insert({
     run_id: run.id,
     user_id: run.user_id,
@@ -707,7 +714,7 @@ Return ONLY valid JSON matching this shape:
       ],
     },
   }));
-  await admin.from("run_steps").insert(rows);
+  await queueSteps(admin, run, rows);
 }
 
 
@@ -728,7 +735,7 @@ Return ONLY valid JSON matching this shape:
 }
 
 If rejected, amended_* may be empty strings / empty array.`;
-  await admin.from("run_steps").insert({
+  await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
     step_key: "cr_verdict_chair",
@@ -775,7 +782,7 @@ Return ONLY valid JSON:
   "issues": [ { "batch_no": <number or null>, "severity": "blocking"|"major"|"minor", "text": "specific issue and the fix" } ]
 }`;
   const user = `AMENDED PLAN\n\n${String(verdictJson?.amended_plan_md ?? "")}\n\nAMENDED PRD\n\n${String(verdictJson?.amended_prd_md ?? "")}\n\nAMENDED FEATURES\n\n${JSON.stringify(verdictJson?.amended_features ?? [], null, 2)}\n\nEXISTING BUILD BATCHES\n\n${batchesBlock}\n\nProduce your JSON now.`;
-  await admin.from("run_steps").insert({
+  await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
     step_key: "cr_review_inspector",
@@ -810,7 +817,7 @@ Return ONLY the same JSON shape as your verdict:
 
 Write the documents at FULL length — never compress them because they are inside JSON strings.`;
   const user = `YOUR VERDICT\n\n${JSON.stringify(verdictJson, null, 2)}\n\nINSPECTOR ISSUES\n\n${JSON.stringify(reviewJson, null, 2)}\n\nProduce the corrected JSON now.`;
-  await admin.from("run_steps").insert({
+  await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
     step_key: "cr_revise_chair",
@@ -1116,6 +1123,9 @@ Constraints: ${batchRangeText} batches, unique ascending integer batch_no starti
 
 export async function createInitialSteps(admin: any, run: any) {
   if (run.kind === "test") {
+    // DIRECT INSERT (allow-listed): pipeline-health smoke test. The single
+    // user message is a canned "reply with one sentence" — no artifacts, no
+    // scope, no owner-authority-relevant surface.
     await admin.from("run_steps").insert({
       run_id: run.id,
       user_id: run.user_id,
@@ -1234,6 +1244,10 @@ If verdict is "clean", findings is [] and fix_prompt_md is "".
 
 Coverage honesty: the summary must state how much of the app was actually read (the CODE COVERAGE line below). Never imply full A-Z coverage beyond what the seats reviewed.`;
 
+  // DIRECT INSERT (allow-listed): audit merge. Input is pre-normalized,
+  // prose-stripped seat findings only (see buildMergeInput). The Chair
+  // dedupes and assigns final severities against deterministic caps and
+  // validators; no plan/PRD/features/design/CR scope can be introduced here.
   await admin.from("run_steps").insert({
     run_id: run.id,
     user_id: run.user_id,
