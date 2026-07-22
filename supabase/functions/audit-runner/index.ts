@@ -110,16 +110,27 @@ ${jsonShape}`;
 // Map-reduce: large repos are split into chunks; every seat reviews every
 // chunk in its own step, and the Chair merge dedupes across chunk reports.
 // Single-chunk audits keep the legacy step keys (audit_<seat>).
-// 200 KiB × 6 keeps the same 1.2 MiB total ceiling as the previous 300 KiB × 4
-// but shrinks per-call prompt tokens so watchdog timeouts no longer swallow
-// entire seat rounds on large repos. chunkFilesFor bin-packs greedily and
+// 64 KiB × 20 preserves the same ~1.2 MiB total ceiling as before, but every
+// individual map request now stays well under the model's context/latency
+// budget — the prior 200 KiB × 6 was tipping Gemini and its reserve into hard
+// timeouts on final GitHub audits (see run 4462a4ef, ~221k user-message
+// characters on the last chunk). chunkFilesFor bin-packs greedily and
 // fragments files at UTF-8-safe boundaries when file sizes don't line up with
-// the CHUNK_BYTES grid — every rendered chunk stays <= 200 KiB and count <= 6
-// whenever total encoded source content <= 1.2 MiB. Fragments retain the
+// the CHUNK_BYTES grid — every rendered chunk stays <= 64 KiB and count <= 20
+// whenever total encoded source content <= 1.28 MiB. Fragments retain the
 // original file path so audit evidence still cites real paths.
-export const CHUNK_BYTES = 200 * 1024;
-export const MAX_CHUNKS = 6;
+export const CHUNK_BYTES = 64 * 1024;
+export const MAX_CHUNKS = 20;
 export const MAX_TOTAL_BYTES = CHUNK_BYTES * MAX_CHUNKS;
+
+// Bounded controls for AUDIT MAP/extraction steps (per-chunk seat reviews).
+// Map seats are evidence gatherers, not deep synthesis, so a low reasoning
+// budget + tight temperature + capped output keeps each of the up-to-60 map
+// calls fast and cheap. The Chair MERGE step uses the seat's normal request
+// profile and is intentionally NOT constrained here.
+export const AUDIT_MAP_TEMPERATURE = 0.2;
+export const AUDIT_MAP_REASONING_EFFORT: "low" | "medium" | "high" = "low";
+export const AUDIT_MAP_MAX_TOKENS = 2400;
 
 // Returns the largest byte prefix length <= maxBytes that ends on a UTF-8
 // codepoint boundary (i.e., the byte at position `cut` is not a continuation
@@ -299,6 +310,12 @@ Produce your JSON now.`;
         status: "queued",
         request: {
           json_output: true,
+          // Map/extraction controls — see AUDIT_MAP_* constants. Applied to
+          // every per-chunk seat review; the Chair merge step queues its own
+          // request without these caps.
+          temperature: AUDIT_MAP_TEMPERATURE,
+          reasoning_effort: AUDIT_MAP_REASONING_EFFORT,
+          max_tokens: AUDIT_MAP_MAX_TOKENS,
           messages: [
             { role: "system", content: seatPrompt(seat, isFinal) },
             { role: "user", content: user },
@@ -450,7 +467,7 @@ async function beginAudit(params: {
           ? { baseSha, maxFiles: 200, maxTotalBytes: MAX_CHUNKS * CHUNK_BYTES, preferKeyFiles: true }
           : { baseSha },
       );
-      chunks = isFinal ? chunkFiles(res.files) : [formatFiles(res.files)];
+      chunks = isFinal ? chunkFiles(res.files) : chunkFiles(res.files);
       fileTree = res.fileTree;
       filesAnalyzed = res.files.length;
       headSha = res.headSha;
@@ -460,7 +477,12 @@ async function beginAudit(params: {
 
   } else {
     if (!pastedCode || !pastedCode.trim()) return { error: "Empty pasted code" as const };
-    chunks = [fitPasted(pastedCode)];
+    // Batch/paste audits also fan out into map chunks so a single request
+    // can never exceed CHUNK_BYTES. fitPasted() already truncates at
+    // MAX_PASTE_BYTES (200 KiB), well inside the 1.28 MiB total ceiling.
+    const trimmed = fitPasted(pastedCode);
+    const encoded = new TextEncoder().encode(trimmed);
+    chunks = chunkFiles([{ path: "pasted-code", content: trimmed, bytes: encoded.length }]);
     filesAnalyzed = 1;
   }
 

@@ -92,16 +92,36 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-24.per-run-capacity-rpc.i1";
+const BUILD_VERSION = "2026-07-25.terminal-parent-hygiene.i1";
+
+// Terminal statuses for a boardroom_run. A terminal parent must never own a
+// queued/running child: failRun() eagerly terminalizes siblings, and every
+// requeue path funnels through requeue_step_if_parent_active() which cancels
+// the child instead of resurrecting work under a dead parent.
+const TERMINAL_RUN_STATUSES = ["failed", "completed", "consensus", "chair_ruled"] as const;
 
 // Terminal-fail a run and, when it drives an audit, fail the audit row in
 // lockstep so audits/runs never drift. Budget pauses and recoverable requeues
 // must NOT call this — they leave the run recoverable and the audit intact.
+// Also terminalizes every queued/running SIBLING step so the run cannot
+// accumulate ghost work after failure. In-flight model calls that finish
+// after this still get cost-accounted by the proxy (recordCall is atomic
+// and independent of this transition), but their late status write is
+// blocked by the .eq('status','running') guard in executeStep.
 async function failRun(admin: any, run: any, errorMsg: string): Promise<void> {
   await admin
     .from("boardroom_runs")
     .update({ status: "failed", error: errorMsg })
     .eq("id", run.id);
+  await admin
+    .from("run_steps")
+    .update({
+      status: "failed",
+      error: "cancelled_parent_terminal",
+      completed_at: new Date().toISOString(),
+    })
+    .eq("run_id", run.id)
+    .in("status", ["queued", "running"]);
   const auditId: string | undefined = run?.consensus?.audit_id;
   if (run?.kind === "audit" && auditId) {
     await admin
@@ -200,49 +220,58 @@ function withHardTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T
   });
 }
 
-async function requeueForTimeout(admin: any, step: any): Promise<void> {
+// Atomic parent-aware requeue: the SECURITY DEFINER RPC locks the parent
+// run, transitions the step only when the parent is still active
+// (queued/running/paused/paused_budget); otherwise terminalizes the step
+// with error='cancelled_parent_terminal'. Returns 'requeued' |
+// 'cancelled_parent_terminal' | 'not_found'.
+async function requeueStepIfParentActive(
+  admin: any,
+  stepId: string,
+  newRequest: any,
+  newError: string,
+): Promise<"requeued" | "cancelled_parent_terminal" | "not_found"> {
+  const { data, error } = await admin.rpc("requeue_step_if_parent_active", {
+    p_step_id: stepId,
+    p_new_request: newRequest,
+    p_new_error: newError,
+  });
+  if (error) throw new Error(`requeue_step_if_parent_active failed: ${error.message ?? error}`);
+  const out = String(data ?? "");
+  return (out === "requeued" || out === "cancelled_parent_terminal") ? out : "not_found";
+}
+
+async function requeueForTimeout(admin: any, step: any): Promise<string> {
   const timeoutAttempts = Number(step.request?._timeout_attempts ?? 0) + 1;
-  await admin
-    .from("run_steps")
-    .update({
-      status: "queued",
-      started_at: null,
-      completed_at: null,
-      error: "timeout_failover",
-      request: {
-        ...(step.request ?? {}),
-        _timeout_attempts: timeoutAttempts,
-        // Never switch back to the timed-out primary — the reserve answers next.
-        force_fallback: true,
-      },
-    })
-    .eq("id", step.id);
+  return await requeueStepIfParentActive(
+    admin,
+    step.id,
+    {
+      ...(step.request ?? {}),
+      _timeout_attempts: timeoutAttempts,
+      // Never switch back to the timed-out primary — the reserve answers next.
+      force_fallback: true,
+    },
+    "timeout_failover",
+  );
 }
 
-// Body-stream/transport failure on a 2xx OpenRouter response (e.g.
-// "error reading a body from connection"): no usable provider response was
-// ever read, so cost/tokens were correctly NOT recorded by the proxy. Requeue
-// fresh on the SAME model (transport errors are not a model-quality signal —
-// do NOT switch to fallback). Capped at one fresh retry; a second such
-// failure is terminal with a clear transport-retry-exhausted error.
-async function requeueForBodyTransport(admin: any, step: any, attempts: number): Promise<void> {
-  await admin
-    .from("run_steps")
-    .update({
-      status: "queued",
-      started_at: null,
-      completed_at: null,
-      error: "body_transport_requeued",
-      request: {
-        ...(step.request ?? {}),
-        _transport_attempts: attempts,
-        // Explicitly do NOT flip force_fallback — same model, fresh invocation.
-      },
-    })
-    .eq("id", step.id);
+// Body-stream/transport failure on a 2xx OpenRouter response. Fresh retry on
+// the SAME model (transport is not a model-quality signal); one retry max —
+// caller already decided that via decideTransportRequeue.
+async function requeueForBodyTransport(admin: any, step: any, attempts: number): Promise<string> {
+  return await requeueStepIfParentActive(
+    admin,
+    step.id,
+    {
+      ...(step.request ?? {}),
+      _transport_attempts: attempts,
+    },
+    "body_transport_requeued",
+  );
 }
 
-async function requeueForValidation(admin: any, step: any, baseMessages: any[], assistantContent: string, validationError: string, truncated: boolean): Promise<void> {
+async function requeueForValidation(admin: any, step: any, baseMessages: any[], assistantContent: string, validationError: string, truncated: boolean): Promise<string> {
   const attempts = Number(step.request?._validation_attempts ?? 0) + 1;
   const correctionText = truncated
     ? correctionForStep(step.step_key)
@@ -252,20 +281,16 @@ async function requeueForValidation(admin: any, step: any, baseMessages: any[], 
     { role: "assistant", content: assistantContent },
     { role: "user", content: correctionText },
   ];
-  await admin
-    .from("run_steps")
-    .update({
-      status: "queued",
-      started_at: null,
-      completed_at: null,
-      error: truncated ? "truncated_output_requeued" : "invalid_json_requeued",
-      request: {
-        ...(step.request ?? {}),
-        messages: correctionMessages,
-        _validation_attempts: attempts,
-      },
-    })
-    .eq("id", step.id);
+  return await requeueStepIfParentActive(
+    admin,
+    step.id,
+    {
+      ...(step.request ?? {}),
+      messages: correctionMessages,
+      _validation_attempts: attempts,
+    },
+    truncated ? "truncated_output_requeued" : "invalid_json_requeued",
+  );
 }
 
 
@@ -333,7 +358,8 @@ async function executeStep(admin: any, run: any, step: any) {
         await admin
           .from("run_steps")
           .update({ status: "failed", error: (e as Error).message, completed_at: new Date().toISOString() })
-          .eq("id", step.id);
+          .eq("id", step.id)
+          .eq("status", "running");
         await failRun(admin, run, (e as Error).message);
         return;
       }
@@ -349,11 +375,15 @@ async function executeStep(admin: any, run: any, step: any) {
           await admin
             .from("run_steps")
             .update({ status: "failed", error: "timeout_failover_exhausted", completed_at: new Date().toISOString() })
-            .eq("id", step.id);
+            .eq("id", step.id)
+            .eq("status", "running");
           await failRun(admin, run, tmsg);
           return;
         }
-        await requeueForTimeout(admin, step);
+        const outcome = await requeueForTimeout(admin, step);
+        if (outcome === "cancelled_parent_terminal") {
+          console.log(`[exec] TIMEOUT step=${step.step_key} run=${run.id} parent already terminal — step cancelled`);
+        }
         return;
       }
       // Response-body transport failure on a 2xx response (e.g.
@@ -367,7 +397,10 @@ async function executeStep(admin: any, run: any, step: any) {
         const decision = decideTransportRequeue(step);
         console.log(`[exec] BODY_TRANSPORT step=${step.step_key} run=${run.id} decision=${decision.action} attempts=${decision.attempts}`);
         if (decision.action === "requeue") {
-          await requeueForBodyTransport(admin, step, decision.attempts);
+          const outcome = await requeueForBodyTransport(admin, step, decision.attempts);
+          if (outcome === "cancelled_parent_terminal") {
+            console.log(`[exec] BODY_TRANSPORT step=${step.step_key} parent already terminal — step cancelled`);
+          }
           return;
         }
         await admin
@@ -377,7 +410,8 @@ async function executeStep(admin: any, run: any, step: any) {
             error: "transport_retry_exhausted",
             completed_at: new Date().toISOString(),
           })
-          .eq("id", step.id);
+          .eq("id", step.id)
+          .eq("status", "running");
         await failRun(admin, run, decision.message);
         return;
       }
@@ -394,7 +428,8 @@ async function executeStep(admin: any, run: any, step: any) {
       await admin
         .from("run_steps")
         .update({ status: "failed", error: msg, completed_at: new Date().toISOString() })
-        .eq("id", step.id);
+        .eq("id", step.id)
+        .eq("status", "running");
       await failRun(admin, run, msg);
       return;
     }
@@ -434,11 +469,15 @@ async function executeStep(admin: any, run: any, step: any) {
               cost_usd: usage.costUsd,
               completed_at: new Date().toISOString(),
             })
-            .eq("id", step.id);
+            .eq("id", step.id)
+            .eq("status", "running");
           await failRun(admin, run, vmsg);
           return;
         }
-        await requeueForValidation(admin, step, baseMessages, content, err, truncated);
+        const vOutcome = await requeueForValidation(admin, step, baseMessages, content, err, truncated);
+        if (vOutcome === "cancelled_parent_terminal") {
+          console.log(`[exec] VALIDATION step=${step.step_key} parent already terminal — step cancelled`);
+        }
         return;
       }
       let parsed: any = candidate;
@@ -457,7 +496,8 @@ async function executeStep(admin: any, run: any, step: any) {
           cost_usd: usage.costUsd,
           completed_at: new Date().toISOString(),
         })
-        .eq("id", step.id);
+        .eq("id", step.id)
+        .eq("status", "running");
       return;
     }
 
@@ -473,7 +513,8 @@ async function executeStep(admin: any, run: any, step: any) {
         cost_usd: usage.costUsd,
         completed_at: new Date().toISOString(),
       })
-      .eq("id", step.id);
+      .eq("id", step.id)
+      .eq("status", "running");
     return;
   }
 }
@@ -1332,6 +1373,21 @@ async function pipelineTick(admin: any) {
     .eq("status", "running")
     .lt("started_at", staleCutoff);
   for (const st of staleSteps ?? []) {
+    // Never resurrect steps whose parent is already terminal — go straight to
+    // failed/cancelled and skip the requeue path entirely.
+    const { data: parentRun } = await admin
+      .from("boardroom_runs")
+      .select("id, kind, status, consensus")
+      .eq("id", st.run_id)
+      .maybeSingle();
+    if (parentRun && (TERMINAL_RUN_STATUSES as readonly string[]).includes(parentRun.status)) {
+      await admin
+        .from("run_steps")
+        .update({ status: "failed", error: "cancelled_parent_terminal", completed_at: new Date().toISOString() })
+        .eq("id", st.id)
+        .eq("status", "running");
+      continue;
+    }
     const attempts = Number(st.request?._attempts ?? 0) + 1;
     const alreadyForced = !!st.request?.force_fallback;
     if (attempts >= 4 || (alreadyForced && attempts >= 2)) {
@@ -1340,32 +1396,26 @@ async function pipelineTick(admin: any) {
         .update({ status: "failed", error: "stuck_model_call", completed_at: new Date().toISOString() })
         .eq("id", st.id)
         .eq("status", "running");
-      const { data: staleRun } = await admin
-        .from("boardroom_runs")
-        .select("id, kind, consensus")
-        .eq("id", st.run_id)
-        .maybeSingle();
-      if (staleRun) {
-        await failRun(admin, staleRun, `Step ${st.step_key} kept timing out — even the fallback model could not answer in time.`);
+      if (parentRun) {
+        await failRun(admin, parentRun, `Step ${st.step_key} kept timing out — even the fallback model could not answer in time.`);
       }
       continue;
     }
-    await admin
-      .from("run_steps")
-      .update({
-        status: "queued",
-        started_at: null,
-        error: "requeued_stale",
-        request: {
-          ...(st.request ?? {}),
-          _attempts: attempts,
-          // Sticky: once force_fallback is on, NEVER switch back to the
-          // timed-out primary. First rescue also forces the fallback.
-          force_fallback: alreadyForced || attempts >= 1,
-        },
-      })
-      .eq("id", st.id)
-      .eq("status", "running");
+    // Atomic parent-aware requeue via RPC — if the parent flips terminal
+    // between the check above and this call, the RPC cancels the step
+    // instead of resurrecting it.
+    await requeueStepIfParentActive(
+      admin,
+      st.id,
+      {
+        ...(st.request ?? {}),
+        _attempts: attempts,
+        // Sticky: once force_fallback is on, NEVER switch back to the
+        // timed-out primary. First rescue also forces the fallback.
+        force_fallback: alreadyForced || attempts >= 1,
+      },
+      "requeued_stale",
+    );
   }
 
   // Legacy/pre-migration orphans have no started_at at all — every live claim
