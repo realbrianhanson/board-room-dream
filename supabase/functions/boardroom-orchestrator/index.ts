@@ -1373,6 +1373,21 @@ async function pipelineTick(admin: any) {
     .eq("status", "running")
     .lt("started_at", staleCutoff);
   for (const st of staleSteps ?? []) {
+    // Never resurrect steps whose parent is already terminal — go straight to
+    // failed/cancelled and skip the requeue path entirely.
+    const { data: parentRun } = await admin
+      .from("boardroom_runs")
+      .select("id, kind, status, consensus")
+      .eq("id", st.run_id)
+      .maybeSingle();
+    if (parentRun && (TERMINAL_RUN_STATUSES as readonly string[]).includes(parentRun.status)) {
+      await admin
+        .from("run_steps")
+        .update({ status: "failed", error: "cancelled_parent_terminal", completed_at: new Date().toISOString() })
+        .eq("id", st.id)
+        .eq("status", "running");
+      continue;
+    }
     const attempts = Number(st.request?._attempts ?? 0) + 1;
     const alreadyForced = !!st.request?.force_fallback;
     if (attempts >= 4 || (alreadyForced && attempts >= 2)) {
@@ -1381,32 +1396,26 @@ async function pipelineTick(admin: any) {
         .update({ status: "failed", error: "stuck_model_call", completed_at: new Date().toISOString() })
         .eq("id", st.id)
         .eq("status", "running");
-      const { data: staleRun } = await admin
-        .from("boardroom_runs")
-        .select("id, kind, consensus")
-        .eq("id", st.run_id)
-        .maybeSingle();
-      if (staleRun) {
-        await failRun(admin, staleRun, `Step ${st.step_key} kept timing out — even the fallback model could not answer in time.`);
+      if (parentRun) {
+        await failRun(admin, parentRun, `Step ${st.step_key} kept timing out — even the fallback model could not answer in time.`);
       }
       continue;
     }
-    await admin
-      .from("run_steps")
-      .update({
-        status: "queued",
-        started_at: null,
-        error: "requeued_stale",
-        request: {
-          ...(st.request ?? {}),
-          _attempts: attempts,
-          // Sticky: once force_fallback is on, NEVER switch back to the
-          // timed-out primary. First rescue also forces the fallback.
-          force_fallback: alreadyForced || attempts >= 1,
-        },
-      })
-      .eq("id", st.id)
-      .eq("status", "running");
+    // Atomic parent-aware requeue via RPC — if the parent flips terminal
+    // between the check above and this call, the RPC cancels the step
+    // instead of resurrecting it.
+    await requeueStepIfParentActive(
+      admin,
+      st.id,
+      {
+        ...(st.request ?? {}),
+        _attempts: attempts,
+        // Sticky: once force_fallback is on, NEVER switch back to the
+        // timed-out primary. First rescue also forces the fallback.
+        force_fallback: alreadyForced || attempts >= 1,
+      },
+      "requeued_stale",
+    );
   }
 
   // Legacy/pre-migration orphans have no started_at at all — every live claim
