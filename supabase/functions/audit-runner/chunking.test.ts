@@ -62,27 +62,29 @@ function reassemble(
   }
 }
 
-Deno.test("MAX_TOTAL_BYTES = CHUNK_BYTES * MAX_CHUNKS = 1.2 MiB", () => {
+Deno.test("MAX_TOTAL_BYTES = CHUNK_BYTES * MAX_CHUNKS (64 KiB x 20 = 1.25 MiB)", () => {
   assertEquals(MAX_TOTAL_BYTES, CHUNK_BYTES * MAX_CHUNKS);
-  assertEquals(MAX_TOTAL_BYTES, 1228800);
+  assertEquals(CHUNK_BYTES, 64 * 1024);
+  assertEquals(MAX_CHUNKS, 20);
+  assertEquals(MAX_TOTAL_BYTES, 1310720);
 });
 
-Deno.test("seven 150 KiB files -> <=6 chunks, all <=200 KiB, exact reassembly", () => {
+Deno.test("seven 150 KiB files -> <=20 chunks, all <=64 KiB, exact reassembly", () => {
   const files = Array.from({ length: 7 }, (_, i) => f(`src/f${i}.ts`, 150 * 1024, String.fromCharCode(65 + i)));
   const groups = chunkFilesFor(files);
   checkAll(groups);
   reassemble(files, groups);
 });
 
-Deno.test("forty 30 KiB files -> <=6 chunks, all <=200 KiB, exact reassembly", () => {
+Deno.test("forty 30 KiB files -> <=20 chunks, all <=64 KiB, exact reassembly", () => {
   const files = Array.from({ length: 40 }, (_, i) => f(`src/f${i}.ts`, 30 * 1024, String.fromCharCode(48 + (i % 10))));
   const groups = chunkFilesFor(files);
   checkAll(groups);
   reassemble(files, groups);
 });
 
-Deno.test("single source >200 KiB is safely fragmented into ordinary chunks", () => {
-  const files = [f("huge.ts", 350 * 1024, "z")];
+Deno.test("single source >CHUNK_BYTES is safely fragmented into ordinary chunks", () => {
+  const files = [f("huge.ts", 200 * 1024, "z")];
   const groups = chunkFilesFor(files);
   checkAll(groups);
   reassemble(files, groups);
@@ -91,13 +93,11 @@ Deno.test("single source >200 KiB is safely fragmented into ordinary chunks", ()
 });
 
 Deno.test("Unicode split boundaries reconstruct exactly (no split codepoints)", () => {
-  // Mix of 1/2/3/4-byte codepoints. Long enough to force multiple splits.
   const unit = "a€漢🙂"; // 1+3+3+4 = 11 bytes
   const content = unit.repeat(40_000); // ~440 KB
   const files = [{ path: "unicode.md", content, bytes: new TextEncoder().encode(content).length }];
   const groups = chunkFilesFor(files);
   checkAll(groups);
-  // Each fragment must itself decode to valid UTF-8 without replacement chars.
   for (const g of groups) {
     for (const frag of g) {
       if (frag.content.includes("\uFFFD")) {
@@ -109,8 +109,17 @@ Deno.test("Unicode split boundaries reconstruct exactly (no split codepoints)", 
 });
 
 Deno.test("total-over-ceiling fails closed in chunkFilesFor", () => {
-  const files = Array.from({ length: 7 }, (_, i) => f(`x${i}.ts`, CHUNK_BYTES));
+  // 21 files at CHUNK_BYTES each = MAX_TOTAL_BYTES + CHUNK_BYTES, over ceiling.
+  const files = Array.from({ length: MAX_CHUNKS + 1 }, (_, i) => f(`x${i}.ts`, CHUNK_BYTES));
   assertThrows(() => chunkFilesFor(files), Error, "exceeds ceiling");
+});
+
+Deno.test("exactly at ceiling packs into MAX_CHUNKS with no rejection", () => {
+  const files = Array.from({ length: MAX_CHUNKS }, (_, i) => f(`x${i}.ts`, CHUNK_BYTES, String.fromCharCode(65 + (i % 26))));
+  const groups = chunkFilesFor(files);
+  checkAll(groups);
+  reassemble(files, groups);
+  if (groups.length > MAX_CHUNKS) throw new Error(`too many chunks: ${groups.length}`);
 });
 
 Deno.test("no byte omission or duplication across many mixed sizes", () => {
