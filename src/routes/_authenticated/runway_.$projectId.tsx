@@ -1220,6 +1220,28 @@ function BatchCard({
             </pre>
           )}
 
+          {isCode && compileReady && batch.compiled_verification_prompt_md && (
+            <details className="mt-3 rounded-lg border border-border/60 bg-surface-2/40 px-3 py-2 group">
+              <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground hover:text-foreground">
+                Verify after Lovable finishes (recommended)
+              </summary>
+              <p className="mt-2 text-xs text-muted-foreground">
+                A separate follow-up prompt. Paste it into Lovable <em>after</em> the build is done — it runs the checks and only fixes failures it reproduces.
+              </p>
+              <pre className="mt-2 max-h-[320px] overflow-auto rounded-lg border border-border bg-background p-3 font-mono text-[12px] leading-relaxed text-foreground/90 whitespace-pre-wrap">
+{batch.compiled_verification_prompt_md}
+              </pre>
+              {isOwner && (
+                <button
+                  onClick={() => copy(batch.compiled_verification_prompt_md ?? "", "Paste this into Lovable after the build finishes.")}
+                  className="mt-2 inline-flex items-center gap-2 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-xs text-foreground transition-colors hover:border-primary/40"
+                >
+                  <Copy className="h-3.5 w-3.5" /> Copy verification prompt
+                </button>
+              )}
+            </details>
+          )}
+
 
           {isOwner && (
             <div className="mt-4 flex flex-wrap gap-2">
