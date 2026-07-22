@@ -73,6 +73,9 @@ type Run = {
   kind: string;
   status: string;
   error: string | null;
+  spent_usd: number | null;
+  budget_usd: number | null;
+  created_at: string;
 };
 
 const ROLLBACK_PROMPT = `The last change broke the app. Do not add features. Diagnose and repair only. Identify what changed in the last step and what errors appear in build/preview/logs. Fix the regression and nothing else. Return a summary of the root cause and the repair.`;
