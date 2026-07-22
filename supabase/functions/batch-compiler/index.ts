@@ -487,6 +487,10 @@ Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=
   return j(200, {
     status: parsed.status,
     compiled_prompt_md: parsed.status === "ready" ? parsed.compiled_prompt_md : "",
+    compiled_verification_prompt_md:
+      parsed.status === "ready" && (batch.channel === "lovable" || batch.channel === "supabase")
+        ? (parsed.compiled_verification_prompt_md ?? "")
+        : "",
     rationale: parsed.rationale,
     drift_notes: parsed.drift_notes,
     preserved_intents: parsed.preserved_intents,
