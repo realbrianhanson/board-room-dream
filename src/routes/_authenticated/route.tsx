@@ -149,7 +149,7 @@ function AuthenticatedShell() {
       >
         <div className="flex h-16 items-center px-6">
           <span className="font-display text-base tracking-[0.28em] text-foreground">
-            BOARDROOM
+            APP BLUEPRINT
           </span>
         </div>
         <nav className="flex-1 space-y-1 px-3">
