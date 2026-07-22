@@ -480,6 +480,23 @@ Serious findings (P0/P1) require:
 - a verbatim QUOTE: <excerpt> | WHY: <reason> pair in the evidence,
 - confidence "high" or "medium".
 
+P0 requires an IMPACT class marker inside the evidence:
+  'IMPACT: build_failure' or 'IMPACT: data_loss' or 'IMPACT: auth_bypass' or 'IMPACT: secret_exposure'.
+Any P0 without a valid IMPACT is deterministically downgraded to P1.
+
+Migration-file rule (hard): if file_path is under supabase/migrations/*, a P0/P1 MUST include a
+compact 'CURRENT: <quoted current effective definition>' marker corroborating that the quoted line
+still represents the effective state (later migration, current schema, current grant/policy/trigger).
+Missing CURRENT → downgraded to P2.
+
+Missing-object claim rule: any claim of the form "table/column/function/policy X does not exist"
+requires either 'SCHEMA_LEDGER: <inventory line proving absence>' or 'RUNTIME_FAILURE: <error>' in
+the evidence. Partial-chunk absence is NOT proof. Missing marker → downgraded to P2.
+
+Universal-helper claim rule: any claim that a helper/validator/middleware "applies to all X" or
+"every call goes through Y" requires 'CALLER: <quote from a reachable current caller>'. Missing
+marker → downgraded to P2.
+
 Cumulative-ledger rule: SQL migrations are a cumulative ledger. An older migration is NOT proof of the current effective state. Corroborate any P0/P1 based on a migration against later migrations / current grants / current RLS policies / current triggers / current code — the QUOTE must come from the CURRENT effective definition, not a superseded one. Otherwise downgrade to P2 or drop.
 
 Client-side vs server-side authorization: a client-side route/UI role check is navigation UX, not the authorization boundary. Do NOT flag it as an exploit unless the underlying server (RLS / RPC / edge function / security-definer) is concretely bypassable and you can QUOTE the vulnerable server construct.
