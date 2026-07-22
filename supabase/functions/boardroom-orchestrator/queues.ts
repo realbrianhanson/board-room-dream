@@ -82,14 +82,22 @@ async function queueSteps(admin: any, run: any, rowsIn: any | any[]): Promise<an
   const rows = Array.isArray(rowsIn) ? rowsIn : [rowsIn];
   for (const row of rows) {
     const msgs = row?.request?.messages;
-    if (!Array.isArray(msgs)) continue;
-    for (const m of msgs) {
-      if (m?.role === "system" && typeof m.content === "string") {
-        m.content = `${OWNER_AUTHORITY_RULES}\n\n${m.content}`;
-      } else if (m?.role === "user") {
-        const injected = injectOwnerAuthority("", m.content, authority);
-        m.content = injected.user;
+    if (Array.isArray(msgs)) {
+      for (const m of msgs) {
+        if (m?.role === "system" && typeof m.content === "string") {
+          m.content = `${OWNER_AUTHORITY_RULES}\n\n${m.content}`;
+        } else if (m?.role === "user") {
+          const injected = injectOwnerAuthority("", m.content, authority);
+          m.content = injected.user;
+        }
       }
+    }
+    // Hard request-size invariant for batch-generation steps. Measured AFTER
+    // owner-authority injection so what we count is exactly what ships. Fails
+    // closed via BatchContextTooLarge — never silently drops authority /
+    // FEATURES / draft.
+    if (isBatchGenerationStep(row?.step_key)) {
+      assertBatchRequestSize(String(row.step_key), row.request);
     }
   }
   return admin.from("run_steps").insert(rowsIn);
