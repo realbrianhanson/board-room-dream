@@ -633,6 +633,38 @@ function RunwayPage() {
 
           <GitHubRepoCard projectId={projectId} isOwner={isOwner} />
 
+          {(() => {
+            const list = batches ?? [];
+            const allUntouched = list.length > 0 && list.every((b) =>
+              b.status === "pending" &&
+              !(b as any).sent_at &&
+              !(b as any).built_at &&
+              !(b as any).outcome_md &&
+              !(b as any).compiled_at,
+            );
+            const noActiveBatchesRun = !runInFlight;
+            if (!isOwner || !allUntouched || !noActiveBatchesRun) return null;
+            return (
+              <div className="rounded-xl border border-border/60 bg-surface-1 p-4 flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="font-display text-[15px] text-foreground">Regenerate safely</div>
+                  <div className="text-[13px] text-muted-foreground mt-1">
+                    No batch has been touched yet. The board can archive this sequence and produce a fresh one grounded in your live repo.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={regenerateSafely}
+                  disabled={generating}
+                  className="shrink-0 rounded-md border border-border/60 bg-surface-2 px-3 py-2 text-[13px] hover:bg-surface-2/70 disabled:opacity-50"
+                >
+                  {generating ? "Working…" : "Regenerate safely"}
+                </button>
+              </div>
+            );
+          })()}
+
+
 
 
           {batches!.map((b, i) => {
