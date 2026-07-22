@@ -188,10 +188,11 @@ export function normalize(s: string): string {
   return (s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-// Line/sentence-scoped negation. Only the matched directive's OWN line (or
-// its containing sentence) is checked for preservation/negation — not a
-// neighboring line, so `Do not add Stripe.\nAdd Stripe checkout for $49.`
-// still fires on the second line.
+// Sentence-scoped negation. Checked against the sentence/clause that
+// contains the individual match — NOT the whole line — so that a directive
+// like `Do not add Stripe. Add Stripe checkout for $49.` (one line, two
+// sentences) still fires on the second sentence. Same for semicolon-
+// separated clauses: `Do not add Stripe; add Stripe checkout for $49.`
 const NEGATION_OR_PRESERVE = /\b(do\s+not|don['’]?t|never|avoid|reject|instead\s+of|keep\s+existing|preserve|preserving|already\s+exists|already\s+integrated|do not add|remove\s+the\s+dead|dead\s+import)\b/i;
 
 // Category -> keyword vocabulary a marker quote must include to authorize
