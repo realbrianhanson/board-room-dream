@@ -128,7 +128,7 @@ function estimateCost(modelId: string, tokensIn: number, tokensOut: number): num
   return (tokensIn * p.in + tokensOut * p.out) / 1_000_000;
 }
 
-type SeatRow = {
+export type SeatRow = {
   seat: string;
   model_id: string;
   role_prompt: string | null;
