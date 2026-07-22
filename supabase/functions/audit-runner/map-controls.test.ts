@@ -83,3 +83,10 @@ Deno.test("chair merge request contract — low reasoning, 6500 tokens, no map t
     "chair merge must not inherit the map temperature cap",
   );
 });
+
+Deno.test("R4: audit final_az budget remains $12 (locked)", async () => {
+  const src = await Deno.readTextFile(new URL("./index.ts", import.meta.url));
+  const m = src.match(/kind:\s*"final_az"[^}]*budget:\s*([0-9.]+)/);
+  if (!m) throw new Error("could not find final_az budget in audit-runner");
+  if (m[1] !== "12.0") throw new Error(`expected 12.0 budget, got ${m[1]}`);
+});
