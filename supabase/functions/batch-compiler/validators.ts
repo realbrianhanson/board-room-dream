@@ -1,6 +1,10 @@
 // Pure validators + helpers for batch-compiler. Kept import-free of Deno.serve
 // or supabase clients so they can be exercised deterministically from tests.
 
+import { ownerAuthorityError, type OwnerAuthority } from "../_shared/owner-authority.ts";
+export { ownerAuthorityError } from "../_shared/owner-authority.ts";
+export type { OwnerAuthority } from "../_shared/owner-authority.ts";
+
 export type TouchedPath = { path: string; action: "update" | "create" | "verify"; reason: string };
 export type EvidenceItem = { claim: string; path: string; detail: string };
 export type SatisfiedItem = { item: string; evidence: string };
@@ -145,7 +149,7 @@ export function batchAuthorityError(
   p: Parsed,
   batch: { title: string; channel: string; batch_no: number },
   fileTreeSet: Set<string>,
-  opts: { source: "github" | "paste"; schemaObjects?: Set<string> } = { source: "github" },
+  opts: { source: "github" | "paste"; schemaObjects?: Set<string>; authority?: OwnerAuthority } = { source: "github" },
 ): string | null {
   if (p.status !== "ready") return null; // only ready prompts need scope enforcement
   // Verification prompt is required for code channels (lovable + supabase), forbidden for human.
@@ -220,6 +224,20 @@ export function batchAuthorityError(
         return `Compiled prompt tells Lovable to CREATE ${hit.kind} "${hit.name}" which already exists in the live database — must be ALTER/VERIFY, or moved to satisfied_items with current-column evidence.`;
       }
     }
+  }
+  // Owner-authority gate — deterministic post-validator, independent of any
+  // upstream "reviewed"/"approved" flag. Blocks high-impact directives (pricing,
+  // payment providers, disabling existing features, destructive SQL, custom
+  // domains, RLS broadening, public sign-ups) that lack a verified
+  // [OWNER-AUTHORIZED: source="..." quote="..."] marker whose quote appears
+  // verbatim in intake, founder_notes, or an approved change_request.
+  if (opts.authority) {
+    const authErr =
+      ownerAuthorityError(p.compiled_prompt_md, opts.authority) ??
+      (p.compiled_verification_prompt_md
+        ? ownerAuthorityError(p.compiled_verification_prompt_md, opts.authority)
+        : null);
+    if (authErr) return authErr;
   }
   // Skeleton enforcement — all ready compiles (human batches are rejected upstream).
   const sk = skeletonError(p.compiled_prompt_md, batch);

@@ -8,13 +8,19 @@
 // Reviewed against official Lovable documentation.
 
 export const LOVABLE_CONTRACT_REVIEWED_AT = "2026-07-22";
+// Curated, versioned, static — NOT fetched at runtime. Update this file when
+// docs change; the reviewed_at above is the single source of truth on
+// currency. Cohort-approved addenda land through app_settings, not here.
 export const LOVABLE_CONTRACT_SOURCES = [
   "https://docs.lovable.dev/introduction/faq",
   "https://docs.lovable.dev/prompting/prompting-one",
+  "https://docs.lovable.dev/prompting/prompting-debugging",
   "https://docs.lovable.dev/tips-tricks/best-practice",
   "https://docs.lovable.dev/features/knowledge",
+  "https://docs.lovable.dev/features/security",
   "https://docs.lovable.dev/features/testing",
   "https://docs.lovable.dev/features/browser-testing",
+  "https://docs.lovable.dev/changelog",
 ] as const;
 
 // Compact rules — the founder pastes these prompts into today's Lovable, not

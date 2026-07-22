@@ -17,9 +17,10 @@ import {
 } from "../_shared/openrouter-proxy.ts";
 import { assembleFromGithub, formatFiles, ghToken, redactSecrets } from "../_shared/github-payload.ts";
 import { detectStackFromRepo, loadFieldManual, renderStackBlock } from "../_shared/lovable-field-manual.ts";
+import { injectOwnerAuthority, loadOwnerAuthority, OWNER_AUTHORITY_RULES } from "../_shared/owner-authority.ts";
 import { batchAuthorityError, shapeError, type Parsed } from "./validators.ts";
 
-const BUILD_VERSION = "2026-07-22.lovable-execution-contract.g1";
+const BUILD_VERSION = "2026-07-27.owner-authority.j1";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -259,7 +260,7 @@ Deno.serve(async (req) => {
     filesAnalyzed = 1;
   }
 
-  const [plan, designBrief, outcomes, findings, manual, currentBatches, schemaInv, { count: totalBatches }] = await Promise.all([
+  const [plan, designBrief, outcomes, findings, manual, currentBatches, schemaInv, { count: totalBatches }, authority] = await Promise.all([
     loadPlan(admin, batch.project_id),
     loadDesignBrief(admin, batch.project_id),
     loadOutcomes(admin, batch.project_id, Number(batch.batch_no)),
@@ -268,6 +269,11 @@ Deno.serve(async (req) => {
     loadCurrentBatches(admin, batch.project_id),
     source === "github" ? loadSchemaInventory(admin) : Promise.resolve({ tables: [], routines: [], objectsLower: new Set<string>(), ok: false, reason: "paste source: schema inventory not loaded" } as SchemaInventory),
     admin.from("batches").select("id", { count: "exact", head: true }).eq("project_id", batch.project_id),
+    // Compiler INDEPENDENTLY reloads owner authority; it never trusts an
+    // upstream "reviewed" flag from a locked plan or batch draft. Founder
+    // notes live on runs, not batches, so we pass none here — the compiler's
+    // authorization pool is intake + approved change_requests only.
+    loadOwnerAuthority(admin, { projectId: batch.project_id }),
   ]);
 
   const outcomesBlock = outcomes.length
@@ -397,10 +403,14 @@ ${renderStackBlock(detectStackFromRepo({
 Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=${batch.channel}) now. Produce your JSON.`;
 
   const fileTreeSet = new Set(fileTree);
+  // Inject the OWNER AUTHORITY rules + compact owner-source block. The
+  // deterministic post-validator below runs regardless of what the model
+  // returns, so this is defense-in-depth, not the only gate.
+  const injected = injectOwnerAuthority(system, user, authority);
   // Bounded cost: one primary call plus at most one structured correction pass.
   let messages: any[] = [
-    { role: "system", content: system },
-    { role: "user", content: user },
+    { role: "system", content: injected.system },
+    { role: "user", content: injected.user },
   ];
   let parsed: Parsed | null = null;
   let lastErr: string | null = null;
@@ -422,7 +432,7 @@ Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=
           title: batch.title,
           channel: batch.channel,
           batch_no: Number(batch.batch_no),
-        }, fileTreeSet, { source, schemaObjects: schemaInv.objectsLower });
+        }, fileTreeSet, { source, schemaObjects: schemaInv.objectsLower, authority });
       }
       if (!err) {
         parsed = candidate as Parsed;

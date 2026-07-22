@@ -12,13 +12,22 @@ import {
   titleSemanticallyMatches,
   type Parsed,
 } from "./validators.ts";
+import { loadOwnerAuthority, normalize } from "../_shared/owner-authority.ts";
 
 const currentBatch = {
   title: "Schema Additions & Shared Modules",
   channel: "supabase",
   batch_no: 1,
 };
-const codeBatch = { title: "Runway Safety Gate UI", channel: "code", batch_no: 5 };
+const codeBatch = { title: "Runway Safety Gate UI", channel: "lovable", batch_no: 5 };
+
+const validSupabaseVerification = [
+  "Verify Batch 1 after implementation. Do not change product scope.",
+  "Directly call the affected RPCs (has_role, mark_finding_dismissed) with success AND failure cases.",
+  "Then run/add a Deno test under supabase/functions/audit-runner/ covering the new scanner module (edge function verification).",
+  "Include a permission check: confirm the new column on public.audit_findings can only be read/updated by an authenticated owner per RLS, and NOT by anon.",
+  "If any assertion fails, fix only the reproduced failure and rerun the same check.",
+].join(" ");
 
 const validSupabaseSkeleton = [
   "Batch 1 — Schema Additions & Shared Modules. Numbered items only, no scope creep.",
@@ -35,6 +44,10 @@ const validSupabaseSkeleton = [
   "- Keep imports and existing RLS policies unchanged; only additive changes are in scope for this batch and no client-facing routes should shift.",
   "- The compiled migration should run in a single transaction and be idempotent under session_replication_role=replica for local restores.",
   "",
+  "Acceptance:",
+  "1. Run the migration and confirm the new reviewer column exists on public.audit_findings.",
+  "2. Call has_role via psql and confirm it returns boolean with no signature change.",
+  "",
   "Keep everything else identical.",
   "Typecheck when done.",
 ].join("\n");
@@ -43,6 +56,7 @@ function baseValid(): Parsed {
   return {
     status: "ready",
     compiled_prompt_md: validSupabaseSkeleton,
+    compiled_verification_prompt_md: validSupabaseVerification,
     primary_intent_summary: "Add schema columns and shared scanner helpers.",
     rationale: "Live repo already ships audit_findings; we extend it and add the RPC.",
     drift_notes: [],
@@ -224,4 +238,144 @@ Deno.test("F1b skeleton: too short blocks", () => {
   const short = "Batch 1 — Schema Additions. Numbered items only, no scope creep.\n\n1. do x.\n\nKeep everything else identical.\nTypecheck when done.";
   const err = skeletonError(short, currentBatch);
   assert(err && err.includes("too short"), `got: ${err}`);
+});
+
+// ==================== OWNER AUTHORITY REGRESSION TESTS ====================
+// These reproduce the live bad case and prove the deterministic post-validator
+// blocks it even when a locked plan / Chair ruling / consensus score claims
+// the batch is ready.
+
+function makeAuthority(sources: { source: string; text: string }[]) {
+  const perSourceNormalized = sources.map((s) => ({ source: s.source, text: normalize(s.text) }));
+  return {
+    allowed: sources,
+    perSourceNormalized,
+    allowedNormalized: perSourceNormalized.map((s) => s.text).join(" \n\n "),
+    block: `OWNER AUTHORITY SOURCES\n${sources.map((s) => `--- ${s.source} ---\n${s.text}`).join("\n\n")}`,
+  };
+}
+
+const codeReviewIntake = makeAuthority([
+  {
+    source: "intake",
+    text: "I want a code audit, a design review, and a list of prioritized improvements for my existing Lovable app. I do NOT want to add payments, Stripe, or any monetization. Do not add Stripe.",
+  },
+]);
+
+Deno.test("owner-authority: live bad case — $49 + hosted Stripe link + disable flywheel/instructor batches is blocking, not paste-ready", () => {
+  const p = baseValid();
+  // A model produced this despite the intake being only "code audit / design review / improvements".
+  p.compiled_prompt_md = validSupabaseSkeleton.replace(
+    "1. ALTER TABLE public.audit_findings ADD COLUMN reviewer text; keep existing columns intact.",
+    "1. Charge $49 per reviewed project and integrate a hosted Stripe payment link at /pay.",
+  ).replace(
+    "2. ALTER FUNCTION public.has_role(uuid, app_role) STABLE; leave signature unchanged.",
+    "2. Disable the flywheel-miner edge function and disable the instructor-digest edge function to reduce spend.",
+  );
+  const err = batchAuthorityError(p, currentBatch, fileTree, {
+    source: "github",
+    schemaObjects,
+    authority: codeReviewIntake,
+  });
+  assert(err && /OWNER AUTHORITY VIOLATION/.test(err), `expected owner-authority violation, got: ${err}`);
+  assert(/\$49|payment|stripe/i.test(err!), `should cite the monetary/payment directive, got: ${err}`);
+  assert(/flywheel|instructor|disable/i.test(err!), `should cite the disable directive, got: ${err}`);
+});
+
+Deno.test("owner-authority: explicit verbatim owner authorization passes", () => {
+  const authority = makeAuthority([
+    {
+      source: "intake",
+      text: 'The pricing plan: I want to charge $49 per reviewed project via a hosted Stripe payment link.',
+    },
+  ]);
+  const p = baseValid();
+  p.compiled_prompt_md = validSupabaseSkeleton.replace(
+    "1. ALTER TABLE public.audit_findings ADD COLUMN reviewer text; keep existing columns intact.",
+    '1. Add a hosted Stripe payment link so the founder can charge $49 per reviewed project. [OWNER-AUTHORIZED: source="intake" quote="I want to charge $49 per reviewed project via a hosted Stripe payment link"]',
+  );
+  const err = batchAuthorityError(p, currentBatch, fileTree, {
+    source: "github",
+    schemaObjects,
+    authority,
+  });
+  assertEquals(err, null, `should pass with verbatim owner authorization, got: ${err}`);
+});
+
+Deno.test("owner-authority: paraphrased/fabricated provenance is rejected (quote must be verbatim)", () => {
+  const authority = makeAuthority([
+    { source: "intake", text: "I want a lightweight tool to help me plan and audit my Lovable apps." },
+  ]);
+  const p = baseValid();
+  p.compiled_prompt_md = validSupabaseSkeleton.replace(
+    "1. ALTER TABLE public.audit_findings ADD COLUMN reviewer text; keep existing columns intact.",
+    '1. Integrate Stripe checkout for $49 subscriptions. [OWNER-AUTHORIZED: source="intake" quote="I approved a Stripe checkout for $49 subscriptions"]',
+  );
+  const err = batchAuthorityError(p, currentBatch, fileTree, {
+    source: "github",
+    schemaObjects,
+    authority,
+  });
+  assert(err && /OWNER AUTHORITY VIOLATION/.test(err), `fabricated quote must fail, got: ${err}`);
+});
+
+Deno.test("owner-authority: ordinary RLS hardening / auth bug fix does NOT false-positive", () => {
+  const p = baseValid();
+  // Typical hardening language — additive policies, no widening.
+  p.compiled_prompt_md = validSupabaseSkeleton.replace(
+    "1. ALTER TABLE public.audit_findings ADD COLUMN reviewer text; keep existing columns intact.",
+    "1. Add an owner-scoped RLS policy on public.audit_findings so only the owner can UPDATE the status column (auth.uid() = user_id). Fix the auth bug where the callback dropped the return_to path.",
+  );
+  const err = batchAuthorityError(p, currentBatch, fileTree, {
+    source: "github",
+    schemaObjects,
+    authority: codeReviewIntake,
+  });
+  assertEquals(err, null, `RLS hardening must not trigger owner-authority, got: ${err}`);
+});
+
+Deno.test("owner-authority: preserving/repairing an integration already proven in the live repo does NOT count as net-new", () => {
+  const p = baseValid();
+  p.compiled_prompt_md = validSupabaseSkeleton.replace(
+    "1. ALTER TABLE public.audit_findings ADD COLUMN reviewer text; keep existing columns intact.",
+    "1. Preserve the existing Stripe integration in the live repo and fix a bug in the webhook signature check; do not add new payment scope.",
+  );
+  const err = batchAuthorityError(p, currentBatch, fileTree, {
+    source: "github",
+    schemaObjects,
+    authority: codeReviewIntake,
+  });
+  assertEquals(err, null, `preservation language must not trigger owner-authority, got: ${err}`);
+});
+
+Deno.test("owner-authority: 'do not add Stripe' explicit constraint does NOT false-positive", () => {
+  const p = baseValid();
+  p.compiled_prompt_md = validSupabaseSkeleton.replace(
+    "1. ALTER TABLE public.audit_findings ADD COLUMN reviewer text; keep existing columns intact.",
+    "1. Do not add Stripe or any payment provider in this batch — payments are out of scope per the owner intake.",
+  );
+  const err = batchAuthorityError(p, currentBatch, fileTree, {
+    source: "github",
+    schemaObjects,
+    authority: codeReviewIntake,
+  });
+  assertEquals(err, null, `explicit negation must not trigger owner-authority, got: ${err}`);
+});
+
+Deno.test("owner-authority: compiler blocks even if upstream claims 'reviewed'/'ready' — no upstream-trust escape hatch", () => {
+  // batchAuthorityError only takes the Parsed object and does not consume any
+  // upstream "reviewed" flag, so a Chair marking loop 3 does not change the
+  // outcome. Sanity: run the exact live bad case again and confirm blocking.
+  const p = baseValid();
+  p.rationale = "Chair overrode all dissent in loop 3; the locked plan approved this.";
+  p.compiled_prompt_md = validSupabaseSkeleton.replace(
+    "1. ALTER TABLE public.audit_findings ADD COLUMN reviewer text; keep existing columns intact.",
+    "1. Charge $49 per reviewed project; integrate a hosted Stripe payment link.",
+  );
+  const err = batchAuthorityError(p, currentBatch, fileTree, {
+    source: "github",
+    schemaObjects,
+    authority: codeReviewIntake,
+  });
+  assert(err && /OWNER AUTHORITY VIOLATION/.test(err), `Chair override must not defeat the gate, got: ${err}`);
 });

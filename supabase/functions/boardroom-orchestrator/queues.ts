@@ -4,6 +4,12 @@
 import { assembleFromGithub, formatFiles, ghToken } from "../_shared/github-payload.ts";
 import { loadFieldManual } from "../_shared/lovable-field-manual.ts";
 import {
+  injectOwnerAuthority,
+  loadOwnerAuthority,
+  OWNER_AUTHORITY_RULES,
+  type OwnerAuthority,
+} from "../_shared/owner-authority.ts";
+import {
   SEATS,
   type Seat,
   SEAT_LABEL,
@@ -15,6 +21,42 @@ import {
   candidateForLoop,
   lastCandidateLoop,
 } from "./protocol.ts";
+
+// Load owner authority once per run and cache on the run object so every
+// queue function in the run's lifetime pays for a single DB round trip.
+async function ensureAuthority(admin: any, run: any): Promise<OwnerAuthority> {
+  if (!(run as any).__authority__) {
+    (run as any).__authority__ = await loadOwnerAuthority(admin, {
+      projectId: run.project_id,
+      founderNotes: run.founder_notes ?? null,
+    });
+  }
+  return (run as any).__authority__;
+}
+
+// Wrapper around admin.from("run_steps").insert(...) that prepends the OWNER
+// AUTHORITY rules to every system prompt and the compact owner-source block
+// to every user prompt in the payload. Use this in place of `.insert(rows)`
+// for any board step where the reviewer must not be able to be overruled by
+// a locked plan, board draft, dissent, Chair ruling, or consensus score.
+async function queueSteps(admin: any, run: any, rowsIn: any | any[]): Promise<any> {
+  const authority = await ensureAuthority(admin, run);
+  const rows = Array.isArray(rowsIn) ? rowsIn : [rowsIn];
+  for (const row of rows) {
+    const msgs = row?.request?.messages;
+    if (!Array.isArray(msgs)) continue;
+    for (const m of msgs) {
+      if (m?.role === "system" && typeof m.content === "string") {
+        m.content = `${OWNER_AUTHORITY_RULES}\n\n${m.content}`;
+      } else if (m?.role === "user") {
+        const injected = injectOwnerAuthority("", m.content, authority);
+        m.content = injected.user;
+      }
+    }
+  }
+  return admin.from("run_steps").insert(rowsIn);
+}
+
 
 
 export async function loadLockedPlan(admin: any, projectId: string) {
@@ -243,7 +285,7 @@ export async function queueRound1(admin: any, run: any) {
       ],
     },
   }));
-  await admin.from("run_steps").insert(rows);
+  await queueSteps(admin, run, rows);
 }
 
 
@@ -279,7 +321,7 @@ Requirements: at least ONE objection targeting EACH of the three other seats, at
 
     };
   });
-  await admin.from("run_steps").insert(rows);
+  await queueSteps(admin, run, rows);
 }
 
 
@@ -323,7 +365,7 @@ Respond with the markdown document ONLY — no JSON, no preamble, no closing rem
   if (loop > 0) parts.push(priorRoundFailureBlock(steps, loop - 1));
   const user = `${parts.join("\n\n")}\n\nWrite the candidate document now.`;
   const imageParts = isDesign ? await loadScreenshotParts(admin, run.user_id, run.project_id) : [];
-  await admin.from("run_steps").insert({
+  await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
     step_key: `r3_draft_chair_loop${loop}`,
@@ -422,7 +464,7 @@ Resolution discipline: an objection is "resolved" ONLY if you can quote the exac
 
     };
   });
-  await admin.from("run_steps").insert(rows);
+  await queueSteps(admin, run, rows);
 }
 
 
@@ -441,7 +483,7 @@ Return ONLY valid JSON matching this shape:
   "dissent_ledger": [ { "seat": "...", "objection": "...", "chair_response": "..." } ]
 }`;
   const user = `${intakeBlock(intake)}\n\nLAST CANDIDATE\n${lastCandidate}\n\n${failure}\n\nProduce your JSON now.`;
-  await admin.from("run_steps").insert({
+  await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
     step_key: `r_final_ruling_chair`,
@@ -769,7 +811,7 @@ Constraints: 6-8 batches (prefer 6), unique ascending integer batch_no starting 
 
   const user = `${repoContract}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}${deferredBlock}\n\nProduce the JSON now.`;
 
-  await admin.from("run_steps").insert({
+  await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
     step_key: "batches_chair",
@@ -874,7 +916,7 @@ ${shape}`,
       ],
     },
   }));
-  await admin.from("run_steps").insert(rows);
+  await queueSteps(admin, run, rows);
 }
 
 
@@ -917,7 +959,7 @@ Constraints: 6-8 batches (prefer 6), unique ascending integer batch_no starting 
     ? `LOCKED DESIGN BRIEF\n\n${design.content_md}`
     : `NO LOCKED DESIGN BRIEF.`;
   const user = `${repoContract}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nYOUR DRAFT\n\n${JSON.stringify(draftJson?.batches ?? [], null, 2)}\n\nREVIEW ISSUES\n\n${issues}\n\nProduce the revised JSON now.`;
-  await admin.from("run_steps").insert({
+  await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
     step_key: "batches_revise_chair",
