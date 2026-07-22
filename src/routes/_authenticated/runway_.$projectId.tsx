@@ -324,10 +324,31 @@ function RunwayPage() {
         toast.error("Seat the board first — add your OpenRouter key in Settings.");
         return;
       }
-      toast.success("The Chair is sequencing your build…");
+      if ((data as any)?.existing) {
+        toast.success("The board is already sequencing — resuming that run.");
+      } else {
+        toast.success("The Chair is sequencing your build…");
+      }
       await loadAll();
     } catch (err: any) {
       toast.error(err?.message ?? "Failed to start");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function resumeRun(runId: string) {
+    setGenerating(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("boardroom-orchestrator", {
+        body: { action: "resume", run_id: runId },
+      });
+      if (error) throw error;
+      if ((data as any)?.error) throw new Error((data as any).error);
+      toast.success("Resuming the run…");
+      await loadAll();
+    } catch (err: any) {
+      toast.error(err?.message ?? "Failed to resume");
     } finally {
       setGenerating(false);
     }
