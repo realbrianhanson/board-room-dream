@@ -687,7 +687,15 @@ function RunwayPage() {
                 auditFindings={auditFindings}
                 fixBatch={fixBatch as Batch | null}
                 ghRepo={ghRepo}
-                onCopyPrompt={() => copy(b.compiled_prompt_md ?? b.prompt_md, "Paste it into Lovable and let it build.")}
+                onCopyPrompt={() => {
+                  if (b.channel === "human") {
+                    copy(b.prompt_md, "Work through the checklist in order.");
+                    return;
+                  }
+                  if (b.compile_meta?.status === "ready" && b.compiled_prompt_md) {
+                    copy(b.compiled_prompt_md, "Paste it into Lovable and let it build.");
+                  }
+                }}
                 onAdvance={(next) => advance(b, next)}
                 onOpenRollback={() => setShowRollback(true)}
                 onRequestSkip={() => setShowSkipConfirm(b)}
@@ -843,6 +851,8 @@ function CompileBanner({ batch }: { batch: Batch }) {
   if (!meta) return null;
   const sha = meta.head_sha ? meta.head_sha.slice(0, 7) : null;
   const drift = meta.drift_notes ?? [];
+  const touched = meta.touched_paths ?? [];
+  const evidence = meta.evidence ?? [];
 
   if (meta.status === "blocked") {
     return (
@@ -866,16 +876,48 @@ function CompileBanner({ batch }: { batch: Batch }) {
       <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[hsl(38_65%_72%)]">
         Compiled against your live code{sha ? ` · commit ${sha}` : ""} · {meta.files_analyzed} file{meta.files_analyzed === 1 ? "" : "s"} read
       </p>
-      {drift.length > 0 && (
-        <div className="mt-2">
-          <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Drift from the plan</p>
-          <ul className="mt-1 space-y-0.5">
-            {drift.map((d, i) => (
-              <li key={i} className="text-xs text-foreground/85">— {d}</li>
-            ))}
-          </ul>
+      <details className="mt-2 group">
+        <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground">
+          Why this prompt is safe to paste ({touched.length} touched · {evidence.length} evidence{drift.length ? ` · ${drift.length} drift` : ""})
+        </summary>
+        <div className="mt-3 space-y-3">
+          {touched.length > 0 && (
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Files this prompt touches</p>
+              <ul className="mt-1 space-y-0.5">
+                {touched.map((t, i) => (
+                  <li key={i} className="text-xs text-foreground/85">
+                    <span className={`font-mono ${t.action === "create" ? "text-[hsl(160_45%_65%)]" : "text-[hsl(38_65%_72%)]"}`}>{t.action.toUpperCase()}</span>{" "}
+                    <span className="font-mono">{t.path}</span> — <span className="text-muted-foreground">{t.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {evidence.length > 0 && (
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Evidence in the live code</p>
+              <ul className="mt-1 space-y-0.5">
+                {evidence.map((e, i) => (
+                  <li key={i} className="text-xs text-foreground/85">
+                    — {e.claim} <span className="text-muted-foreground">(<span className="font-mono">{e.path}</span>: {e.detail})</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {drift.length > 0 && (
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Drift from the plan</p>
+              <ul className="mt-1 space-y-0.5">
+                {drift.map((d, i) => (
+                  <li key={i} className="text-xs text-foreground/85">— {d}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
-      )}
+      </details>
     </div>
   );
 }
