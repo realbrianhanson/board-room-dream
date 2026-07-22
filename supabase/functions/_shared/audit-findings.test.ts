@@ -17,7 +17,9 @@ function make(over: Partial<CleanFinding> = {}): CleanFinding {
   return {
     seat: "inspector",
     severity: "P1",
-    file_path: "src/routes/index.tsx",
+    // Migration path so the fixture stays a server-side finding; the R3
+    // client-surface security-claim rule only fires on src/* file_paths.
+    file_path: "supabase/migrations/20240101_posts.sql",
     title: "RLS bypass on posts",
     description: "Anon can select every row of public.posts because policy is USING (true).",
     // Includes IMPACT class so P0 variants used in later tests remain
