@@ -22,7 +22,7 @@ export function useProjectJourney(projectId: string): JourneyStage[] | null {
         supabase.from("batches").select("status").eq("project_id", projectId),
         supabase
           .from("audits")
-          .select("id")
+          .select("id, status")
           .eq("project_id", projectId)
           .eq("kind", "final_az"),
       ]);
