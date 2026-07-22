@@ -294,7 +294,9 @@ export function correctionForStep(stepKey: string): string {
     return "Your review JSON was truncated. Return ONLY {verdict, issues}; max 8 issues; each issue.text 10-280 characters; total JSON <=4,500 characters. Preserve every blocking issue, merge duplicates, no prose.";
   }
   if (key === "audit_chair_merge") {
-    return "Your audit merge JSON was truncated. Preserve the required merge schema; max 30 deduplicated findings; keep every P0/P1; compress evidence; total JSON <=18,000 characters.";
+    // AUDIT-MERGE-BOUNDED-R3: never restate the 30/18,000 shape that caused
+    // the original truncation. Ask for a materially smaller, compact merge.
+    return "Your prior audit merge JSON was invalid or truncated. Emit ONLY compact one-line valid JSON with keys verdict, summary, findings (and fix_prompt_md if any supported P0/P1 remains). HARD MAX 8 highest-severity findings; total JSON <=6,000 characters; summary <=360 characters; each finding description <=240 characters; each finding evidence <=140 characters (concrete short quote or exact construct — never speculative). Drop the lowest-severity duplicates first; keep every supported P0/P1. If evidence for a finding is uncertain, OMIT the finding rather than expand or guess. Do NOT emit 30 findings or an 18,000-character schema — that limit caused the original truncation.";
   }
   if (/^audit_(chair|strategist|contrarian|inspector|reserve)(_c\d+)?$/.test(key)) {
     // Materially smaller correction than the base map schema. Never asks
