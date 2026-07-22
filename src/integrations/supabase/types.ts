@@ -990,6 +990,10 @@ export type Database = {
         }
         Returns: number
       }
+      requeue_step_if_parent_active: {
+        Args: { p_new_error: string; p_new_request: Json; p_step_id: string }
+        Returns: string
+      }
     }
     Enums: {
       [_ in never]: never
