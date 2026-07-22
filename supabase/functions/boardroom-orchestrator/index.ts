@@ -92,7 +92,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-23.body-transport-requeue.i1";
+const BUILD_VERSION = "2026-07-24.per-run-capacity-rpc.i1";
 
 // Terminal-fail a run and, when it drives an audit, fail the audit row in
 // lockstep so audits/runs never drift. Budget pauses and recoverable requeues
@@ -157,25 +157,27 @@ async function insertAlert(
 }
 
 
-async function claimOneStep(admin: any, runId: string) {
-  const { data: candidate } = await admin
-    .from("run_steps")
-    .select("id")
-    .eq("run_id", runId)
-    .eq("status", "queued")
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-  if (!candidate) return null;
-  const { data: claimed } = await admin
-    .from("run_steps")
-    .update({ status: "running", started_at: new Date().toISOString() })
-    .eq("id", candidate.id)
-    .eq("status", "queued")
-    .select("*")
-    .maybeSingle();
-  return claimed;
+// Claim a queued step for this run under an aggregate per-run capacity that
+// holds across overlapping cron / self-tick invocations. The database RPC
+// takes a transaction-scoped advisory lock keyed on run_id, counts currently
+// running steps, and only then claims the oldest queued row (FOR UPDATE SKIP
+// LOCKED). Enforcing the cap in-process is not enough — the platform runs
+// multiple invocations concurrently and each has its own MAX_STEP_CONCURRENCY
+// counter, so N invocations could otherwise claim N × capacity in parallel.
+async function claimOneStep(admin: any, runId: string, capacity: number) {
+  const { data, error } = await admin.rpc("claim_run_step_with_capacity", {
+    p_run_id: runId,
+    p_capacity: capacity,
+  });
+  if (error) {
+    // Surface loudly — silently returning null would falsely report "no work"
+    // and stall the run.
+    throw new Error(`claim_run_step_with_capacity failed: ${error.message ?? error}`);
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  return row ?? null;
 }
+
 
 
 // Hard ceiling on a single model call, enforced at the ORCHESTRATOR level so
@@ -1291,9 +1293,12 @@ async function processRun(admin: any, runId: string) {
   // process on the next self-tick. The proxy still checks budget/caps before
   // each call; parallel seats can overshoot the run budget by at most the
   // in-flight calls, the same order of magnitude the serial path allowed.
+  // The RPC enforces the aggregate cap across overlapping invocations, so this
+  // invocation may request up to MAX_STEP_CONCURRENCY but never pushes the run
+  // above the per-run limit.
   const claimed: any[] = [];
   while (claimed.length < MAX_STEP_CONCURRENCY) {
-    const step = await claimOneStep(admin, runId);
+    const step = await claimOneStep(admin, runId, MAX_STEP_CONCURRENCY);
     if (!step) break;
     claimed.push(step);
   }
