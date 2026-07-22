@@ -348,6 +348,18 @@ async function callOpenRouter(
       // clamped timeout — classify as timeout so callSeat throws
       // ProxyTimeoutError and recordCall NEVER runs.
       if (controller.signal.aborted || (e as Error)?.name === "AbortError") throwTimeout();
+      // Body-stream/transport failure on a 2xx response: no usable provider
+      // response exists, so cost/tokens MUST NOT be recorded. This is NOT a
+      // model JSON-output validation failure (nothing was ever successfully
+      // read), and NOT a pre-response network failure (headers already
+      // arrived), so it must not quick-retry inside the same invocation. The
+      // orchestrator classifies via isBodyTransportError() and requeues into
+      // a fresh invocation on the SAME model, capped at one transport retry.
+      if (isBodyTransportError(e)) {
+        (e as any).isBodyTransport = true;
+        (e as any).isPreResponse = false;
+        (e as any).attemptedModel = model;
+      }
       throw e;
     }
     const choice = json?.choices?.[0];
@@ -360,6 +372,81 @@ async function callOpenRouter(
   } finally {
     clearTimeout(timer);
   }
+}
+
+// Classify a thrown error as a response-body transport failure: the fetch
+// resolved (headers arrived) but reading the body failed mid-stream. Callers
+// MUST NOT confuse this with:
+//   - a JSON syntax error from a fully-read body (that's downstream model
+//     output validation, handled by validateStepJson),
+//   - a pre-response network failure (e.isPreResponse === true),
+//   - a timeout (e.isTimeout === true).
+// Positive matches: TypeError from Deno's fetch body reader, undici/deno
+// "error reading a body from connection", connection reset/terminated,
+// premature/unexpected end of JSON input, incomplete chunked encoding.
+export function isBodyTransportError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as any;
+  if (e.isTimeout || e.isHardTimeout) return false;
+  if (e.isPreResponse === true) return false;
+  if (e.isBodyTransport === true) return true;
+  const name = String(e.name ?? "");
+  const msg = String(e.message ?? "").toLowerCase();
+  const causeMsg = String(e.cause?.message ?? "").toLowerCase();
+  const hay = `${msg} ${causeMsg}`;
+  // A SyntaxError from JSON.parse on a fully-read body is NOT transport — the
+  // characteristic phrasing there is "unexpected token", "in JSON at position",
+  // or a bare parser complaint with no I/O verbs. Require an I/O verb.
+  const ioMarkers = [
+    "error reading a body from connection",
+    "error reading a body",
+    "connection reset",
+    "connection was reset",
+    "connection terminated",
+    "connection closed",
+    "socket hang up",
+    "socket disconnected",
+    "premature close",
+    "unexpected end of json input",
+    "unexpected end of input",
+    "incomplete chunked encoding",
+    "body stream",
+    "network connection was lost",
+  ];
+  const hit = ioMarkers.some((m) => hay.includes(m));
+  if (!hit) return false;
+  // Guard against classifying a synthetic SyntaxError from `JSON.parse("")` on
+  // a body someone already read — that string CAN reach here via test scaffolds
+  // but in production it comes from `await r.json()`'s internal read, which is
+  // exactly what we want to catch. So: accept SyntaxError only when the
+  // message includes an I/O verb, which the checks above already require.
+  if (name === "SyntaxError" && !/(connection|body|stream|network|socket)/.test(hay)) {
+    return false;
+  }
+  return true;
+}
+
+// Pure decision helper for the orchestrator: given the current step row,
+// return whether a body-transport failure should requeue fresh on the SAME
+// model or terminal-fail. Cap: one fresh transport retry. Kept pure so it can
+// be unit-tested without a database.
+export type TransportDecision =
+  | { action: "requeue"; attempts: number }
+  | { action: "terminal"; attempts: number; message: string };
+
+export function decideTransportRequeue(step: { step_key?: string; request?: any }): TransportDecision {
+  const prior = Number(step?.request?._transport_attempts ?? 0);
+  const attempts = prior + 1;
+  if (prior >= 1) {
+    return {
+      action: "terminal",
+      attempts,
+      message:
+        `Step ${step?.step_key ?? "unknown"} failed with a response-body transport error ` +
+        `after one fresh retry on the same model (transport-retry-exhausted).`,
+    };
+  }
+  return { action: "requeue", attempts };
 }
 
 // Pure helpers used by executeStep and by the deterministic checks below.
