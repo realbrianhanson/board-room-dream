@@ -232,26 +232,48 @@ async function requeueForBodyTransport(admin: any, step: any, attempts: number):
   );
 }
 
-async function requeueForValidation(admin: any, step: any, baseMessages: any[], assistantContent: string, validationError: string, truncated: boolean): Promise<string> {
+async function requeueForValidation(admin: any, run: any, step: any, baseMessages: any[], assistantContent: string, validationError: string, truncated: boolean): Promise<string> {
   const attempts = Number(step.request?._validation_attempts ?? 0) + 1;
-  const correctionText = truncated
-    ? correctionForStep(step.step_key)
-    : `Your previous response failed validation: ${validationError}\nReturn ONLY the required JSON object, no prose, no code fences.`;
-  const correctionMessages = [
-    ...baseMessages,
-    { role: "assistant", content: assistantContent },
-    { role: "user", content: correctionText },
-  ];
-  return await requeueStepIfParentActive(
-    admin,
-    step.id,
-    {
-      ...(step.request ?? {}),
-      messages: correctionMessages,
-      _validation_attempts: attempts,
-    },
-    truncated ? "truncated_output_requeued" : "invalid_json_requeued",
-  );
+  try {
+    const { request: newRequest, mode } = buildValidationRetryRequest({
+      stepKey: String(step.step_key ?? ""),
+      baseRequest: step.request ?? {},
+      baseMessages,
+      assistantContent,
+      validationError,
+      truncated,
+      correction: correctionForStep(step.step_key),
+    });
+    return await requeueStepIfParentActive(
+      admin,
+      step.id,
+      {
+        ...newRequest,
+        _validation_attempts: attempts,
+        _validation_retry_mode: mode,
+      },
+      truncated ? "truncated_output_requeued" : "invalid_json_requeued",
+    );
+  } catch (e) {
+    if (e instanceof BatchContextTooLarge) {
+      // Even the fallback (base + correction, no echo) does not fit. Fail
+      // closed rather than leave the step "running" forever — the watchdog
+      // would otherwise churn on a payload that can never be shrunk safely.
+      await admin
+        .from("run_steps")
+        .update({
+          status: "failed",
+          error: e.message,
+          response_text: assistantContent,
+          completed_at: new Date().toISOString(),
+        })
+        .eq("id", step.id)
+        .eq("status", "running");
+      await failRun(admin, run, e.message);
+      return "cancelled_parent_terminal";
+    }
+    throw e;
+  }
 }
 
 
