@@ -85,7 +85,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-21.watchdog.2";
+const BUILD_VERSION = "2026-07-22.active-run-uniqueness.1";
 
 function fireSelfTick(body: any = {}) {
   // Register the background kick with EdgeRuntime.waitUntil so the platform
