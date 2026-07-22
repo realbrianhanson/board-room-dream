@@ -151,6 +151,8 @@ function RunwayPage() {
   const [batches, setBatches] = useState<Batch[] | null>(null);
   const [run, setRun] = useState<Run | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false);
+
   const [urlEdit, setUrlEdit] = useState("");
   const [showRollback, setShowRollback] = useState(false);
   const [showSkipConfirm, setShowSkipConfirm] = useState<Batch | null>(null);
