@@ -70,6 +70,8 @@ export type ProxyOptions = {
   online?: boolean;
   /** Use the seat's fallback model as the primary for this call (watchdog retries). */
   forceFallback?: boolean;
+  /** Cap completion tokens to bound cost/latency on JSON-shape emitters. */
+  maxTokens?: number;
 };
 
 export type FallbackMeta = {
