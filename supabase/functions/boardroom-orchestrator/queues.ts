@@ -857,12 +857,27 @@ export async function queueBatchesStep(admin: any, run: any) {
   const compactPlan = compactMarkdown(plan?.content_md ?? "", COMPACT_ARTIFACT_CAP);
   const compactPrd = compactMarkdown(plan?.prd_md ?? "", COMPACT_ARTIFACT_CAP);
 
-  const system = `You are the Chair, sequencing this student's build for their Lovable project. Produce 6-8 dependency-safe, single-concern build batches (STRONGLY PREFER 6) that turn the locked plan + PRD into a shippable app — core batches first, then clearly-labeled Enhancement batches so lower-priority value is never silently dropped.
+  // Import projects run a small improvement plan against real code, not a
+  // greenfield build. Padding to six batches has produced duplicated /
+  // hand-waved batches. Cap the range at 3-6 for imports (dependency-safe,
+  // minimum needed to cover the locked improvement plan). Greenfield stays
+  // 6-8 (prefer 6). The validator globally accepts 3-8 so this prompt-side
+  // range simply constrains the model within the allowed window.
+  const isImport = !!project?.is_import;
+  const batchRangeText = isImport ? "3-6" : "6-8";
+  const batchRangePrompt = isImport
+    ? "Produce 3-6 dependency-safe, single-concern build batches — the SMALLEST count that fully covers the locked improvement plan without padding. Do NOT invent extra batches (or Enhancement batches) to reach six."
+    : "Produce 6-8 dependency-safe, single-concern build batches (STRONGLY PREFER 6) that turn the locked plan + PRD into a shippable app — core batches first, then clearly-labeled Enhancement batches so lower-priority value is never silently dropped.";
+  const batchCountRule = isImport
+    ? "Between 3 and 6 batches, chosen to be the smallest count that covers the locked improvement plan. Merge overlapping concerns aggressively; do NOT pad to reach six."
+    : "Exactly 6 batches unless a 7th or 8th is strictly required to keep any single batch below its size limit. Prefer merging overlapping concerns.";
+
+  const system = `You are the Chair, sequencing this student's build for their Lovable project. ${batchRangePrompt}
 
 ${manual}
 
 OUTPUT DISCIPLINE (hard limits — the run FAILS if you exceed them):
-- Exactly 6 batches unless a 7th or 8th is strictly required to keep any single batch below its size limit. Prefer merging overlapping concerns.
+- ${batchCountRule}
 - Each prompt_md: 900-2,600 characters, MAX 8 numbered implementation items.
 - Code batches: 2-4 acceptance checks (not 5).
 - Do NOT restate plan/PRD prose, feature lists, or design tokens verbatim in prompts. Reference them by name.
@@ -903,7 +918,7 @@ Return ONLY valid JSON:
   ]
 }
 
-Constraints: 6-8 batches (prefer 6), unique ascending integer batch_no starting at 1, every prompt_md within character limits, following the skeleton exactly.`;
+Constraints: ${batchRangeText} batches, unique ascending integer batch_no starting at 1, every prompt_md within character limits, following the skeleton exactly.`;
 
   const featuresBlock = Array.isArray(plan?.features) && plan!.features.length
     ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
