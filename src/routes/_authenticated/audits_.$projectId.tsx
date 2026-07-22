@@ -68,24 +68,29 @@ function AuditCenterPage() {
   const [projectName, setProjectName] = useState<string>("");
   const [isImport, setIsImport] = useState<boolean>(false);
   const [ghRepo, setGhRepo] = useState<string | null>(null);
+  const [isOwner, setIsOwner] = useState<boolean>(false);
   const [audits, setAudits] = useState<Audit[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [batches, setBatches] = useState<Batch[]>([]);
+  const [runErrors, setRunErrors] = useState<Record<string, string | null>>({});
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [showPaste, setShowPaste] = useState(false);
   const [pasted, setPasted] = useState("");
+  const [showRetry, setShowRetry] = useState(false);
 
   const load = useCallback(async () => {
-    const [{ data: p }, { data: au }, { data: bs }] = await Promise.all([
-      supabase.from("projects").select("name, is_import, github_repo").eq("id", projectId).maybeSingle(),
+    const [{ data: p }, { data: au }, { data: bs }, { data: userData }] = await Promise.all([
+      supabase.from("projects").select("user_id, name, is_import, github_repo").eq("id", projectId).maybeSingle(),
       supabase.from("audits").select("*").eq("project_id", projectId).order("created_at", { ascending: false }),
       supabase.from("batches").select("id, batch_no, title, status").eq("project_id", projectId).order("batch_no", { ascending: true }),
+      supabase.auth.getUser(),
     ]);
-    const proj = p as { name?: string; is_import?: boolean; github_repo?: string | null } | null;
+    const proj = p as { user_id?: string; name?: string; is_import?: boolean; github_repo?: string | null } | null;
     setProjectName(proj?.name ?? "");
     setIsImport(!!proj?.is_import);
     setGhRepo(proj?.github_repo ?? null);
+    setIsOwner(!!proj?.user_id && proj.user_id === userData?.user?.id);
     const auditRows = (au ?? []) as Audit[];
     setAudits(auditRows);
     setBatches((bs ?? []) as Batch[]);
@@ -104,6 +109,21 @@ function AuditCenterPage() {
         .order("severity", { ascending: true });
       setFindings((fi ?? []) as Finding[]);
     }
+    // Pull run errors for any failed audit so the card can explain what went wrong.
+    const runIds = Array.from(new Set(auditRows.map((a) => a.run_id).filter((x): x is string => !!x)));
+    if (runIds.length === 0) {
+      setRunErrors({});
+    } else {
+      const { data: runs } = await supabase
+        .from("boardroom_runs")
+        .select("id, error")
+        .in("id", runIds);
+      const map: Record<string, string | null> = {};
+      for (const r of (runs ?? []) as Array<{ id: string; error: string | null }>) {
+        map[r.id] = r.error ?? null;
+      }
+      setRunErrors(map);
+    }
     setLoading(false);
   }, [projectId]);
 
@@ -113,12 +133,18 @@ function AuditCenterPage() {
       .channel(`audits-center:${projectId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "audits", filter: `project_id=eq.${projectId}` }, () => load())
       .on("postgres_changes", { event: "*", schema: "public", table: "audit_findings" }, () => load())
+      .on("postgres_changes", { event: "*", schema: "public", table: "boardroom_runs", filter: `project_id=eq.${projectId}` }, () => load())
       .subscribe();
     return () => { supabase.removeChannel(ch); };
   }, [projectId, load]);
 
   async function startFinalAudit(source: "github" | "paste") {
     if (starting) return;
+    // UI-side guard: never fire a second start while one is running.
+    if (!canStartFinal({ isOwner, audits, starting })) {
+      toast.error("An audit is already running for this project.");
+      return;
+    }
     setStarting(true);
     try {
       const payload: Record<string, unknown> = { action: "start_final_audit", project_id: projectId, source };
@@ -129,6 +155,7 @@ function AuditCenterPage() {
       toast.success("The board is reading your code.");
       setShowPaste(false);
       setPasted("");
+      setShowRetry(false);
       load();
     } catch (err: any) {
       toast.error(err?.message ?? "Failed to start audit");
@@ -139,7 +166,10 @@ function AuditCenterPage() {
 
 
   const batchAudits = useMemo(() => audits.filter((a) => a.kind === "batch"), [audits]);
-  const finalAudit = useMemo(() => audits.find((a) => a.kind === "final_az") ?? null, [audits]);
+  const finalAudit = useMemo(() => pickLatestFinal(audits), [audits]);
+  const previousFinalAudits = useMemo(() => pickPreviousFinals(audits), [audits]);
+  const startAllowed = canStartFinal({ isOwner, audits, starting });
+  const retryLabel = startCtaLabel(finalAudit);
   const findingsByAudit = useMemo(() => {
     const m = new Map<string, Finding[]>();
     for (const f of findings) {
