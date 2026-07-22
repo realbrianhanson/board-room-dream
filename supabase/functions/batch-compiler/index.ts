@@ -20,7 +20,7 @@ import { detectStackFromRepo, loadFieldManual, renderStackBlock } from "../_shar
 import { injectOwnerAuthority, loadOwnerAuthority, OWNER_AUTHORITY_RULES } from "../_shared/owner-authority.ts";
 import { batchAuthorityError, shapeError, type Parsed } from "./validators.ts";
 
-const BUILD_VERSION = "2026-07-27.owner-authority-prelock.k1";
+const BUILD_VERSION = "2026-07-27.owner-authority-final.l1";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
