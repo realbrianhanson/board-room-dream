@@ -114,7 +114,7 @@ function AuthPage() {
           to="/"
           className="mb-8 block text-center font-display text-sm tracking-[0.28em] text-muted-foreground transition-colors hover:text-foreground"
         >
-          BOARDROOM
+          APP BLUEPRINT
         </Link>
 
         <div className="rounded-xl border border-border bg-surface-1 p-8 shadow-2xl shadow-black/40">

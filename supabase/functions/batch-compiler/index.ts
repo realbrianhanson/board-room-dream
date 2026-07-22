@@ -15,12 +15,19 @@ import {
   NoUserKey,
   SeatUnavailable,
 } from "../_shared/openrouter-proxy.ts";
-import { assembleFromGithub, formatFiles, ghToken, redactSecrets } from "../_shared/github-payload.ts";
+import { assembleFromGithub, fetchTargetMigrations, formatFiles, ghToken, redactSecrets } from "../_shared/github-payload.ts";
 import { detectStackFromRepo, loadFieldManual, renderStackBlock } from "../_shared/lovable-field-manual.ts";
 import { injectOwnerAuthority, loadOwnerAuthority, OWNER_AUTHORITY_RULES } from "../_shared/owner-authority.ts";
 import { batchAuthorityError, shapeError, type Parsed } from "./validators.ts";
+import {
+  batchTouchesSchema,
+  parseMigrationsToInventory,
+  renderTargetInventory,
+  toCollisionSet,
+  type TargetSchemaInventory,
+} from "../_shared/target-schema-inventory.ts";
 
-const BUILD_VERSION = "2026-07-27.owner-authority-final.l2";
+const BUILD_VERSION = "2026-07-29.target-schema-authority.r1";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -314,22 +321,39 @@ Deno.serve(async (req) => {
     filesAnalyzed = 1;
   }
 
-  const [plan, designBrief, outcomes, findings, manual, currentBatches, schemaInv, { count: totalBatches }] = await Promise.all([
+  const [plan, designBrief, outcomes, findings, manual, currentBatches, { count: totalBatches }] = await Promise.all([
     loadPlan(admin, batch.project_id),
     loadDesignBrief(admin, batch.project_id),
     loadOutcomes(admin, batch.project_id, Number(batch.batch_no)),
     loadOpenFindings(admin, batch.project_id),
     loadFieldManual(admin),
     loadCurrentBatches(admin, batch.project_id),
-    source === "github" ? loadSchemaInventory(admin) : Promise.resolve({ tables: [], routines: [], objectsLower: new Set<string>(), ok: false, reason: "paste source: schema inventory not loaded" } as SchemaInventory),
     admin.from("batches").select("id", { count: "exact", head: true }).eq("project_id", batch.project_id),
   ]);
-  // Compiler INDEPENDENTLY reloads owner authority; it never trusts an
-  // upstream "reviewed" flag from a locked plan or batch draft. Founder
-  // notes come from BOTH the run that produced the locked plan
-  // (plan_versions.source_run_id) and the latest terminal-successful
-  // batches-generation run created at or before THIS batch's created_at.
-  // Intake + approved change requests are always included.
+
+  // TARGET-SCHEMA AUTHORITY (2026-07-29.r1): for GitHub compiles derive a
+  // bounded schema inventory from the TARGET repo's own supabase/migrations
+  // ledger — never from the App Blueprint platform DB. UI-only batches may
+  // proceed with an empty inventory; batches that touch schema fail closed
+  // when the ledger is missing or oversized.
+  let targetInv: TargetSchemaInventory = { tables: new Set(), functions: new Set(), policies: new Set(), indexes: new Set(), views: new Set(), columns: new Map() };
+  let targetInvOk = source !== "github";
+  let targetInvReason: string | null = source === "github" ? null : "paste source: target schema inventory not fetched";
+  let targetMigrationsProvenance: { files: number; total_bytes: number } | null = null;
+  if (source === "github") {
+    const ghtok = await ghToken(admin, userId);
+    if (!ghtok) return j(400, { error: "GitHub not connected." });
+    const ledger = await fetchTargetMigrations(ghtok, project.github_repo!);
+    if (ledger.ok) {
+      targetInv = parseMigrationsToInventory(ledger.files);
+      targetInvOk = true;
+      targetMigrationsProvenance = { files: ledger.files.length, total_bytes: ledger.totalBytes };
+    } else {
+      targetInvReason = ledger.message;
+      targetInvOk = false;
+    }
+  }
+
   const extraFounderNotes = await loadRelevantFounderNotes(
     admin,
     batch.project_id,
@@ -357,9 +381,13 @@ Deno.serve(async (req) => {
   const currentBatchesBlock = currentBatches.length
     ? currentBatches.map((b: any) => `${b.batch_no === batch.batch_no ? "→" : " "} Batch ${b.batch_no} "${b.title}" · channel ${b.channel} · ${b.status}`).join("\n")
     : "(no batches yet)";
-  // Fail closed: GitHub compiles REQUIRE a healthy inventory. Never let a
-  // zero/malformed inventory silently degrade to a ready compile.
-  if (source === "github" && !schemaInv.ok) {
+
+  // Decide whether this batch's intent depends on the target schema at all.
+  const roadmapText = String((batch as any).prompt_md ?? "");
+  const schemaTouching = batchTouchesSchema({ channel: String(batch.channel), compiledOrRoadmap: roadmapText });
+
+  // Fail closed only when the batch NEEDS the schema ledger to be safe.
+  if (source === "github" && schemaTouching && !targetInvOk) {
     const meta = {
       status: "blocked",
       head_sha: headSha,
@@ -368,8 +396,8 @@ Deno.serve(async (req) => {
       original_batch_no: Number(batch.batch_no),
       original_title: batch.title,
       original_channel: batch.channel,
-      reason: "Live database schema inventory unavailable",
-      inventory_reason: schemaInv.reason ?? "unknown",
+      reason: "Target-repo schema ledger unavailable for a schema-touching batch",
+      target_repo_migrations_reason: targetInvReason,
       build_version: BUILD_VERSION,
     };
     await admin
@@ -378,14 +406,17 @@ Deno.serve(async (req) => {
       .eq("id", batch.id);
     return j(503, {
       status: "blocked",
-      error: "Live database schema inventory unavailable — the compiler will not emit a prompt without it. Please retry in a moment; the batch has been reset for recompile.",
-      inventory_reason: schemaInv.reason ?? "unknown",
+      error: "Cannot compile a schema-touching batch without the target repo's supabase/migrations ledger. Add or restore that folder in the linked GitHub repo and retry — the batch has been reset for recompile.",
+      target_repo_migrations_reason: targetInvReason,
       retryable: true,
     });
   }
-  const schemaBlock = source === "github"
-    ? renderInventory(schemaInv)
-    : "(schema inventory not shown for paste source — assume any database object may already exist and BLOCK on uncertainty rather than emitting a CREATE)";
+
+  const schemaBlock = source === "github" && targetInvOk
+    ? `TARGET-REPO SCHEMA INVENTORY (derived from supabase/migrations/*, ${targetMigrationsProvenance?.files ?? 0} files, ${targetMigrationsProvenance?.total_bytes ?? 0} bytes):\n${renderTargetInventory(targetInv)}`
+    : source === "github"
+      ? "(target-repo schema inventory not available — UI-only batch; do NOT assert any target DB object exists or is missing)"
+      : "(schema inventory not shown for paste source — assume any database object may already exist and BLOCK on uncertainty rather than emitting a CREATE)";
 
   const system = `You are the Chair, compiling the NEXT build prompt for a non-technical founder's Lovable project. You do not write a plan from scratch — you take THIS ONE Runway batch (the arrow-marked row in CURRENT RUNWAY SEQUENCE) and re-express it against the code that now actually exists.
 
@@ -400,7 +431,7 @@ Authority rules (F1):
 - Keep the batch skeleton exactly (ENFORCED):
   * First line: \`Batch ${batch.batch_no} — <title semantically matching the current title>. Numbered items only, no scope creep.\`
   * Then the numbered items, each starting with \`1.\`, \`2.\`, … — no bullets, no free-form paragraphs.
-  * If channel is "code": include an "Acceptance" section with 2–4 click-only checks (one per line).
+  * For code channels ("lovable" and "supabase"): include an "Acceptance" section with 2–4 click-only checks (one per line).
   * Ends EXACTLY with the two lines:\n    Keep everything else identical.\n    Typecheck when done.
   * Total length 900–3200 characters.
   * NEVER merely echo the original prompt when live reality (repo/schema) contradicts it — rewrite to match the live code.
@@ -498,7 +529,7 @@ Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=
           title: batch.title,
           channel: batch.channel,
           batch_no: Number(batch.batch_no),
-        }, fileTreeSet, { source, schemaObjects: schemaInv.objectsLower, authority });
+        }, fileTreeSet, { source, schemaObjects: toCollisionSet(targetInv), authority });
       }
       if (!err) {
         parsed = candidate as Parsed;
@@ -572,7 +603,10 @@ Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=
     rationale: parsed.rationale,
     touched_paths: parsed.touched_paths,
     evidence: parsed.evidence,
-    schema_inventory_size: { tables: schemaInv.tables.length, routines: schemaInv.routines.length, ok: schemaInv.ok },
+    target_repo_migrations: targetMigrationsProvenance,
+    target_inventory_ok: targetInvOk,
+    target_inventory_reason: targetInvReason,
+    schema_touching_batch: schemaTouching,
     build_version: BUILD_VERSION,
   };
 

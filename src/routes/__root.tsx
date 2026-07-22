@@ -76,22 +76,22 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "BOARDROOM — Your AI board of directors" },
+      { title: "App Blueprint — Plan, build, and audit your Lovable app" },
       {
         name: "description",
         content:
-          "Four frontier AI models sit as a board of directors and take your idea from concept to shipped, audited code.",
+          "App Blueprint plans, builds, and audits your Lovable app. Inside it, the Boardroom — an adversarial council of frontier models — pressure-tests every decision.",
       },
-      { property: "og:title", content: "BOARDROOM — Your AI board of directors" },
+      { property: "og:title", content: "App Blueprint — Plan, build, and audit your Lovable app" },
       {
         property: "og:description",
         content:
-          "Four frontier AI models sit as a board of directors and take your idea from concept to shipped, audited code.",
+          "App Blueprint plans, builds, and audits your Lovable app. Inside it, the Boardroom — an adversarial council of frontier models — pressure-tests every decision.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:title", content: "BOARDROOM — Your AI board of directors" },
-      { name: "twitter:description", content: "Four frontier AI models sit as a board of directors and take your idea from concept to shipped, audited code." },
+      { name: "twitter:title", content: "App Blueprint — Plan, build, and audit your Lovable app" },
+      { name: "twitter:description", content: "App Blueprint plans, builds, and audits your Lovable app. Inside it, the Boardroom — an adversarial council of frontier models — pressure-tests every decision." },
       { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/6bc1f9e5-2f53-4179-a24e-d19261b25aa5/id-preview-db101d11--887503f1-4c18-4b48-87f8-05674e6d8964.lovable.app-1784399490838.png" },
       { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/6bc1f9e5-2f53-4179-a24e-d19261b25aa5/id-preview-db101d11--887503f1-4c18-4b48-87f8-05674e6d8964.lovable.app-1784399490838.png" },
     ],

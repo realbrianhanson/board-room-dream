@@ -8,22 +8,28 @@ export const Route = createFileRoute("/reset-password")({
 
 function ResetPasswordPage() {
   const navigate = useNavigate();
-  const [ready, setReady] = useState(false);
+  const [ready, setReady] = useState<"pending" | "ok" | "invalid">("pending");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ tone: "error" | "info"; text: string } | null>(null);
 
   useEffect(() => {
-    // Supabase parses the recovery token from the URL hash and emits a
-    // PASSWORD_RECOVERY event; the session is set so updateUser() can run.
     const { data: sub } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") setReady(true);
+      if (event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") setReady("ok");
     });
     supabase.auth.getSession().then(({ data }) => {
-      if (data.session) setReady(true);
+      if (data.session) setReady("ok");
     });
-    return () => sub.subscription.unsubscribe();
+    // Bounded wait: after 5s, if we still have no session, treat the link as
+    // invalid/expired and surface a real recovery path instead of spinning.
+    const timer = window.setTimeout(() => {
+      setReady((prev) => (prev === "pending" ? "invalid" : prev));
+    }, 5_000);
+    return () => {
+      sub.subscription.unsubscribe();
+      window.clearTimeout(timer);
+    };
   }, []);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -57,18 +63,18 @@ function ResetPasswordPage() {
           to="/"
           className="mb-8 block text-center font-display text-sm tracking-[0.28em] text-muted-foreground transition-colors hover:text-foreground"
         >
-          BOARDROOM
+          APP BLUEPRINT
         </Link>
 
         <div className="rounded-xl border border-border bg-surface-1 p-8 shadow-2xl shadow-black/40">
           <h1 className="font-display text-3xl text-foreground">Set a new password</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            {ready
-              ? "Choose a new password for your account."
-              : "Verifying your reset link…"}
+            {ready === "ok" && "Choose a new password for your account."}
+            {ready === "pending" && "Verifying your reset link…"}
+            {ready === "invalid" && "This reset link is invalid or has expired."}
           </p>
 
-          {ready && (
+          {ready === "ok" && (
             <form onSubmit={handleSubmit} className="mt-6 space-y-4">
               <div>
                 <label className="mb-1.5 block text-xs uppercase tracking-widest text-muted-foreground">
@@ -119,7 +125,22 @@ function ResetPasswordPage() {
             </form>
           )}
 
-          {!ready && message && (
+          {ready === "invalid" && (
+            <div className="mt-6 space-y-3 text-sm text-muted-foreground">
+              <p>
+                Password-reset links expire quickly for security. Request a fresh
+                one from the sign-in page and open it right away.
+              </p>
+              <Link
+                to="/auth"
+                className="inline-block rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
+              >
+                Request a new reset link
+              </Link>
+            </div>
+          )}
+
+          {ready !== "ok" && message && (
             <p
               className={`mt-6 text-sm ${
                 message.tone === "error" ? "text-destructive" : "text-success"
