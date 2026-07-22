@@ -135,8 +135,8 @@ export async function supersedeOlderFinalAudits(
     .in("audit_id", olderIds)
     .in("status", ["open", "fix_drafted"]);
   if (fErr) throw new Error(`supersession: list older findings failed: ${fErr.message ?? fErr}`);
-  const distinctBatchIds = Array.from(
-    new Set(
+  const distinctBatchIds: string[] = Array.from(
+    new Set<string>(
       (openFindings ?? [])
         .map((f: any) => (f.fix_batch_id ? String(f.fix_batch_id) : null))
         .filter((x: string | null): x is string => !!x),
