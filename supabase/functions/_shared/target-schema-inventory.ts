@@ -47,29 +47,162 @@ function empty(): TargetSchemaInventory {
   };
 }
 
+// ---------------- Balanced scanner used by column extraction ----------------
+//
+// Scan forward from an opening '(' and return the substring inside the outer
+// parens plus the index just past the closing ')'. Tracks single-quote,
+// double-quote, backtick, and Postgres dollar-quoted strings so commas /
+// parens inside a default expression or a quoted default do NOT break the
+// split.
+
+function findBalancedParenBody(
+  src: string,
+  openIdx: number,
+): { body: string; endIdx: number } | null {
+  if (src[openIdx] !== "(") return null;
+  let depth = 0;
+  let i = openIdx;
+  const N = src.length;
+  while (i < N) {
+    const c = src[i];
+    // Dollar-quoted string: $tag$ ... $tag$ (tag may be empty)
+    if (c === "$") {
+      const m = /^\$([a-zA-Z_][a-zA-Z0-9_]*)?\$/.exec(src.slice(i));
+      if (m) {
+        const tag = m[0];
+        const end = src.indexOf(tag, i + tag.length);
+        if (end < 0) return null;
+        i = end + tag.length;
+        continue;
+      }
+    }
+    if (c === "'" || c === '"' || c === "`") {
+      // Skip string literal; handle SQL doubled-quote escape ('' or "")
+      const quote = c;
+      i++;
+      while (i < N) {
+        if (src[i] === quote) {
+          if (src[i + 1] === quote) { i += 2; continue; }
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (c === "(") { depth++; i++; continue; }
+    if (c === ")") {
+      depth--;
+      i++;
+      if (depth === 0) {
+        return { body: src.slice(openIdx + 1, i - 1), endIdx: i };
+      }
+      continue;
+    }
+    i++;
+  }
+  return null;
+}
+
+function splitTopLevelCommas(body: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  const N = body.length;
+  let i = 0;
+  while (i < N) {
+    const c = body[i];
+    if (c === "$") {
+      const m = /^\$([a-zA-Z_][a-zA-Z0-9_]*)?\$/.exec(body.slice(i));
+      if (m) {
+        const tag = m[0];
+        const end = body.indexOf(tag, i + tag.length);
+        if (end < 0) { i = N; break; }
+        i = end + tag.length;
+        continue;
+      }
+    }
+    if (c === "'" || c === '"' || c === "`") {
+      const quote = c;
+      i++;
+      while (i < N) {
+        if (body[i] === quote) {
+          if (body[i + 1] === quote) { i += 2; continue; }
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (c === "(") { depth++; i++; continue; }
+    if (c === ")") { depth = Math.max(0, depth - 1); i++; continue; }
+    if (c === "," && depth === 0) {
+      out.push(body.slice(start, i));
+      start = i + 1;
+    }
+    i++;
+  }
+  if (start < N) out.push(body.slice(start));
+  return out;
+}
+
+const TABLE_CONSTRAINT_HEAD =
+  /^(?:CONSTRAINT\b|PRIMARY\s+KEY\b|FOREIGN\s+KEY\b|UNIQUE\s*(?:\(|USING\b)|CHECK\s*\(|EXCLUDE\b|LIKE\b)/i;
+
+function extractInlineColumnsForTable(bodyAfterOpen: string): Set<string> {
+  const cols = new Set<string>();
+  for (const rawItem of splitTopLevelCommas(bodyAfterOpen)) {
+    const item = rawItem.trim();
+    if (!item) continue;
+    if (TABLE_CONSTRAINT_HEAD.test(item)) continue;
+    // Column definition: first token is the column identifier.
+    const m = /^("[^"]+"|`[^`]+`|[a-zA-Z_][a-zA-Z0-9_]*)/.exec(item);
+    if (!m) continue;
+    const name = normalizeIdent(m[1]);
+    if (!name) continue;
+    cols.add(name);
+  }
+  return cols;
+}
+
 /**
  * Parse an ordered list of migration files into an effective schema
- * inventory. Files are processed in the order supplied — callers MUST sort
- * lexicographically by path first, which is how Supabase applies them.
+ * inventory. Files are ALWAYS re-sorted lexicographically by path inside
+ * this function — callers cannot subvert Supabase's own apply order by
+ * passing files in a different sequence.
  */
 export function parseMigrationsToInventory(
   files: readonly MigrationFile[],
 ): TargetSchemaInventory {
   const inv = empty();
 
-  for (const f of files) {
+  // Enforce lexicographic order (Supabase's own migration apply order).
+  const ordered = [...files].sort((a, b) => a.path.localeCompare(b.path));
+
+  for (const f of ordered) {
     const src = stripComments(f.sql ?? "");
 
-    // CREATE TABLE [IF NOT EXISTS] [schema.]name (...)
+    // CREATE TABLE [IF NOT EXISTS] [schema.]name ( column_defs )
     const tableRe = new RegExp(
-      String.raw`\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?${QNAME}`,
+      String.raw`\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?${QNAME}\s*\(`,
       "gi",
     );
     let m: RegExpExecArray | null;
     while ((m = tableRe.exec(src))) {
       const name = normalizeIdent(m[1]);
       inv.tables.add(name);
+      // Parse the column list from the balanced parenthesized body.
+      const openIdx = tableRe.lastIndex - 1;
+      const scan = findBalancedParenBody(src, openIdx);
       if (!inv.columns.has(name)) inv.columns.set(name, new Set());
+      if (scan) {
+        const cols = extractInlineColumnsForTable(scan.body);
+        const target = inv.columns.get(name)!;
+        for (const c of cols) target.add(c);
+        // Advance the regex cursor so column-body parens don't confuse it.
+        tableRe.lastIndex = scan.endIdx;
+      }
     }
 
     // CREATE [OR REPLACE] FUNCTION [schema.]name(...)
@@ -234,10 +367,96 @@ export function renderTargetInventory(inv: TargetSchemaInventory): string {
 export const MIGRATION_MAX_FILES = 400;
 export const MIGRATION_MAX_TOTAL_BYTES = 1_572_864; // 1.5 MiB
 export const MIGRATION_MAX_FILE_BYTES = 262_144; // 256 KiB
+/** Cap on how many provenance entries we persist to compile_meta so a
+ * ~400-file ledger cannot make the row unreasonably large. */
+export const MIGRATION_PROVENANCE_MAX_ENTRIES = 400;
+
+export type ProvenanceEntry = { path: string; bytes: number };
 
 export type LedgerFetchStatus =
-  | { ok: true; files: MigrationFile[]; totalBytes: number }
-  | { ok: false; code: "SCHEMA_LEDGER_TOO_LARGE" | "SCHEMA_LEDGER_FETCH_FAILED"; message: string };
+  | {
+      ok: true;
+      headSha: string;
+      files: MigrationFile[];
+      totalBytes: number;
+      provenance: ProvenanceEntry[];
+    }
+  | {
+      ok: false;
+      code: "SCHEMA_LEDGER_TOO_LARGE" | "SCHEMA_LEDGER_FETCH_FAILED";
+      message: string;
+    };
+
+/** Per-path attempt result used by the pure finalizer. */
+export type MigrationAttempt =
+  | { ok: true; path: string; sql: string; reportedBytes: number | null }
+  | { ok: false; path: string; reason: string };
+
+export type FinalizeInput = {
+  headSha: string;
+  attempts: readonly MigrationAttempt[];
+};
+
+/** UTF-8 byte length of a decoded SQL string. */
+export function utf8Bytes(s: string): number {
+  return new TextEncoder().encode(String(s ?? "")).byteLength;
+}
+
+/**
+ * Pure ledger-finalization helper. Fails closed on:
+ *  - zero attempts (no matching supabase/migrations/*.sql),
+ *  - any per-path failure (never silently skips),
+ *  - any decoded/reported size exceeding the per-file cap,
+ *  - decoded UTF-8 total exceeding the 1.5 MiB ceiling.
+ * Returns ordered provenance and files on success.
+ */
+export function finalizeMigrationLedger(input: FinalizeInput): LedgerFetchStatus {
+  const { headSha, attempts } = input;
+  if (!attempts || attempts.length === 0) {
+    return {
+      ok: false,
+      code: "SCHEMA_LEDGER_FETCH_FAILED",
+      message:
+        "no migration ledger: linked repo has zero supabase/migrations/*.sql files — add the migrations folder and retry",
+    };
+  }
+  const files: MigrationFile[] = [];
+  const provenance: ProvenanceEntry[] = [];
+  let total = 0;
+  // Preserve caller order (already-sorted lexicographically upstream).
+  for (const a of attempts) {
+    if (!a.ok) {
+      return {
+        ok: false,
+        code: "SCHEMA_LEDGER_FETCH_FAILED",
+        message: `failed to fetch ${a.path}: ${a.reason}`,
+      };
+    }
+    const decodedBytes = utf8Bytes(a.sql);
+    const reported = typeof a.reportedBytes === "number" ? a.reportedBytes : decodedBytes;
+    const worst = Math.max(decodedBytes, reported);
+    if (worst > MIGRATION_MAX_FILE_BYTES) {
+      return {
+        ok: false,
+        code: "SCHEMA_LEDGER_TOO_LARGE",
+        message: `migration ${a.path} is ${worst} bytes (cap ${MIGRATION_MAX_FILE_BYTES})`,
+      };
+    }
+    total += decodedBytes;
+    if (total > MIGRATION_MAX_TOTAL_BYTES) {
+      return {
+        ok: false,
+        code: "SCHEMA_LEDGER_TOO_LARGE",
+        message: `migrations exceed ${MIGRATION_MAX_TOTAL_BYTES} bytes (UTF-8 decoded)`,
+      };
+    }
+    files.push({ path: a.path, sql: a.sql });
+    provenance.push({ path: a.path, bytes: decodedBytes });
+  }
+  return { ok: true, headSha, files, totalBytes: total, provenance };
+}
+
+// -------- Schema-touch heuristic + compile-block policy --------
 
 export type SchemaTouchOpts = {
   channel: string;
@@ -255,4 +474,33 @@ export function batchTouchesSchema(opts: SchemaTouchOpts): boolean {
   return /\b(CREATE|ALTER|DROP)\s+(TABLE|POLICY|FUNCTION|TRIGGER|INDEX|VIEW)\b/i.test(t)
     || /supabase\/migrations\//i.test(t)
     || /\bRLS\b|\bROW\s+LEVEL\s+SECURITY\b/i.test(t);
+}
+
+export type LedgerAuthority = {
+  /** true only when we have a usable target ledger to feed the model. */
+  targetInvOk: boolean;
+  /** true when the caller MUST block/persist a 'blocked' compile. */
+  blocked: boolean;
+};
+
+/**
+ * Deterministic policy for how the compiler treats an empty/failed ledger.
+ *  - github + schema-touching + no usable ledger → blocked (fail-closed).
+ *  - github + UI-only batch + no ledger → proceed, but with no schema authority.
+ *  - non-github source → no target inventory considered.
+ */
+export function decideLedgerAuthority(input: {
+  source: "github" | "paste" | string;
+  schemaTouching: boolean;
+  ledgerOk: boolean;
+  ledgerFileCount: number;
+}): LedgerAuthority {
+  if (input.source !== "github") {
+    return { targetInvOk: false, blocked: false };
+  }
+  const usable = input.ledgerOk && input.ledgerFileCount > 0;
+  if (input.schemaTouching && !usable) {
+    return { targetInvOk: false, blocked: true };
+  }
+  return { targetInvOk: usable, blocked: false };
 }
