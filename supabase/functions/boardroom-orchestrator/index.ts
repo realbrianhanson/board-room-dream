@@ -250,8 +250,12 @@ async function executeStep(admin: any, run: any, step: any) {
       return;
     } catch (e) {
       if (e instanceof DailyCapExceeded) {
+        const capCopy =
+          `Daily spend cap hit — ${e.scope} scope. ` +
+          `Cap $${Number(e.cap).toFixed(2)}, spent $${Number(e.spent).toFixed(2)}. ` +
+          `Resets at 00:00 UTC or an admin can raise the cap in Settings.`;
         await admin.from("run_steps").update({ status: "queued", error: "daily_cap" }).eq("id", step.id);
-        await admin.from("boardroom_runs").update({ status: "paused_budget" }).eq("id", run.id);
+        await admin.from("boardroom_runs").update({ status: "paused_budget", error: capCopy }).eq("id", run.id);
         if (run.project_id && run.user_id) {
           await insertAlert(admin, {
             user_id: run.user_id,
@@ -263,8 +267,11 @@ async function executeStep(admin: any, run: any, step: any) {
         return;
       }
       if (e instanceof BudgetExceeded) {
+        const budgetCopy =
+          `Run budget hit — spent $${Number(run.spent_usd ?? 0).toFixed(2)} of $${Number(run.budget_usd ?? 0).toFixed(2)}. ` +
+          `You can resume this run with extra budget.`;
         await admin.from("run_steps").update({ status: "queued", error: "budget" }).eq("id", step.id);
-        await admin.from("boardroom_runs").update({ status: "paused_budget" }).eq("id", run.id);
+        await admin.from("boardroom_runs").update({ status: "paused_budget", error: budgetCopy }).eq("id", run.id);
         if (run.project_id && run.user_id) {
           await insertAlert(admin, {
             user_id: run.user_id,
