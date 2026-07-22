@@ -76,7 +76,7 @@ Deno.test("queues.ts — no unaudited direct run_steps insert may introduce scop
     const lineLead = src.slice(lineStart, idx);
     if (/^\s*(\/\/|\*)/.test(lineLead)) continue;
     const window = src.slice(idx, idx + 800);
-    const m = window.match(/step_key:\s*"([^"]+)"/);
+    const m = window.match(/step_key:\s*["`]([^"`]+)["`]/);
     if (m) found.push(m[1]);
     else found.push("(no-step-key-detected)");
   }
