@@ -27,7 +27,7 @@ const ORCH_URL = `${SUPABASE_URL}/functions/v1/boardroom-orchestrator`;
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every audit-runner change.
-export const BUILD_VERSION = "2026-07-28.source-ceiling-1p5mib.n1";
+export const BUILD_VERSION = "2026-07-28.audit-json-fragment-r2.o1";
 
 function j(status: number, body: any) {
   return new Response(JSON.stringify(body), {
@@ -83,21 +83,20 @@ const SECURITY_CHECKLIST = `SECURITY CHECKLIST (verbatim, must be applied to cod
 - Storage buckets private, user-scoped paths, signed URLs only.
 - Missing optional config never crashes — graceful designed state.`;
 
-import { FINDING_SCHEMA_DOC, CAPS } from "../_shared/audit-findings.ts";
+import { CAPS, MAP_FINDING_SCHEMA_DOC } from "../_shared/audit-findings.ts";
 
 function seatPrompt(seat: "inspector" | "contrarian" | "strategist", isFinal: boolean): string {
   const jsonShape = `Return ONLY valid JSON:
-{
-  "findings": [ ...max ${CAPS.seatFindingsMax} objects... ]
-}
+{ "findings": [ ...max ${CAPS.mapFindingsMax} objects... ] }
 No findings = { "findings": [] }.
 
-${FINDING_SCHEMA_DOC}
+${MAP_FINDING_SCHEMA_DOC}
 
-Output discipline (the merge step rejects violators):
-- MAX ${CAPS.seatFindingsMax} findings. If you have more, keep the highest-severity ones and merge duplicates.
-- Total serialized JSON must be <= ${CAPS.seatSerializedMax} characters.
-- Keep description and evidence tight — the Chair will read every one of yours plus two other seats'.`;
+Output discipline (hard-enforced, the merge step rejects violators):
+- MAX ${CAPS.mapFindingsMax} findings per chunk. If more, keep the highest-severity items with the strongest evidence and merge duplicates.
+- Total serialized JSON MUST be <= ${CAPS.mapSerializedMax} characters.
+- Prefer compact one-line JSON. No prose, no code fences, no trailing partial object — every finding must be a complete JSON object.
+- Cite the original repo-relative file_path (never a "fragment N of M" label).`;
   if (seat === "inspector") {
     return `You are the Inspector. Read the code against the batch contract and PRD. Flag: contract misses (batch prompt says X, code does Y or is missing), broken imports, unreferenced code, incoherent naming, dead flows. ${isFinal ? "This is a full A-Z audit — check that the whole app coheres, not just one batch." : ""}
 ${jsonShape}`;
@@ -148,7 +147,14 @@ export const MAX_TOTAL_BYTES = 1_572_864;
 // profile and is intentionally NOT constrained here.
 export const AUDIT_MAP_TEMPERATURE = 0.2;
 export const AUDIT_MAP_REASONING_EFFORT: "low" | "medium" | "high" = "low";
-export const AUDIT_MAP_MAX_TOKENS = 2400;
+// Increased from 2400 → 4000. Live run e2c5faf3 (audit_inspector_c20) shows the
+// prior 2400 budget was too tight for the schema + model reasoning tokens: the
+// response was structurally complete through three finding objects but ended
+// one token short of the outer "]}". 4000 tokens + the narrower map-schema
+// caps in CAPS.map* give the low-reasoning map call actual headroom. Every
+// other bounded control (temperature, reasoning effort, chunk size, chunk
+// count, timeouts) stays locked.
+export const AUDIT_MAP_MAX_TOKENS = 4000;
 
 // formatFiles() emits, per file:
 //   "\n=== FILE: <path> (<bytes> bytes) ===\n<content>"
