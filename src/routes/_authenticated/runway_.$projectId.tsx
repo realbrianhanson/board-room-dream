@@ -67,6 +67,7 @@ type Batch = {
   built_at: string | null;
   outcome_md: string | null;
   compiled_prompt_md: string | null;
+  compiled_verification_prompt_md: string | null;
   compiled_at: string | null;
   compile_meta: CompileMeta | null;
 };
