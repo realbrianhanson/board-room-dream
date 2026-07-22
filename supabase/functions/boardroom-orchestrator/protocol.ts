@@ -288,10 +288,10 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
 export function correctionForStep(stepKey: string): string {
   const key = String(stepKey ?? "");
   if (key === "batches_chair" || key === "batches_revise_chair") {
-    return "Your JSON was truncated. Return exactly 6 batches; each prompt_md <=2,800 characters; total JSON <=28,000 characters. Preserve required coverage but remove repeated context.";
+    return "Your JSON was truncated. Return exactly 6 batches unless a 7th/8th is strictly required; each prompt_md 900-2,600 characters; total JSON <=24,000 characters. Preserve required coverage but remove repeated context.";
   }
   if (key === "batches_review_inspector" || key === "batches_review_contrarian") {
-    return "Your review JSON was truncated. Return ONLY {verdict, issues}; max 10 issues; each issue.text <=350 characters; total JSON <=6,000 characters. Preserve every blocking issue, merge duplicates, no prose.";
+    return "Your review JSON was truncated. Return ONLY {verdict, issues}; max 8 issues; each issue.text 10-280 characters; total JSON <=4,500 characters. Preserve every blocking issue, merge duplicates, no prose.";
   }
   if (key === "audit_chair_merge") {
     return "Your audit merge JSON was truncated. Preserve the required merge schema; max 30 deduplicated findings; keep every P0/P1; compress evidence; total JSON <=18,000 characters.";
