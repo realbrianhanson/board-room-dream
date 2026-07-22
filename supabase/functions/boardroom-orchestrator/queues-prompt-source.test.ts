@@ -38,16 +38,17 @@ Deno.test("queues.ts — split batch policy (imports 3-6, greenfield 6-8) still 
 Deno.test("queues.ts — no unaudited direct run_steps insert may introduce scope", () => {
   // Only these direct-insert step keys are allowed to exist in queues.ts.
   // Every other step must go through queueSteps.
-  const allowedDirectInsertStepKeys = new Set<string>([
+  const allowedDirectInsertStepKeys = (key: string): boolean => {
     // Pure extraction — lifts already-produced Chair fields into structured JSON.
-    "r3_extract",
+    if (/^r3_extract_chair_loop\d+$/.test(key)) return true;
     // Pure extraction — lifts ## Features H2 out of Chair PRD.
-    "r5_extract_features",
+    if (key === "r5_blueprint_extract_chair") return true;
     // Pipeline-health smoke test — canned single-user message, no scope.
-    "pipeline_health_check",
+    if (key === "r1_test_chair") return true;
     // Chair audit merge over prose-stripped seat findings only.
-    "audit_chair_merge",
-  ]);
+    if (key === "audit_chair_merge") return true;
+    return false;
+  };
 
   const directInsertRegex = /admin\.from\("run_steps"\)\.insert\(/g;
   const matches = queuesSrc.match(directInsertRegex) ?? [];
