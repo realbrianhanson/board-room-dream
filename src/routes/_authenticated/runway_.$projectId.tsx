@@ -777,6 +777,11 @@ function RunwayPage() {
                     copy(b.compiled_prompt_md, "Paste it into Lovable and let it build.");
                   }
                 }}
+                onCopyVerification={() => {
+                  if (b.compiled_verification_prompt_md) {
+                    copy(b.compiled_verification_prompt_md, "Paste this into Lovable after the build finishes.");
+                  }
+                }}
                 onAdvance={(next) => advance(b, next)}
                 onOpenRollback={() => setShowRollback(true)}
                 onRequestSkip={() => setShowSkipConfirm(b)}
