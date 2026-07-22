@@ -386,6 +386,14 @@ ${schemaBlock}
 LIVE CODE (current repo state)${treeBlock}
 ${codePayload}
 
+${renderStackBlock(detectStackFromRepo({
+  fileTree,
+  packageJson: source === "github"
+    ? (fileTree.includes("package.json") ? (codePayload.match(/=== FILE: package\.json ===([\s\S]*?)(?:=== FILE:|$)/)?.[1] ?? null) : null)
+    : (pastedCode ?? null),
+  hasLiveRepo: source === "github" ? fileTree.length > 0 : !!pastedCode,
+}))}
+
 Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=${batch.channel}) now. Produce your JSON.`;
 
   const fileTreeSet = new Set(fileTree);
