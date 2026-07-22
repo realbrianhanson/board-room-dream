@@ -1366,10 +1366,22 @@ async function handleRequest(req: Request): Promise<Response> {
       await admin.from("projects").update({ status: "boardroom" }).eq("id", projectId);
     }
 
-    await createInitialSteps(admin, run);
+    try {
+      await createInitialSteps(admin, run);
+    } catch (e) {
+      if (e instanceof RepoContractUnavailable) {
+        await admin
+          .from("boardroom_runs")
+          .update({ status: "failed", error: e.message })
+          .eq("id", run.id);
+        return j(400, { error: e.message });
+      }
+      throw e;
+    }
     fireSelfTick();
     return j(200, { run_id: run.id, status: "queued" });
   }
+
 
   if (action === "advance" || action === "pause" || action === "resume") {
     const runId: string = body?.run_id;
