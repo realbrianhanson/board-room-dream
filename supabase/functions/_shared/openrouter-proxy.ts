@@ -40,15 +40,34 @@ export class SeatBudgetExceeded extends Error {
   }
 }
 
-// Abort a model call that hangs past this many ms and fail over to the seat's
-// fallback, instead of letting a dead/stuck model (as Kimi K3 was) orphan the
-// step for 15 minutes. Generous enough for legitimate high-reasoning calls;
-// tunable via the OPENROUTER_TIMEOUT_MS secret, clamped to 30s-290s (must stay
-// under the edge function's own wall-clock limit so the abort fires first).
+// Distinct timeout error — the orchestrator (NOT this proxy) is responsible
+// for running the fallback in a fresh edge-function invocation. The platform
+// hard-kills invocations near ~150s and takes in-isolate timers with it, so
+// any fallback attempt inside the same invocation is a lie: it may look like
+// it started, but the isolate is already dead. Callers pattern-match on
+// `isTimeout === true` and requeue the step.
+export class ProxyTimeoutError extends Error {
+  isTimeout = true;
+  attemptedModel: string;
+  ms: number;
+  constructor(model: string, ms: number) {
+    super(`OpenRouter call to ${model} timed out after ${ms}ms`);
+    this.name = "ProxyTimeoutError";
+    this.attemptedModel = model;
+    this.ms = ms;
+  }
+}
+
+// Abort a model call that hangs past this many ms and surface a
+// ProxyTimeoutError so the ORCHESTRATOR can requeue the step with
+// force_fallback in a fresh invocation. Clamped to 30s-115s so the abort
+// always fires well before the platform's ~150s wall-clock cap; tunable via
+// the OPENROUTER_TIMEOUT_MS secret. Default 105s.
 const OPENROUTER_TIMEOUT_MS = Math.min(
-  290_000,
-  Math.max(30_000, Number(Deno.env.get("OPENROUTER_TIMEOUT_MS") ?? 150_000)),
+  115_000,
+  Math.max(30_000, Number(Deno.env.get("OPENROUTER_TIMEOUT_MS") ?? 105_000)),
 );
+
 
 // Multimodal content parts (OpenRouter follows the OpenAI shape). Design runs
 // attach signed screenshot URLs so the board critiques what it can actually see.
