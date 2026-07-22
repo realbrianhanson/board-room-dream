@@ -839,13 +839,18 @@ export async function queueBatchesStep(admin: any, run: any) {
     .limit(1)
     .maybeSingle();
 
-  const designSection = design?.content_md
-    ? `LOCKED DESIGN BRIEF\n\n${design.content_md}\n\nBatch 1 MUST install these design tokens (CSS variables, Tailwind config, font imports) BEFORE any feature work.`
+  const compactDesign = compactMarkdown(design?.content_md ?? "", COMPACT_ARTIFACT_CAP);
+  const designSection = compactDesign
+    ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}\n\nBatch 1 MUST install these design tokens (CSS variables, Tailwind config, font imports) BEFORE any feature work.`
     : `NO LOCKED DESIGN BRIEF — do not fabricate one. The student will convene the Design Council later.`;
 
-  // May throw RepoContractUnavailable for import projects — the caller
-  // catches and fails the run with a human-readable error.
-  const repoContract = await loadLiveRepoContract(admin, project);
+  // Compact repo contract for batch-generation only. The JIT batch-compiler
+  // regrounds each specific batch against the full live code/schema before
+  // Copy is enabled — this stage only needs enough evidence to spot invented
+  // paths and stack mismatches. May throw RepoContractUnavailable for imports.
+  const repoContract = await loadCompactBatchRepoContract(admin, project);
+  const compactPlan = compactMarkdown(plan?.content_md ?? "", COMPACT_ARTIFACT_CAP);
+  const compactPrd = compactMarkdown(plan?.prd_md ?? "", COMPACT_ARTIFACT_CAP);
 
   const system = `You are the Chair, sequencing this student's build for their Lovable project. Produce 6-8 dependency-safe, single-concern build batches (STRONGLY PREFER 6) that turn the locked plan + PRD into a shippable app — core batches first, then clearly-labeled Enhancement batches so lower-priority value is never silently dropped.
 
