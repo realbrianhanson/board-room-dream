@@ -148,6 +148,37 @@ export function batchAuthorityError(
   opts: { source: "github" | "paste"; schemaObjects?: Set<string> } = { source: "github" },
 ): string | null {
   if (p.status !== "ready") return null; // only ready prompts need scope enforcement
+  // Verification prompt is required for code channels (lovable + supabase), forbidden for human.
+  const isCode = isCodeChannel(batch.channel);
+  const vp = p.compiled_verification_prompt_md ?? "";
+  if (isCode) {
+    if (!vp || !vp.trim()) {
+      return `status 'ready' requires a non-empty compiled_verification_prompt_md for ${batch.channel} batches.`;
+    }
+    if (vp.length < 250 || vp.length > 1500) {
+      return `compiled_verification_prompt_md is ${vp.length} chars — must be 250–1500.`;
+    }
+    if (!/^\s*Verify\s+Batch\s+\d+\s+after\s+implementation\.\s+Do\s+not\s+change\s+product\s+scope\./i.test(vp)) {
+      return `compiled_verification_prompt_md must start with "Verify Batch N after implementation. Do not change product scope."`;
+    }
+    // Tool routing: lovable → browser test; supabase → direct edge/RPC + Deno test.
+    if (batch.channel === "lovable" && !/browser\s+test|user\s+flow|click/i.test(vp)) {
+      return `lovable verification prompt must invoke Lovable's browser testing / user flow verification.`;
+    }
+    if (batch.channel === "supabase" && !/(edge\s+function|rpc|deno\s+test|edge-function\s+verification)/i.test(vp)) {
+      return `supabase verification prompt must invoke direct edge-function/RPC calls and Deno tests.`;
+    }
+  } else {
+    // human channel — must not carry a verification prompt.
+    if (vp && vp.trim()) {
+      return `human channel batches must not include a compiled_verification_prompt_md.`;
+    }
+  }
+
+  fileTreeSet: Set<string>,
+  opts: { source: "github" | "paste"; schemaObjects?: Set<string> } = { source: "github" },
+): string | null {
+  if (p.status !== "ready") return null; // only ready prompts need scope enforcement
   if (!titleSemanticallyMatches(p.compiled_prompt_md, batch.title)) {
     return `Compiled prompt title does not semantically match the current batch title "${batch.title}". The current batch row is authoritative — never substitute an older plan's same-number batch.`;
   }
