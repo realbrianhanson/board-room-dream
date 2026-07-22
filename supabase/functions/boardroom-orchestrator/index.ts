@@ -220,49 +220,58 @@ function withHardTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T
   });
 }
 
-async function requeueForTimeout(admin: any, step: any): Promise<void> {
+// Atomic parent-aware requeue: the SECURITY DEFINER RPC locks the parent
+// run, transitions the step only when the parent is still active
+// (queued/running/paused/paused_budget); otherwise terminalizes the step
+// with error='cancelled_parent_terminal'. Returns 'requeued' |
+// 'cancelled_parent_terminal' | 'not_found'.
+async function requeueStepIfParentActive(
+  admin: any,
+  stepId: string,
+  newRequest: any,
+  newError: string,
+): Promise<"requeued" | "cancelled_parent_terminal" | "not_found"> {
+  const { data, error } = await admin.rpc("requeue_step_if_parent_active", {
+    p_step_id: stepId,
+    p_new_request: newRequest,
+    p_new_error: newError,
+  });
+  if (error) throw new Error(`requeue_step_if_parent_active failed: ${error.message ?? error}`);
+  const out = String(data ?? "");
+  return (out === "requeued" || out === "cancelled_parent_terminal") ? out : "not_found";
+}
+
+async function requeueForTimeout(admin: any, step: any): Promise<string> {
   const timeoutAttempts = Number(step.request?._timeout_attempts ?? 0) + 1;
-  await admin
-    .from("run_steps")
-    .update({
-      status: "queued",
-      started_at: null,
-      completed_at: null,
-      error: "timeout_failover",
-      request: {
-        ...(step.request ?? {}),
-        _timeout_attempts: timeoutAttempts,
-        // Never switch back to the timed-out primary — the reserve answers next.
-        force_fallback: true,
-      },
-    })
-    .eq("id", step.id);
+  return await requeueStepIfParentActive(
+    admin,
+    step.id,
+    {
+      ...(step.request ?? {}),
+      _timeout_attempts: timeoutAttempts,
+      // Never switch back to the timed-out primary — the reserve answers next.
+      force_fallback: true,
+    },
+    "timeout_failover",
+  );
 }
 
-// Body-stream/transport failure on a 2xx OpenRouter response (e.g.
-// "error reading a body from connection"): no usable provider response was
-// ever read, so cost/tokens were correctly NOT recorded by the proxy. Requeue
-// fresh on the SAME model (transport errors are not a model-quality signal —
-// do NOT switch to fallback). Capped at one fresh retry; a second such
-// failure is terminal with a clear transport-retry-exhausted error.
-async function requeueForBodyTransport(admin: any, step: any, attempts: number): Promise<void> {
-  await admin
-    .from("run_steps")
-    .update({
-      status: "queued",
-      started_at: null,
-      completed_at: null,
-      error: "body_transport_requeued",
-      request: {
-        ...(step.request ?? {}),
-        _transport_attempts: attempts,
-        // Explicitly do NOT flip force_fallback — same model, fresh invocation.
-      },
-    })
-    .eq("id", step.id);
+// Body-stream/transport failure on a 2xx OpenRouter response. Fresh retry on
+// the SAME model (transport is not a model-quality signal); one retry max —
+// caller already decided that via decideTransportRequeue.
+async function requeueForBodyTransport(admin: any, step: any, attempts: number): Promise<string> {
+  return await requeueStepIfParentActive(
+    admin,
+    step.id,
+    {
+      ...(step.request ?? {}),
+      _transport_attempts: attempts,
+    },
+    "body_transport_requeued",
+  );
 }
 
-async function requeueForValidation(admin: any, step: any, baseMessages: any[], assistantContent: string, validationError: string, truncated: boolean): Promise<void> {
+async function requeueForValidation(admin: any, step: any, baseMessages: any[], assistantContent: string, validationError: string, truncated: boolean): Promise<string> {
   const attempts = Number(step.request?._validation_attempts ?? 0) + 1;
   const correctionText = truncated
     ? correctionForStep(step.step_key)
@@ -272,20 +281,16 @@ async function requeueForValidation(admin: any, step: any, baseMessages: any[], 
     { role: "assistant", content: assistantContent },
     { role: "user", content: correctionText },
   ];
-  await admin
-    .from("run_steps")
-    .update({
-      status: "queued",
-      started_at: null,
-      completed_at: null,
-      error: truncated ? "truncated_output_requeued" : "invalid_json_requeued",
-      request: {
-        ...(step.request ?? {}),
-        messages: correctionMessages,
-        _validation_attempts: attempts,
-      },
-    })
-    .eq("id", step.id);
+  return await requeueStepIfParentActive(
+    admin,
+    step.id,
+    {
+      ...(step.request ?? {}),
+      messages: correctionMessages,
+      _validation_attempts: attempts,
+    },
+    truncated ? "truncated_output_requeued" : "invalid_json_requeued",
+  );
 }
 
 
