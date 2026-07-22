@@ -1244,6 +1244,10 @@ If verdict is "clean", findings is [] and fix_prompt_md is "".
 
 Coverage honesty: the summary must state how much of the app was actually read (the CODE COVERAGE line below). Never imply full A-Z coverage beyond what the seats reviewed.`;
 
+  // DIRECT INSERT (allow-listed): audit merge. Input is pre-normalized,
+  // prose-stripped seat findings only (see buildMergeInput). The Chair
+  // dedupes and assigns final severities against deterministic caps and
+  // validators; no plan/PRD/features/design/CR scope can be introduced here.
   await admin.from("run_steps").insert({
     run_id: run.id,
     user_id: run.user_id,
