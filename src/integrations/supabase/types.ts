@@ -718,6 +718,8 @@ export type Database = {
           dissent_ledger: Json | null
           features: Json | null
           id: string
+          invalidated_reason: string | null
+          is_build_safe: boolean
           is_chair_ruled: boolean
           kind: string
           locked_at: string
@@ -733,6 +735,8 @@ export type Database = {
           dissent_ledger?: Json | null
           features?: Json | null
           id?: string
+          invalidated_reason?: string | null
+          is_build_safe?: boolean
           is_chair_ruled?: boolean
           kind?: string
           locked_at?: string
@@ -748,6 +752,8 @@ export type Database = {
           dissent_ledger?: Json | null
           features?: Json | null
           id?: string
+          invalidated_reason?: string | null
+          is_build_safe?: boolean
           is_chair_ruled?: boolean
           kind?: string
           locked_at?: string
