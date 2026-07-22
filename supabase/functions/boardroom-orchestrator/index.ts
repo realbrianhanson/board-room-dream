@@ -1112,10 +1112,14 @@ async function pipelineTick(admin: any) {
         .update({ status: "failed", error: "stuck_model_call", completed_at: new Date().toISOString() })
         .eq("id", st.id)
         .eq("status", "running");
-      await admin
+      const { data: staleRun } = await admin
         .from("boardroom_runs")
-        .update({ status: "failed", error: `Step ${st.step_key} kept timing out — even the fallback model could not answer in time.` })
-        .eq("id", st.run_id);
+        .select("id, kind, consensus")
+        .eq("id", st.run_id)
+        .maybeSingle();
+      if (staleRun) {
+        await failRun(admin, staleRun, `Step ${st.step_key} kept timing out — even the fallback model could not answer in time.`);
+      }
       continue;
     }
     await admin
