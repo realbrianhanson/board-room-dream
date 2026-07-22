@@ -714,7 +714,7 @@ Return ONLY valid JSON matching this shape:
       ],
     },
   }));
-  await admin.from("run_steps").insert(rows);
+  await queueSteps(admin, run, rows);
 }
 
 
