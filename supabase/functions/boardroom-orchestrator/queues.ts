@@ -782,7 +782,7 @@ Return ONLY valid JSON:
   "issues": [ { "batch_no": <number or null>, "severity": "blocking"|"major"|"minor", "text": "specific issue and the fix" } ]
 }`;
   const user = `AMENDED PLAN\n\n${String(verdictJson?.amended_plan_md ?? "")}\n\nAMENDED PRD\n\n${String(verdictJson?.amended_prd_md ?? "")}\n\nAMENDED FEATURES\n\n${JSON.stringify(verdictJson?.amended_features ?? [], null, 2)}\n\nEXISTING BUILD BATCHES\n\n${batchesBlock}\n\nProduce your JSON now.`;
-  await admin.from("run_steps").insert({
+  await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
     step_key: "cr_review_inspector",
