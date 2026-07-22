@@ -1297,7 +1297,7 @@ async function afterStepComplete(admin: any, runIn: any) {
     try {
       await queueBatchesReview(admin, run, draft.response_json);
     } catch (e) {
-      if (e instanceof RepoContractUnavailable) {
+      if (e instanceof RepoContractUnavailable || e instanceof BatchContextTooLarge) {
         await failRun(admin, run, e.message);
         return;
       }
