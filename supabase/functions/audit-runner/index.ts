@@ -467,7 +467,7 @@ async function beginAudit(params: {
           ? { baseSha, maxFiles: 200, maxTotalBytes: MAX_CHUNKS * CHUNK_BYTES, preferKeyFiles: true }
           : { baseSha },
       );
-      chunks = isFinal ? chunkFiles(res.files) : [formatFiles(res.files)];
+      chunks = isFinal ? chunkFiles(res.files) : chunkFiles(res.files);
       fileTree = res.fileTree;
       filesAnalyzed = res.files.length;
       headSha = res.headSha;
@@ -477,7 +477,12 @@ async function beginAudit(params: {
 
   } else {
     if (!pastedCode || !pastedCode.trim()) return { error: "Empty pasted code" as const };
-    chunks = [fitPasted(pastedCode)];
+    // Batch/paste audits also fan out into map chunks so a single request
+    // can never exceed CHUNK_BYTES. fitPasted() already truncates at
+    // MAX_PASTE_BYTES (200 KiB), well inside the 1.28 MiB total ceiling.
+    const trimmed = fitPasted(pastedCode);
+    const encoded = new TextEncoder().encode(trimmed);
+    chunks = chunkFiles([{ path: "pasted-code", content: trimmed, bytes: encoded.length }]);
     filesAnalyzed = 1;
   }
 
