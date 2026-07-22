@@ -310,12 +310,12 @@ async function callOpenRouter(
       signal: controller.signal,
     });
   } catch (e) {
-    // A hung model that never responds gets aborted here — tag it so callSeat
-    // fails over to the fallback instead of orphaning the step.
+    // A hung model that never responds gets aborted here — throw a distinct
+    // ProxyTimeoutError so callSeat's caller (the orchestrator) can requeue
+    // the step with force_fallback in a fresh invocation. NEVER start a
+    // fallback call inside this same invocation; the platform will kill it.
     if ((e as Error)?.name === "AbortError") {
-      const err = new Error(`OpenRouter call timed out after ${OPENROUTER_TIMEOUT_MS}ms`);
-      (err as any).isTimeout = true;
-      throw err;
+      throw new ProxyTimeoutError(String(body?.model ?? "unknown"), OPENROUTER_TIMEOUT_MS);
     }
     throw e;
   } finally {
@@ -336,6 +336,7 @@ async function callOpenRouter(
     raw: json,
   };
 }
+
 
 async function recordCall(
   admin: SupabaseClient,
