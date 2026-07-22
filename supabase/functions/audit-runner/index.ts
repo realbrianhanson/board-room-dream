@@ -27,7 +27,7 @@ const ORCH_URL = `${SUPABASE_URL}/functions/v1/boardroom-orchestrator`;
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every audit-runner change.
-export const BUILD_VERSION = "2026-07-28.audit-truthfulness.r1";
+export const BUILD_VERSION = "2026-07-28.audit-finalization-r2";
 
 function j(status: number, body: any) {
   return new Response(JSON.stringify(body), {
@@ -108,8 +108,9 @@ ${SECURITY_CHECKLIST}
 
 ${jsonShape}`;
   }
-  return `You are the Strategist. Review UX, copy, and flows against the design brief and plan. Even though your seat charter is prepended by the shared caller, explicitly cover on every chunk: buyer reachability (can the stated buyer actually be reached and activated by this UI?), a concrete paid offer with a price anchor and upgrade trigger, first-90-second activation (what happens the moment a new user lands?), a screenshot-worthy wow moment, and "Unlike X…" positioning against real alternatives. Flag: generic AI-SaaS drift, missing empty/error/loading states, broken user journeys, ugly or off-brand copy, off-token colors/fonts.
+  return `You are the Strategist. Review UX, copy, and flows against the design brief and plan. Across the full audit you must cover buyer reachability (can the stated buyer actually be reached and activated by this UI?), a concrete paid offer with a price anchor and upgrade trigger, first-90-second activation (what happens the moment a new user lands?), a screenshot-worthy wow moment, and "Unlike X…" positioning against real alternatives. On each individual chunk, assess only those dimensions the current chunk contains evidence for — a backend-only chunk (edge functions, SQL migrations, RPC helpers with no UI/marketing surface) that cannot prove a UX/market issue MUST return NO finding for these dimensions; do NOT synthesize a P0/P1 UX/positioning claim from backend code alone. Flag: generic AI-SaaS drift, missing empty/error/loading states, broken user journeys, ugly or off-brand copy, off-token colors/fonts.
 ${jsonShape}`;
+
 }
 
 // Map-reduce: large repos are split into chunks; every seat reviews every
