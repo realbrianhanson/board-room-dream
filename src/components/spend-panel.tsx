@@ -9,61 +9,82 @@ export function SpendPanel() {
   const [cap, setCap] = useState<number>(25);
   const [capScope, setCapScope] = useState<"cohort" | "default">("default");
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [authed, setAuthed] = useState<boolean>(true);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       setLoading(true);
-      const { data: userRes } = await supabase.auth.getUser();
-      const uid = userRes.user?.id;
-      if (!uid) return;
+      setError(null);
+      try {
+        const { data: userRes, error: authErr } = await supabase.auth.getUser();
+        if (authErr) throw authErr;
+        const uid = userRes.user?.id;
+        if (!uid) {
+          if (cancelled) return;
+          setAuthed(false);
+          setLoading(false);
+          return;
+        }
+        setAuthed(true);
 
-      const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-      const { data } = await supabase
-        .from("cost_ledger")
-        .select("created_at, cost_usd, project_id")
-        .eq("user_id", uid)
-        .gte("created_at", since)
-        .order("created_at", { ascending: false });
-      const list = (data ?? []) as Row[];
-      setRows(list);
+        const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        const { data, error: ledgerErr } = await supabase
+          .from("cost_ledger")
+          .select("created_at, cost_usd, project_id")
+          .eq("user_id", uid)
+          .gte("created_at", since)
+          .order("created_at", { ascending: false });
+        if (ledgerErr) throw ledgerErr;
+        const list = (data ?? []) as Row[];
+        if (cancelled) return;
+        setRows(list);
 
-      // Resolve cap.
-      const { data: profile } = await supabase.from("profiles").select("cohort_id").eq("id", uid).maybeSingle();
-      let resolved: number | null = null;
-      if (profile?.cohort_id) {
-        const { data: cohort } = await supabase
-          .from("cohorts")
-          .select("daily_cap_usd")
-          .eq("id", profile.cohort_id)
-          .maybeSingle();
-        if (cohort?.daily_cap_usd != null) {
-          const n = Number(cohort.daily_cap_usd);
-          if (Number.isFinite(n) && n > 0) {
-            resolved = n;
-            setCapScope("cohort");
+        // Resolve cap.
+        const { data: profile } = await supabase.from("profiles").select("cohort_id").eq("id", uid).maybeSingle();
+        let resolved: number | null = null;
+        if (profile?.cohort_id) {
+          const { data: cohort } = await supabase
+            .from("cohorts")
+            .select("daily_cap_usd")
+            .eq("id", profile.cohort_id)
+            .maybeSingle();
+          if (cohort?.daily_cap_usd != null) {
+            const n = Number(cohort.daily_cap_usd);
+            if (Number.isFinite(n) && n > 0) {
+              resolved = n;
+              setCapScope("cohort");
+            }
           }
         }
-      }
-      if (resolved == null) {
-        const { data: setting } = await supabase
-          .from("app_settings")
-          .select("value")
-          .eq("key", "default_daily_cap_usd")
-          .maybeSingle();
-        const usd = Number((setting?.value as { usd?: number } | null)?.usd);
-        resolved = Number.isFinite(usd) && usd > 0 ? usd : 25;
-        setCapScope("default");
-      }
-      setCap(resolved);
+        if (resolved == null) {
+          const { data: setting } = await supabase
+            .from("app_settings")
+            .select("value")
+            .eq("key", "default_daily_cap_usd")
+            .maybeSingle();
+          const usd = Number((setting?.value as { usd?: number } | null)?.usd);
+          resolved = Number.isFinite(usd) && usd > 0 ? usd : 25;
+          setCapScope("default");
+        }
+        if (cancelled) return;
+        setCap(resolved);
 
-      // Project names
-      const ids = Array.from(new Set(list.map((r) => r.project_id).filter(Boolean))) as string[];
-      if (ids.length) {
-        const { data: projs } = await supabase.from("projects").select("id, name").in("id", ids);
-        setProjectNames(Object.fromEntries((projs ?? []).map((p: { id: string; name: string }) => [p.id, p.name])));
+        const ids = Array.from(new Set(list.map((r) => r.project_id).filter(Boolean))) as string[];
+        if (ids.length) {
+          const { data: projs } = await supabase.from("projects").select("id, name").in("id", ids);
+          if (cancelled) return;
+          setProjectNames(Object.fromEntries((projs ?? []).map((p: { id: string; name: string }) => [p.id, p.name])));
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setError((e as Error).message ?? "Failed to load spend data.");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      setLoading(false);
     })();
+    return () => { cancelled = true; };
   }, []);
 
   if (loading) {
@@ -71,6 +92,20 @@ export function SpendPanel() {
       <div className="space-y-2">
         <div className="h-24 animate-pulse rounded-md bg-surface-2" />
         <div className="h-32 animate-pulse rounded-md bg-surface-2" />
+      </div>
+    );
+  }
+  if (!authed) {
+    return (
+      <div className="rounded-md border border-border bg-surface-2 p-4 text-sm text-muted-foreground">
+        Sign in to view your spend.
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="rounded-md border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+        Couldn't load spend data — {error}. Refresh the page to retry.
       </div>
     );
   }
