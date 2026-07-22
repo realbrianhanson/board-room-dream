@@ -36,7 +36,9 @@ import {
   queueRound3,
   queueRound3Extract,
   queueRound4,
+  RepoContractUnavailable,
 } from "./queues.ts";
+
 
 
 const CORS = {
@@ -85,7 +87,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-22.audit-lifecycle.1";
+const BUILD_VERSION = "2026-07-22.grounded-batches.1";
 
 // Terminal-fail a run and, when it drives an audit, fail the audit row in
 // lockstep so audits/runs never drift. Budget pauses and recoverable requeues
@@ -943,16 +945,33 @@ async function afterStepComplete(admin: any, runIn: any) {
       return;
     }
 
-    // Stage 3: a revision exists — ship it (fall back to the draft if the
-    // revision came back invalid; a reviewed draft beats a dead run).
+    // Stage 3: a revision exists — ship it, but NEVER fall back to the
+    // unrevised draft once reviewers demanded changes. A silent fallback is
+    // what shipped invented UPDATE targets.
     const revise = steps.find((x: any) => x.step_key === "batches_revise_chair");
     if (revise) {
-      const revised = revise.status === "completed" && revise.response_json && !revise.response_json.invalid
-        ? revise.response_json
-        : draft.response_json;
-      await finalizeBatches(admin, run, revised.batches ?? []);
+      const ok = revise.status === "completed" && revise.response_json && !revise.response_json.invalid;
+      const revisedList: any[] = ok && Array.isArray(revise.response_json.batches)
+        ? revise.response_json.batches
+        : [];
+      // Extra guard: re-run validation even if executeStep already accepted it.
+      const validationError = ok
+        ? validateStepJson("batches_revise_chair", revise.response_json)
+        : (revise.response_json?.validation_error ?? revise.error ?? "batches_revise_chair did not complete");
+      if (!ok || validationError || !revisedList.length) {
+        await admin
+          .from("boardroom_runs")
+          .update({
+            status: "failed",
+            error: `The Chair's revision failed after reviewers flagged blocking issues: ${validationError ?? "empty batches list"}. Draft and reviewer notes are preserved in run_steps for diagnosis.`,
+          })
+          .eq("id", run.id);
+        return;
+      }
+      await finalizeBatches(admin, run, revisedList);
       return;
     }
+
 
     // Stage 2: reviews are in — decide whether the Chair must revise.
     const reviews = steps.filter((x: any) => x.step_key.startsWith("batches_review_"));
@@ -963,7 +982,15 @@ async function afterStepComplete(admin: any, runIn: any) {
         (Array.isArray(x.response_json.issues) && x.response_json.issues.some((i: any) => i?.severity === "blocking")),
       );
       if (needsRevision) {
-        await queueBatchesRevise(admin, run, draft.response_json, completed);
+        try {
+          await queueBatchesRevise(admin, run, draft.response_json, completed);
+        } catch (e) {
+          if (e instanceof RepoContractUnavailable) {
+            await failRun(admin, run, e.message);
+            return;
+          }
+          throw e;
+        }
         fireSelfTick();
         return;
       }
@@ -972,10 +999,19 @@ async function afterStepComplete(admin: any, runIn: any) {
     }
 
     // Stage 1: the draft just landed — send it to review.
-    await queueBatchesReview(admin, run, draft.response_json);
+    try {
+      await queueBatchesReview(admin, run, draft.response_json);
+    } catch (e) {
+      if (e instanceof RepoContractUnavailable) {
+        await failRun(admin, run, e.message);
+        return;
+      }
+      throw e;
+    }
     fireSelfTick();
     return;
   }
+
 
 
   if (run.kind !== "plan" && run.kind !== "design") {
@@ -1326,10 +1362,22 @@ async function handleRequest(req: Request): Promise<Response> {
       await admin.from("projects").update({ status: "boardroom" }).eq("id", projectId);
     }
 
-    await createInitialSteps(admin, run);
+    try {
+      await createInitialSteps(admin, run);
+    } catch (e) {
+      if (e instanceof RepoContractUnavailable) {
+        await admin
+          .from("boardroom_runs")
+          .update({ status: "failed", error: e.message })
+          .eq("id", run.id);
+        return j(400, { error: e.message });
+      }
+      throw e;
+    }
     fireSelfTick();
     return j(200, { run_id: run.id, status: "queued" });
   }
+
 
   if (action === "advance" || action === "pause" || action === "resume") {
     const runId: string = body?.run_id;
@@ -1386,5 +1434,129 @@ async function handleRequest(req: Request): Promise<Response> {
     return j(200, { ok: true });
   }
 
+  if (action === "regenerate_batches") {
+    const projectId: string = body?.project_id;
+    if (!projectId) return j(400, { error: "Missing project_id" });
+    const { data: project } = await admin
+      .from("projects")
+      .select("id, user_id")
+      .eq("id", projectId)
+      .maybeSingle();
+    if (!project || project.user_id !== userId) return j(404, { error: "Project not found" });
+
+    // Refuse if an active batches run is already in flight.
+    {
+      const { data: activeRuns } = await admin
+        .from("boardroom_runs")
+        .select("id")
+        .eq("project_id", projectId)
+        .eq("user_id", userId)
+        .eq("kind", "batches")
+        .in("status", ["queued", "running", "paused", "paused_budget"]);
+      if (activeRuns && activeRuns.length > 0) {
+        return j(409, { error: "A batches run is already in flight. Resume or cancel it before regenerating." });
+      }
+    }
+
+    // Refuse unless every current batch is completely untouched.
+    const { data: currentBatches } = await admin
+      .from("batches")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("batch_no", { ascending: true });
+    const list = currentBatches ?? [];
+    if (!list.length) return j(400, { error: "No batches to regenerate. Run the Chair's batches step from Runway." });
+    const touched = list.find((b: any) =>
+      b.status !== "pending" ||
+      b.sent_at !== null ||
+      b.built_at !== null ||
+      (b.outcome_md !== null && b.outcome_md !== "") ||
+      b.compiled_at !== null,
+    );
+    if (touched) {
+      return j(409, { error: `Batch ${touched.batch_no} has already been touched (status=${touched.status}). Safe regenerate only works when the whole sequence is still untouched.` });
+    }
+    const batchIds = list.map((b: any) => b.id);
+    const { data: refAudits } = await admin
+      .from("audits")
+      .select("id")
+      .in("batch_id", batchIds);
+    if (refAudits && refAudits.length > 0) {
+      return j(409, { error: "One or more current batches already have audits linked. Cannot safely regenerate." });
+    }
+
+    // 1. Archive.
+    const { data: archive, error: archErr } = await admin
+      .from("batch_generation_archives")
+      .insert({
+        project_id: projectId,
+        user_id: userId,
+        batches_json: list,
+      })
+      .select("id")
+      .single();
+    if (archErr || !archive) return j(500, { error: `Failed to archive batches: ${archErr?.message ?? "unknown"}` });
+
+    // 2. Delete only the verified-untouched batches.
+    const { error: delErr } = await admin
+      .from("batches")
+      .delete()
+      .in("id", batchIds);
+    if (delErr) {
+      // Nothing was deleted yet — safe to abort. Archive remains for auditability.
+      return j(500, { error: `Failed to clear old batches: ${delErr.message}` });
+    }
+
+    // 3. Kick off a fresh batches run. On any failure, restore from archive.
+    async function restore() {
+      await admin.from("batches").insert(
+        list.map((b: any) => {
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { id: _oldId, ...rest } = b;
+          return rest;
+        }),
+      );
+    }
+
+    const { data: constRow } = await admin
+      .from("app_settings")
+      .select("version")
+      .eq("key", "constitution")
+      .maybeSingle();
+
+    const { data: run, error: rerr } = await admin
+      .from("boardroom_runs")
+      .insert({
+        project_id: projectId,
+        user_id: userId,
+        kind: "batches",
+        status: "queued",
+        round_no: 1,
+        loop_no: 0,
+        constitution_version: constRow?.version ?? 1,
+        budget_usd: 3.0,
+        consensus: { regenerated_from_archive: archive.id },
+      })
+      .select("*")
+      .single();
+    if (rerr || !run) {
+      await restore();
+      return j(500, { error: `Failed to create regen run (restored old batches): ${rerr?.message ?? "unknown"}` });
+    }
+    try {
+      await createInitialSteps(admin, run);
+    } catch (e) {
+      await admin.from("boardroom_runs").delete().eq("id", run.id);
+      await restore();
+      const msg = e instanceof RepoContractUnavailable
+        ? e.message
+        : `Failed to seed regen run (restored old batches): ${(e as Error).message}`;
+      return j(400, { error: msg });
+    }
+    fireSelfTick();
+    return j(200, { run_id: run.id, archived_count: list.length });
+  }
+
   return j(400, { error: "Unknown action" });
 }
+
