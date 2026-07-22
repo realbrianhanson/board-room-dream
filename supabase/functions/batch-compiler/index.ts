@@ -19,7 +19,7 @@ import { assembleFromGithub, formatFiles, ghToken, redactSecrets } from "../_sha
 import { loadFieldManual } from "../_shared/lovable-field-manual.ts";
 import { batchAuthorityError, shapeError, type Parsed } from "./validators.ts";
 
-const BUILD_VERSION = "2026-07-22.compile-authority.f1b";
+const BUILD_VERSION = "2026-07-22.lovable-execution-contract.g1";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
