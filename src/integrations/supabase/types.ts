@@ -122,11 +122,15 @@ export type Database = {
       audit_findings: {
         Row: {
           audit_id: string
+          confidence: string
           created_at: string
           description: string | null
+          evidence: string | null
           file_path: string | null
           fix_batch_id: string | null
           id: string
+          line_end: number | null
+          line_start: number | null
           seat: string | null
           severity: string
           status: string
@@ -135,11 +139,15 @@ export type Database = {
         }
         Insert: {
           audit_id: string
+          confidence?: string
           created_at?: string
           description?: string | null
+          evidence?: string | null
           file_path?: string | null
           fix_batch_id?: string | null
           id?: string
+          line_end?: number | null
+          line_start?: number | null
           seat?: string | null
           severity: string
           status?: string
@@ -148,11 +156,15 @@ export type Database = {
         }
         Update: {
           audit_id?: string
+          confidence?: string
           created_at?: string
           description?: string | null
+          evidence?: string | null
           file_path?: string | null
           fix_batch_id?: string | null
           id?: string
+          line_end?: number | null
+          line_start?: number | null
           seat?: string | null
           severity?: string
           status?: string

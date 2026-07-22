@@ -65,25 +65,32 @@ const SECURITY_CHECKLIST = `SECURITY CHECKLIST (verbatim, must be applied to cod
 - Instructor access ONLY via cohort-scoped security-definer views/policies.
 - api_keys: encrypted at rest, NO client-readable RLS ever; used only server-side.
 - Edge functions require the owner's JWT and reject the anon key. Cron uses PIPELINE_SECRET.
-- No secrets in frontend code, no hardcoded keys.
+- No secrets in frontend code, no hardcoded keys. A Supabase anon/publishable key in the frontend bundle is NOT a secret leak — only an actual private credential, service-role key, or unredacted high-entropy secret counts.
 - Spend caps and model allowlist enforced server-side.
 - Storage buckets private, user-scoped paths, signed URLs only.
 - Missing optional config never crashes — graceful designed state.`;
 
+import { FINDING_SCHEMA_DOC, CAPS } from "../_shared/audit-findings.ts";
+
 function seatPrompt(seat: "inspector" | "contrarian" | "strategist", isFinal: boolean): string {
   const jsonShape = `Return ONLY valid JSON:
 {
-  "findings": [
-    { "severity": "P0"|"P1"|"P2"|"P3", "file_path": "path/or/empty", "title": "short", "description": "what and why, one paragraph" }
-  ]
+  "findings": [ ...max ${CAPS.seatFindingsMax} objects... ]
 }
-No findings = { "findings": [] }.`;
+No findings = { "findings": [] }.
+
+${FINDING_SCHEMA_DOC}
+
+Output discipline (the merge step rejects violators):
+- MAX ${CAPS.seatFindingsMax} findings. If you have more, keep the highest-severity ones and merge duplicates.
+- Total serialized JSON must be <= ${CAPS.seatSerializedMax} characters.
+- Keep description and evidence tight — the Chair will read every one of yours plus two other seats'.`;
   if (seat === "inspector") {
     return `You are the Inspector. Read the code against the batch contract and PRD. Flag: contract misses (batch prompt says X, code does Y or is missing), broken imports, unreferenced code, incoherent naming, dead flows. ${isFinal ? "This is a full A-Z audit — check that the whole app coheres, not just one batch." : ""}
 ${jsonShape}`;
   }
   if (seat === "contrarian") {
-    return `You are the Contrarian. Attack the code with the security checklist. Every violation is at minimum P1; auth/RLS/secret leaks are P0.
+    return `You are the Contrarian. Attack the code with the security checklist. Every violation is at minimum P1 IF you can name the exact vulnerable construct with evidence; a filename alone or "this pattern is risky" is not enough — downgrade to P2/P3 or drop it. Auth/RLS/secret leaks with concrete evidence are P0.
 
 ${SECURITY_CHECKLIST}
 

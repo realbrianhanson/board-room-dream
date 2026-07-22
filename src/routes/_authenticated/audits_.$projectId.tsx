@@ -21,7 +21,11 @@ type Audit = {
   source: "github" | "paste" | null;
   head_sha: string | null;
   files_analyzed: number | null;
-  summary: { counts?: Record<string, number>; text?: string } | null;
+  summary: {
+    counts?: Record<string, number>;
+    text?: string;
+    validation_downgrades?: Array<{ title: string; file_path: string | null; from: string; to: string; reason: string }>;
+  } | null;
   created_at: string;
   completed_at: string | null;
 };
@@ -33,6 +37,10 @@ type Finding = {
   file_path: string | null;
   title: string;
   description: string | null;
+  evidence: string | null;
+  confidence: "high" | "medium" | "low";
+  line_start: number | null;
+  line_end: number | null;
   status: "open" | "fix_drafted" | "resolved" | "dismissed";
   seat: string | null;
   fix_batch_id: string | null;
@@ -176,14 +184,31 @@ function AuditCenterPage() {
                   <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${SEV_STYLE[f.severity]}`}>
                     {f.severity}
                   </span>
+                  <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${
+                    f.confidence === "high" ? "border-[hsl(160_45%_48%/0.4)] text-[hsl(160_45%_72%)] bg-[hsl(160_45%_28%/0.15)]"
+                    : f.confidence === "low" ? "border-border text-muted-foreground bg-surface-2"
+                    : "border-primary/35 text-[hsl(38_65%_75%)] bg-primary/10"
+                  }`}>
+                    {f.confidence} confidence
+                  </span>
                   {f.seat && <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">{f.seat}</span>}
-                  {f.file_path && <span className="font-mono text-[11px] text-muted-foreground">{f.file_path}</span>}
+                  {f.file_path && (
+                    <span className="font-mono text-[11px] text-muted-foreground">
+                      {f.file_path}
+                      {f.line_start ? `:${f.line_start}${f.line_end && f.line_end !== f.line_start ? `-${f.line_end}` : ""}` : ""}
+                    </span>
+                  )}
                   {f.status === "fix_drafted" && (
                     <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[hsl(38_65%_72%)]">Fix batch drafted</span>
                   )}
                 </div>
                 <p className="mt-2 text-sm text-foreground">{f.title}</p>
                 {f.description && <p className="mt-1 text-xs text-muted-foreground">{f.description}</p>}
+                {f.evidence && (
+                  <p className="mt-2 border-l border-border pl-3 font-mono text-[11px] text-muted-foreground/90">
+                    Evidence — {f.evidence}
+                  </p>
+                )}
                 {(f.severity === "P2" || f.severity === "P3") && f.status === "open" && (
                   <button
                     onClick={() => dismiss(f)}
@@ -313,6 +338,23 @@ function AuditCenterPage() {
               </span>
             </div>
             {finalAudit.summary?.text && <p className="mt-3 text-sm text-foreground/85">{finalAudit.summary.text}</p>}
+            {finalAudit.summary?.validation_downgrades && finalAudit.summary.validation_downgrades.length > 0 && (
+              <div className="mt-4 rounded-md border border-border/60 bg-surface-2 p-3">
+                <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
+                  Downgraded by the board — {finalAudit.summary.validation_downgrades.length} unsupported serious claim(s) rescored
+                </p>
+                <ul className="mt-2 space-y-1">
+                  {finalAudit.summary.validation_downgrades.map((d, i) => (
+                    <li key={i} className="font-mono text-[11px] text-muted-foreground">
+                      <span className="text-[hsl(38_65%_72%)]">{d.from} → {d.to}</span>
+                      {" · "}{d.title}
+                      {d.file_path ? ` (${d.file_path})` : ""}
+                      {" · "}{d.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {finalAudit.status === "clean" && !isImport && (
               <p className="mt-3 inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.22em] text-[hsl(160_45%_70%)]">
                 <Check className="h-4 w-4" /> Passed A–Z. Ship it.

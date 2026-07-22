@@ -90,7 +90,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-22.lovable-execution-contract.g1";
+const BUILD_VERSION = "2026-07-23.audit-evidence.h1";
 
 // Terminal-fail a run and, when it drives an audit, fail the audit row in
 // lockstep so audits/runs never drift. Budget pauses and recoverable requeues
@@ -713,31 +713,50 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
   }
   const { data: audit } = await admin.from("audits").select("*").eq("id", auditId).maybeSingle();
   if (!audit) {
-    await admin.from("boardroom_runs").update({ status: "failed", error: "audit row missing" }).eq("id", run.id);
+    await failRun(admin, run, "audit row missing");
     return;
   }
 
-  const verdict = parsed?.verdict === "clean" ? "clean" : "findings";
+  // Normalize → dedupe → downgrade unsupported P0/P1. Validators live in
+  // _shared/audit-findings.ts; we always end up with schema-clean rows.
+  const { normalizeFindings, dedupeFindings, downgradeUnsupported, validateMerged } =
+    await import("../_shared/audit-findings.ts");
   const rawFindings = Array.isArray(parsed?.findings) ? parsed.findings : [];
-  const findings = rawFindings.filter((f: any) => f && typeof f.title === "string" && f.title.trim());
+  const normalized = normalizeFindings(rawFindings);
+  const deduped = dedupeFindings(normalized);
+  const { findings, downgrades } = downgradeUnsupported(deduped);
 
+  // Hard validator gate. If model produced structurally impossible data
+  // (too many, oversize, bad lines) after normalization, treat as merge
+  // failure — audit ends failed, no partial findings, no fix batch.
+  const vErr = validateMerged(findings);
+  if (vErr) {
+    await admin
+      .from("audits")
+      .update({ status: "failed", completed_at: new Date().toISOString(), summary: { error: `merge_validation_failed: ${vErr}` } })
+      .eq("id", auditId);
+    await failRun(admin, run, `audit_chair_merge failed validation: ${vErr}`);
+    return;
+  }
+
+  const verdict = parsed?.verdict === "clean" || findings.length === 0 ? "clean" : "findings";
   const filesAnalyzed = Number(run.consensus?.files_analyzed ?? 0) || null;
 
   const summary = {
     verdict,
     text: String(parsed?.summary ?? ""),
     counts: {
-      P0: findings.filter((f: any) => f.severity === "P0").length,
-      P1: findings.filter((f: any) => f.severity === "P1").length,
-      P2: findings.filter((f: any) => f.severity === "P2").length,
-      P3: findings.filter((f: any) => f.severity === "P3").length,
+      P0: findings.filter((f) => f.severity === "P0").length,
+      P1: findings.filter((f) => f.severity === "P1").length,
+      P2: findings.filter((f) => f.severity === "P2").length,
+      P3: findings.filter((f) => f.severity === "P3").length,
     },
+    validation_downgrades: downgrades,
   };
 
   const isFinal = audit.kind === "final_az";
 
   if (verdict === "clean") {
-    // Resolve any prior open findings for this batch.
     if (audit.batch_id) {
       await admin
         .from("audit_findings")
@@ -754,7 +773,6 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
       .eq("id", auditId);
     if (audit.batch_id) {
       await admin.from("batches").update({ status: "passed" }).eq("id", audit.batch_id);
-      // If this batch is a fix, also pass the parent.
       const { data: fixBatch } = await admin
         .from("batches")
         .select("parent_batch_id")
@@ -762,7 +780,6 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
         .maybeSingle();
       if (fixBatch?.parent_batch_id) {
         await admin.from("batches").update({ status: "passed" }).eq("id", fixBatch.parent_batch_id);
-        // Resolve prior open findings on the parent's audits too.
         const { data: parentAudits } = await admin
           .from("audits")
           .select("id")
@@ -779,7 +796,6 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
     }
 
     if (isFinal) {
-      // Append a final human QA batch to the runway.
       const qa = String(parsed?.final_qa_prompt_md ?? "").trim();
       if (qa) {
         const { data: last } = await admin
@@ -800,7 +816,6 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
           status: "pending",
         });
       }
-      // Imports continue into improvement work — do NOT mark 'done'.
       const { data: proj } = await admin
         .from("projects")
         .select("is_import")
@@ -826,9 +841,11 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
 
   let fixBatchId: string | null = null;
   const fixPrompt = String(parsed?.fix_prompt_md ?? "").trim();
-  const hasSerious = findings.some((f: any) => ["P0", "P1", "P2"].includes(f.severity));
+  // Only SUPPORTED (post-downgrade) P0/P1 can trigger a fix batch.
+  const supportedSerious = findings.filter((f) => f.severity === "P0" || f.severity === "P1");
+  const hasSupportedSerious = supportedSerious.length > 0;
 
-  if (!isFinal && audit.batch_id && hasSerious && fixPrompt) {
+  if (!isFinal && audit.batch_id && hasSupportedSerious && fixPrompt) {
     const { data: parent } = await admin
       .from("batches")
       .select("batch_no, title")
@@ -857,10 +874,7 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
     await admin.from("batches").update({ status: "fix_needed" }).eq("id", audit.batch_id);
   }
 
-  // Final A-Z audits: any serious findings + a real fix prompt must NOT be
-  // silently discarded. Append one pending Lovable fix batch at the next
-  // integer batch_no and link the findings to it.
-  if (isFinal && hasSerious && fixPrompt) {
+  if (isFinal && hasSupportedSerious && fixPrompt) {
     const { data: last } = await admin
       .from("batches")
       .select("batch_no")
@@ -888,21 +902,24 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
 
   if (findings.length) {
     await admin.from("audit_findings").insert(
-      findings.map((f: any) => ({
+      findings.map((f) => ({
         audit_id: auditId,
         user_id: audit.user_id,
-        seat: typeof f.seat === "string" ? f.seat : null,
-        severity: ["P0", "P1", "P2", "P3"].includes(f.severity) ? f.severity : "P2",
-        file_path: typeof f.file_path === "string" ? f.file_path : null,
-        title: String(f.title).slice(0, 500),
-        description: typeof f.description === "string" ? f.description : null,
-        fix_batch_id: fixBatchId,
-        status: fixBatchId ? "fix_drafted" : "open",
+        seat: f.seat,
+        severity: f.severity,
+        file_path: f.file_path,
+        title: f.title,
+        description: f.description,
+        evidence: f.evidence || null,
+        confidence: f.confidence,
+        line_start: f.line_start,
+        line_end: f.line_end,
+        fix_batch_id: (f.severity === "P0" || f.severity === "P1") ? fixBatchId : null,
+        status: (f.severity === "P0" || f.severity === "P1") && fixBatchId ? "fix_drafted" : "open",
       })),
     );
   }
 
-  // Loop-2+ with unresolved findings → needs human eyes.
   if (Number(audit.loop_no ?? 1) >= 2 && findings.length && audit.project_id) {
     let batchTitle = "";
     if (audit.batch_id) {
@@ -916,7 +933,6 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
       detail: { batch_title: batchTitle, loop_no: Number(audit.loop_no ?? 1), counts: summary.counts },
     });
   }
-
 
   await admin
     .from("boardroom_runs")
