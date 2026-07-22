@@ -20,6 +20,7 @@ import {
   checkConsensus,
   resolveConsensusThreshold,
   validateStepJson,
+  correctionForStep,
 } from "./protocol.ts";
 import {
   createInitialSteps,
@@ -89,7 +90,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-22.batch-output-integrity.e1";
+const BUILD_VERSION = "2026-07-22.structured-correction-routing.e1b";
 
 // Terminal-fail a run and, when it drives an audit, fail the audit row in
 // lockstep so audits/runs never drift. Budget pauses and recoverable requeues
@@ -217,7 +218,7 @@ async function requeueForTimeout(admin: any, step: any): Promise<void> {
 async function requeueForValidation(admin: any, step: any, baseMessages: any[], assistantContent: string, validationError: string, truncated: boolean): Promise<void> {
   const attempts = Number(step.request?._validation_attempts ?? 0) + 1;
   const correctionText = truncated
-    ? `Your JSON was truncated. Return exactly 6 batches; each prompt_md <=2,800 characters; total JSON <=28,000 characters. Preserve required coverage but remove repeated context.`
+    ? correctionForStep(step.step_key)
     : `Your previous response failed validation: ${validationError}\nReturn ONLY the required JSON object, no prose, no code fences.`;
   const correctionMessages = [
     ...baseMessages,
@@ -239,6 +240,7 @@ async function requeueForValidation(admin: any, step: any, baseMessages: any[], 
     })
     .eq("id", step.id);
 }
+
 
 async function executeStep(admin: any, run: any, step: any) {
   const baseMessages = step.request?.messages ?? [];
