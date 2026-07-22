@@ -515,6 +515,33 @@ export function evaluateChairMergeCandidate(parsed: unknown): ChairMergeEvaluati
   return { error, findings, downgrades, summary, verdict };
 }
 
+// R3 — audit-summary reconciliation. Given the Chair's raw summary text and
+// the POST-downgrade severity counts persisted alongside it, guarantee the
+// persisted summary text never asserts a severity class that the counts do
+// not support. Live regression (audit 2d953efb): counts.P0 === 0 but the
+// summary text said "P0". Deterministic policy:
+//   - If counts.P0 === 0 and the raw text contains a "P0" token, drop the
+//     raw text entirely and replace it with a derived counts sentence so
+//     the persisted summary cannot mislead a reader about severity mix.
+//   - Otherwise, prefix the raw text with a compact counts sentence and
+//     truncate to the merge summary cap.
+export type AuditCounts = { P0: number; P1: number; P2: number; P3: number };
+export function reconcileAuditSummaryText(rawText: string, counts: AuditCounts): string {
+  const text = String(rawText ?? "").trim();
+  const countsSentence =
+    `Validated counts: P0=${counts.P0}, P1=${counts.P1}, P2=${counts.P2}, P3=${counts.P3}.`;
+  const mentionsP0 = /\bP0\b/.test(text);
+  if (counts.P0 === 0 && mentionsP0) {
+    // The Chair's summary claims a P0 the counts contradict — refuse to
+    // persist that. Use derived text alone.
+    return countsSentence.slice(0, CAPS.mergeSummaryMax);
+  }
+  const combined = text ? `${countsSentence} ${text}` : countsSentence;
+  return combined.length > CAPS.mergeSummaryMax
+    ? combined.slice(0, CAPS.mergeSummaryMax - 1) + "…"
+    : combined;
+}
+
 export function validateSeatReport(findings: CleanFinding[]): string | null {
   if (findings.length > CAPS.seatFindingsMax) {
     return `seat findings has ${findings.length} entries — max ${CAPS.seatFindingsMax}.`;
