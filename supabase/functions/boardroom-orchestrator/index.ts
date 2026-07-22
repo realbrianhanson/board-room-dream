@@ -217,6 +217,29 @@ async function requeueForTimeout(admin: any, step: any): Promise<void> {
     .eq("id", step.id);
 }
 
+// Body-stream/transport failure on a 2xx OpenRouter response (e.g.
+// "error reading a body from connection"): no usable provider response was
+// ever read, so cost/tokens were correctly NOT recorded by the proxy. Requeue
+// fresh on the SAME model (transport errors are not a model-quality signal —
+// do NOT switch to fallback). Capped at one fresh retry; a second such
+// failure is terminal with a clear transport-retry-exhausted error.
+async function requeueForBodyTransport(admin: any, step: any, attempts: number): Promise<void> {
+  await admin
+    .from("run_steps")
+    .update({
+      status: "queued",
+      started_at: null,
+      completed_at: null,
+      error: "body_transport_requeued",
+      request: {
+        ...(step.request ?? {}),
+        _transport_attempts: attempts,
+        // Explicitly do NOT flip force_fallback — same model, fresh invocation.
+      },
+    })
+    .eq("id", step.id);
+}
+
 async function requeueForValidation(admin: any, step: any, baseMessages: any[], assistantContent: string, validationError: string, truncated: boolean): Promise<void> {
   const attempts = Number(step.request?._validation_attempts ?? 0) + 1;
   const correctionText = truncated
