@@ -381,10 +381,19 @@ export function BoardroomSession(props: BoardroomSessionProps) {
       {run?.status === "failed" && run.error && (
         <div className="mt-8 flex items-start gap-3 rounded-xl border border-[hsl(8_60%_45%/0.4)] bg-[hsl(8_60%_45%/0.08)] p-5">
           <AlertTriangle className="mt-0.5 h-4 w-4 text-[hsl(8_60%_65%)]" />
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="font-mono text-[11px] uppercase tracking-widest text-[hsl(8_60%_65%)]">Session failed</p>
             <p className="mt-1 text-sm text-foreground">{run.error}</p>
           </div>
+          {!readOnly && isOwner && !gateReason && (
+            <button
+              onClick={convene}
+              disabled={convening}
+              className="shrink-0 rounded-md border border-[hsl(38_65%_55%/0.5)] bg-[hsl(38_65%_55%/0.08)] px-3 py-1.5 font-mono text-[11px] uppercase tracking-widest text-[hsl(38_65%_70%)] hover:bg-[hsl(38_65%_55%/0.14)] disabled:opacity-50"
+            >
+              {convening ? "Reconvening…" : "Reconvene"}
+            </button>
+          )}
         </div>
       )}
 
