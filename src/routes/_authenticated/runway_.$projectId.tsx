@@ -50,6 +50,9 @@ type CompileMeta = {
   based_on?: { outcomes: number; findings: number };
   drift_notes?: string[];
   rationale?: string;
+  touched_paths?: { path: string; action: "update" | "create"; reason: string }[];
+  evidence?: { claim: string; path: string; detail: string }[];
+  build_version?: string;
 };
 
 type Batch = {
