@@ -451,11 +451,13 @@ Return ONLY valid JSON matching this shape:
     request: {
       json_output: true,
       reasoning_effort: "high",
+      max_tokens: 10000,
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
       ],
     },
+
   });
 }
 
