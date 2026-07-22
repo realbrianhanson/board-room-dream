@@ -1226,7 +1226,7 @@ Coverage honesty: the summary must state how much of the app was actually read (
     status: "queued",
     request: {
       json_output: true,
-      reasoning_effort: "medium",
+      reasoning_effort: "low",
       max_tokens: 6500,
       messages: [
         { role: "system", content: system },
