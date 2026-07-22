@@ -303,6 +303,15 @@ export function isBatchGenerationStep(stepKey: string | null | undefined): boole
   return k === "batches_chair" || k === "batches_revise_chair" || k.startsWith("batches_review_");
 }
 
+// Audit map/extraction steps (per-chunk per-seat). Echoing the truncated
+// prior response back to the model was letting it re-emit the same
+// near-cap output and truncate identically. For these steps we always
+// drop the echo and rely on the tightened correction copy alone.
+export function isAuditMapStep(stepKey: string | null | undefined): boolean {
+  const k = String(stepKey ?? "");
+  return /^audit_(chair|strategist|contrarian|inspector|reserve)(_c\d+)?$/.test(k) && k !== "audit_chair_merge";
+}
+
 // ============================== Validation retry builder ==============================
 
 // Pure, testable retry builder. The correction pass echoes the invalid
