@@ -5,6 +5,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { assembleFromGithub, ghToken, redactSecrets } from "../_shared/github-payload.ts";
 import { loadFieldManual } from "../_shared/lovable-field-manual.ts";
 import { checkFinalAuditEligibility } from "../_shared/audit-eligibility.ts";
+import { renderImportContract } from "../_shared/import-contract.ts";
 import {
   type ContractBatch,
   renderContractSection,
