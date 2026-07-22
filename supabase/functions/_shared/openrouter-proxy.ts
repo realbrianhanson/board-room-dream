@@ -402,32 +402,24 @@ async function recordCall(
   costUsd: number,
   options: ProxyOptions,
 ) {
-  await admin.from("cost_ledger").insert({
-    user_id: userId,
-    project_id: options.projectId ?? null,
-    run_id: options.runId ?? null,
-    seat,
-    model_id: modelId,
-    tokens_in: tokensIn,
-    tokens_out: tokensOut,
-    cost_usd: costUsd,
+  // Atomic: single SECURITY DEFINER RPC inserts the ledger row and updates
+  // the run's spent_usd + budget_warning in one transaction. Replaces the
+  // prior insert + read-modify-write, which race-lost concurrent seat calls.
+  const { error } = await admin.rpc("record_model_call_atomic", {
+    p_user_id: userId,
+    p_project_id: options.projectId ?? null,
+    p_run_id: options.runId ?? null,
+    p_seat: seat,
+    p_model_id: modelId,
+    p_tokens_in: tokensIn,
+    p_tokens_out: tokensOut,
+    p_cost_usd: costUsd,
   });
-  if (options.runId) {
-    const { data: run } = await admin
-      .from("boardroom_runs")
-      .select("spent_usd, budget_usd, budget_warning")
-      .eq("id", options.runId)
-      .maybeSingle();
-    if (run) {
-      const newSpent = Number(run.spent_usd) + costUsd;
-      const patch: any = { spent_usd: newSpent };
-      if (!run.budget_warning && newSpent >= Number(run.budget_usd) * 0.8) {
-        patch.budget_warning = true;
-      }
-      await admin.from("boardroom_runs").update(patch).eq("id", options.runId);
-    }
+  if (error) {
+    throw new Error(`record_model_call_atomic failed: ${error.message}`);
   }
 }
+
 
 export async function callSeat(
   userId: string,
