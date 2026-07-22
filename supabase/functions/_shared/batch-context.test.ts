@@ -256,8 +256,15 @@ Deno.test("buildValidationRetryRequest — small base + small assistant echo ret
 });
 
 Deno.test("buildValidationRetryRequest — near-cap base + oversized echo drops echo and states both errors", () => {
-  const bigOwner = "OWNER AUTHORITY marker\n" + "x".repeat(70_000);
+  const bigOwner = "OWNER AUTHORITY marker\n" + "x".repeat(80_000);
   const draft = "FINAL FEATURE ITEM: launch checklist";
+  const baseMessages = [
+    { role: "system", content: bigOwner },
+    { role: "user", content: `FEATURES\n\n- [mvp] Auth\n- [mvp] Dashboard\n\n${draft}` },
+  ];
+  const baseRequest = { model: "chair", messages: baseMessages };
+  // 30K assistant echo pushes with_echo past MAX (100K).
+  const assistant = "y".repeat(30_000);
   const baseMessages = [
     { role: "system", content: bigOwner },
     { role: "user", content: `FEATURES\n\n- [mvp] Auth\n- [mvp] Dashboard\n\n${draft}` },
