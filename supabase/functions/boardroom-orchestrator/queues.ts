@@ -1191,7 +1191,7 @@ Severities:
 - P2: notable UX / copy / design-brief drift, minor a11y, small refactor.
 - P3: nits and polish suggestions.
 
-P0/P1 MUST have concrete repo-relative file_path, specific evidence explaining the exact vulnerable/broken construct, and confidence high/medium. If you can only justify a filename or a category of risk, downgrade to P2 — the validator will do it anyway.
+P0/P1 MUST have concrete repo-relative file_path, evidence containing a verbatim "QUOTE: <exact excerpt> | WHY: <reason>" pair from the cited file, and confidence high/medium. If you can only justify a filename, a category of risk, or a semantic paraphrase without a quote, downgrade to P2 — the validator will do it anyway. Cumulative-ledger rule: an older SQL migration is NOT proof of current effective state; corroborate against later migrations, current grants/policies/triggers, or current code before promoting to P0/P1. Client-side route/UI role checks are navigation UX, not the authorization boundary; do NOT call them an exploit unless the server (RLS/RPC/edge/security-definer) is concretely bypassable with a QUOTE. Do NOT invent security-contract requirements (e.g. profiles.role is not automatically unsafe when triggers/policies prevent self-mutation). Cross-file composition counts: seats do NOT share the identical full prompt — callSeat in supabase/functions/_shared/openrouter-proxy.ts prepends the constitution and each model_registry.role_prompt before the shared task system message; do not assert absence without a QUOTE from the wrapper.
 
 ${FINDING_SCHEMA_DOC}
 

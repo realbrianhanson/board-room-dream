@@ -244,6 +244,16 @@ function isConcreteEvidence(ev: string): boolean {
   return true;
 }
 
+// P0/P1 evidence must include the deterministic "QUOTE: <excerpt> | WHY:
+// <reason>" marker introduced by the audit-truthfulness pass. Semantic
+// paraphrases without a verbatim quote are always downgraded to P2.
+export function hasQuoteWhyMarker(ev: string): boolean {
+  const t = String(ev ?? "");
+  if (!/\bQUOTE:\s*\S/.test(t)) return false;
+  if (!/\bWHY:\s*\S/.test(t)) return false;
+  return true;
+}
+
 export function downgradeUnsupported(
   findings: CleanFinding[],
 ): { findings: CleanFinding[]; downgrades: DowngradeRecord[] } {
@@ -253,6 +263,7 @@ export function downgradeUnsupported(
     const reasons: string[] = [];
     if (!isConcretePath(f.file_path)) reasons.push("missing concrete file_path");
     if (!isConcreteEvidence(f.evidence)) reasons.push("evidence lacks concrete detail");
+    if (!hasQuoteWhyMarker(f.evidence)) reasons.push("evidence missing QUOTE:/WHY: marker");
     if (f.confidence === "low") reasons.push("confidence low");
     if (reasons.length === 0) return f;
     downgrades.push({
@@ -360,7 +371,7 @@ export const MAP_FINDING_SCHEMA_DOC = `Each finding MUST be an object with EXACT
   "file_path": "repo-relative path (never a fragment label like 'fragment 3 of 5')",
   "title": "<=${CAPS.mapTitleMax} chars, one short line",
   "description": "<=${CAPS.mapDescriptionMax} chars, one to two sentences: what is broken and why",
-  "evidence": "<=${CAPS.mapEvidenceMax} chars, concrete: exact vulnerable construct, verbatim short quote, or precise data-flow. A filename alone or a speculative risk is NOT evidence.",
+  "evidence": "<=${CAPS.mapEvidenceMax} chars. For P0/P1 the evidence MUST use the marker form: 'QUOTE: <exact short excerpt from the file> | WHY: <one sentence reason it proves the issue>'. A filename alone, a speculative risk, or a semantic paraphrase without the QUOTE/WHY markers will be downgraded to P2 by the shared validator.",
   "confidence": "high"|"medium"|"low",
   "line_start": integer > 0 or null,
   "line_end": integer > 0 (>= line_start) or null
@@ -368,8 +379,14 @@ export const MAP_FINDING_SCHEMA_DOC = `Each finding MUST be an object with EXACT
 
 Serious findings (P0/P1) require:
 - a concrete repo-relative file_path,
-- specific evidence explaining the exact vulnerable/broken construct,
+- a verbatim QUOTE: <excerpt> | WHY: <reason> pair in the evidence,
 - confidence "high" or "medium".
+
+Cumulative-ledger rule: SQL migrations are a cumulative ledger. An older migration is NOT proof of the current effective state. Corroborate any P0/P1 based on a migration against later migrations / current grants / current RLS policies / current triggers / current code — the QUOTE must come from the CURRENT effective definition, not a superseded one. Otherwise downgrade to P2 or drop.
+
+Client-side vs server-side authorization: a client-side route/UI role check is navigation UX, not the authorization boundary. Do NOT flag it as an exploit unless the underlying server (RLS / RPC / edge function / security-definer) is concretely bypassable and you can QUOTE the vulnerable server construct.
+
+Cross-file composition: prompts, wrappers, and providers compose across files. Do NOT claim "seats share the same prompt" or "no constitution is prepended" without a QUOTE from the actual wrapper — the current source (e.g. callSeat in supabase/functions/_shared/openrouter-proxy.ts prepends the constitution and each model_registry.role_prompt) wins over any model claim of absence.
 
 Fragment-boundary rule (hard):
 - The CODE section may show one or more files split across labelled fragments ("fragment N of M"). A non-first fragment MAY begin mid-token, mid-statement, or mid-comment; a non-final fragment MAY end mid-token. Never report a file as truncated, malformed, or syntactically broken based ONLY on a fragment boundary. Report syntax truncation only when the FULL file boundary is present or you have concrete full-file evidence.
