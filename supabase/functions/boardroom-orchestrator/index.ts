@@ -1017,9 +1017,6 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
     validation_downgrades: downgrades,
   };
 
-
-  const isFinal = audit.kind === "final_az";
-
   if (verdict === "clean") {
     if (audit.batch_id) {
       await admin
