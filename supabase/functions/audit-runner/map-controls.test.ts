@@ -21,9 +21,9 @@ Deno.test("audit map controls are the locked bounded values (temperature/reasoni
   assertEquals(AUDIT_MAP_MAX_TOKENS, 4000);
 });
 
-Deno.test("chunk shape stays at 64 KiB × 20 (bounded audit map payload)", () => {
+Deno.test("chunk shape stays at 64 KiB × 25 (bounded audit map payload, R4)", () => {
   assertEquals(CHUNK_BYTES, 64 * 1024);
-  assertEquals(MAX_CHUNKS, 20);
+  assertEquals(MAX_CHUNKS, 25);
 });
 
 Deno.test("map-schema caps are the tightened AUDIT-JSON-FRAGMENT-R2 values", () => {
@@ -82,4 +82,11 @@ Deno.test("chair merge request contract — low reasoning, 6500 tokens, no map t
     !/\btemperature\s*:\s*0\.2\b/.test(window),
     "chair merge must not inherit the map temperature cap",
   );
+});
+
+Deno.test("R4: audit final_az budget remains $12 (locked)", async () => {
+  const src = await Deno.readTextFile(new URL("./index.ts", import.meta.url));
+  const m = src.match(/kind:\s*"final_az"[^}]*budget:\s*([0-9.]+)/);
+  if (!m) throw new Error("could not find final_az budget in audit-runner");
+  if (m[1] !== "12.0") throw new Error(`expected 12.0 budget, got ${m[1]}`);
 });

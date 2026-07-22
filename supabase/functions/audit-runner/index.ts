@@ -27,7 +27,7 @@ const ORCH_URL = `${SUPABASE_URL}/functions/v1/boardroom-orchestrator`;
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every audit-runner change.
-export const BUILD_VERSION = "2026-07-28.audit-json-fragment-r2.o1";
+export const BUILD_VERSION = "2026-07-28.audit-chunk-capacity-r4.q1";
 
 function j(status: number, body: any) {
   return new Response(JSON.stringify(body), {
@@ -115,8 +115,8 @@ ${jsonShape}`;
 // Map-reduce: large repos are split into chunks; every seat reviews every
 // chunk in its own step, and the Chair merge dedupes across chunk reports.
 // Single-chunk audits keep the legacy step keys (audit_<seat>).
-// The 64 KiB × 20 rendered budget is the model-facing hard cap and MUST NOT
-// change here — those controls keep every map request bounded. The SOURCE
+// The 64 KiB rendered per-chunk budget is the model-facing hard cap and MUST
+// NOT change here — that control keeps every map request bounded. The SOURCE
 // ceiling below is deliberately decoupled from CHUNK_BYTES * MAX_CHUNKS: it
 // governs how large a repository we agree to ingest at all, before chunking.
 // individual map request now stays well under the model's context/latency
@@ -125,16 +125,18 @@ ${jsonShape}`;
 // characters on the last chunk). chunkFilesFor bin-packs greedily and
 // fragments files at UTF-8-safe boundaries when file sizes don't line up with
 // the CHUNK_BYTES grid — every RENDERED chunk (the formatFiles() output that
-// actually ships in the model request) stays <= 64 KiB, count <= 20. The
-// SOURCE ceiling is a fixed 1,572,864 bytes (1.5 MiB) — raised from 1.2 MiB
-// to accommodate the current GitHub snapshot (~1,231,172 bytes) plus
-// reasonable near-term growth. Genuine oversize still fails loud: repos over
-// the source ceiling are rejected before any model spend, and packings that
-// exceed 20 × 64 KiB rendered capacity fail loud at chunkFilesFor with the
+// actually ships in the model request) stays <= 64 KiB. MAX_CHUNKS is 25
+// (AUDIT-CHUNK-CAPACITY-R4): the 1.5 MiB SOURCE ceiling plus per-file /
+// per-fragment wrapper overhead can produce up to ~21 rendered chunks at the
+// enforced 200-file GitHub cap; 25 gives a small safety margin without
+// widening any per-request budget. The SOURCE ceiling is a fixed 1,572,864
+// bytes (1.5 MiB). Genuine oversize still fails loud: repos over the source
+// ceiling are rejected before any model spend, and packings that exceed
+// 25 × 64 KiB rendered capacity fail loud at chunkFilesFor with the
 // MAX_CHUNKS error. Fragments retain the original file path so audit
 // evidence still cites real paths.
 export const CHUNK_BYTES = 64 * 1024;
-export const MAX_CHUNKS = 20;
+export const MAX_CHUNKS = 25;
 // Source-byte ceiling (encoded file content only, excluding per-file wrapper
 // overhead). Deliberately decoupled from CHUNK_BYTES * MAX_CHUNKS so wrapper
 // growth never expands the underlying source budget.

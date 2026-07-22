@@ -84,12 +84,12 @@ function reassemble(
   }
 }
 
-Deno.test("shape constants: 64 KiB × 20 rendered budget UNCHANGED; SOURCE ceiling 1.5 MiB; fragment header reserve 22", () => {
+Deno.test("shape constants: 64 KiB × 25 rendered budget (R4); SOURCE ceiling 1.5 MiB; fragment header reserve 22", () => {
   assertEquals(CHUNK_BYTES, 64 * 1024);
-  assertEquals(MAX_CHUNKS, 20);
+  assertEquals(MAX_CHUNKS, 25);
   assertEquals(MAX_TOTAL_BYTES, 1_572_864);
   // Fragment marker reserve is new in AUDIT-JSON-FRAGMENT-R2. Worst-case
-  // " (fragment 20 of 20)" is 20 bytes; 22 gives a small safety margin.
+  // " (fragment 25 of 25)" is 20 bytes; 22 gives a small safety margin.
   assertEquals(AUDIT_FRAGMENT_HEADER_RESERVE, 22);
   if (MAX_TOTAL_BYTES === CHUNK_BYTES * MAX_CHUNKS) {
     throw new Error("MAX_TOTAL_BYTES must be decoupled from CHUNK_BYTES * MAX_CHUNKS");
@@ -190,9 +190,39 @@ Deno.test("boundary: one byte above MAX_TOTAL_BYTES is rejected with source-ceil
   assertThrows(() => chunkFilesFor(files), Error, "exceeds ceiling");
 });
 
-Deno.test("21st-chunk rejection: assertChunkInvariants refuses handcrafted 21 groups", () => {
+Deno.test("26th-chunk rejection: assertChunkInvariants refuses handcrafted 26 groups", () => {
   const groups = Array.from({ length: MAX_CHUNKS + 1 }, () => [f("x.ts", 4096)]);
   assertThrows(() => assertChunkInvariants(groups), Error, "MAX_CHUNKS");
+});
+
+Deno.test("R4: current GitHub snapshot with fragment labels packs within <=25 chunks", () => {
+  // 1,231,172 bytes snapshot that triggered the R4 report — with fragment
+  // headers and per-file overhead this now needs >20 chunks; must fit in 25.
+  const CURRENT_SNAPSHOT_BYTES = 1_231_172;
+  const size = 48 * 1024;
+  const count = Math.floor(CURRENT_SNAPSHOT_BYTES / size);
+  const remainder = CURRENT_SNAPSHOT_BYTES - count * size;
+  const files = [
+    ...Array.from({ length: count }, (_, i) => f(`src/dir${i}/snap${i}.tsx`, size, String.fromCharCode(65 + (i % 26)))),
+    f("src/dir-tail/snap-tail.tsx", remainder, "z"),
+  ];
+  const groups = chunkFilesFor(files);
+  checkAll(groups);
+  if (groups.length > MAX_CHUNKS) throw new Error(`snapshot needed ${groups.length} chunks`);
+});
+
+Deno.test("R4: realistic 200-file payload at MAX_TOTAL_BYTES packs within <=25 chunks", () => {
+  // GitHub intake is capped at 200 files. Distribute the full 1.5 MiB source
+  // ceiling across 200 files with long realistic paths.
+  const perFile = Math.floor(MAX_TOTAL_BYTES / 200);
+  const files = Array.from({ length: 200 }, (_, i) =>
+    f(`src/components/nested/dir-${i}/module-with-long-name-${i}.tsx`, perFile, String.fromCharCode(97 + (i % 26))),
+  );
+  const total = files.reduce((n, x) => n + x.bytes, 0);
+  if (total > MAX_TOTAL_BYTES) throw new Error(`test invalid: ${total} > ceiling`);
+  const groups = chunkFilesFor(files);
+  checkAll(groups);
+  if (groups.length > MAX_CHUNKS) throw new Error(`200-file payload needed ${groups.length} chunks`);
 });
 
 Deno.test("no byte omission or duplication across many mixed sizes", () => {
