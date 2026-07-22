@@ -173,12 +173,8 @@ export function batchAuthorityError(
     if (vp && vp.trim()) {
       return `human channel batches must not include a compiled_verification_prompt_md.`;
     }
-  }
 
-  fileTreeSet: Set<string>,
-  opts: { source: "github" | "paste"; schemaObjects?: Set<string> } = { source: "github" },
-): string | null {
-  if (p.status !== "ready") return null; // only ready prompts need scope enforcement
+
   if (!titleSemanticallyMatches(p.compiled_prompt_md, batch.title)) {
     return `Compiled prompt title does not semantically match the current batch title "${batch.title}". The current batch row is authoritative — never substitute an older plan's same-number batch.`;
   }
