@@ -1050,10 +1050,10 @@ export async function queueBatchesRevise(admin: any, run: any, draftJson: any, r
 ${manual}
 
 OUTPUT DISCIPLINE (hard limits — the run FAILS if you exceed them):
-- 6-8 batches total. Aim for 6. Merge overlapping concerns rather than adding a 9th batch.
-- Each prompt_md: 900-3,200 characters, MAX 8 numbered items, 2-4 acceptance checks for code batches.
+- Exactly 6 batches unless a 7th/8th is strictly required. Merge overlapping concerns.
+- Each prompt_md: 900-2,600 characters, MAX 8 numbered items, 2-4 acceptance checks for code batches.
 - Do NOT restate plan/PRD prose, feature lists, or design tokens verbatim. Reference them by name.
-- Total serialized JSON payload: <=32,000 characters. If you approach that, cut prose — not scope.
+- Total serialized JSON payload: <=24,000 characters. If you approach that, cut prose — not scope.
 
 Return ONLY the same JSON shape as the original draft:
 {
