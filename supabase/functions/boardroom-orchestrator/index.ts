@@ -6,6 +6,8 @@ import {
   BudgetExceeded,
   DailyCapExceeded,
   callSeat,
+  decideTransportRequeue,
+  isBodyTransportError,
   NoUserKey,
   SeatUnavailable,
   shouldQuickRetry,
@@ -90,7 +92,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-23.audit-evidence.h1";
+const BUILD_VERSION = "2026-07-23.body-transport-requeue.i1";
 
 // Terminal-fail a run and, when it drives an audit, fail the audit row in
 // lockstep so audits/runs never drift. Budget pauses and recoverable requeues
@@ -215,6 +217,29 @@ async function requeueForTimeout(admin: any, step: any): Promise<void> {
     .eq("id", step.id);
 }
 
+// Body-stream/transport failure on a 2xx OpenRouter response (e.g.
+// "error reading a body from connection"): no usable provider response was
+// ever read, so cost/tokens were correctly NOT recorded by the proxy. Requeue
+// fresh on the SAME model (transport errors are not a model-quality signal —
+// do NOT switch to fallback). Capped at one fresh retry; a second such
+// failure is terminal with a clear transport-retry-exhausted error.
+async function requeueForBodyTransport(admin: any, step: any, attempts: number): Promise<void> {
+  await admin
+    .from("run_steps")
+    .update({
+      status: "queued",
+      started_at: null,
+      completed_at: null,
+      error: "body_transport_requeued",
+      request: {
+        ...(step.request ?? {}),
+        _transport_attempts: attempts,
+        // Explicitly do NOT flip force_fallback — same model, fresh invocation.
+      },
+    })
+    .eq("id", step.id);
+}
+
 async function requeueForValidation(admin: any, step: any, baseMessages: any[], assistantContent: string, validationError: string, truncated: boolean): Promise<void> {
   const attempts = Number(step.request?._validation_attempts ?? 0) + 1;
   const correctionText = truncated
@@ -327,6 +352,31 @@ async function executeStep(admin: any, run: any, step: any) {
           return;
         }
         await requeueForTimeout(admin, step);
+        return;
+      }
+      // Response-body transport failure on a 2xx response (e.g.
+      // "error reading a body from connection"). No usable response was ever
+      // read, so the proxy did NOT record cost/tokens. Do NOT quick-retry in
+      // the same invocation (that just spawns another 100s+ model call inside
+      // a dying isolate) and do NOT switch to the fallback model (transport
+      // is not a model-quality signal). Requeue fresh on the SAME model,
+      // capped at one retry; second occurrence is terminal.
+      if (isBodyTransportError(e)) {
+        const decision = decideTransportRequeue(step);
+        console.log(`[exec] BODY_TRANSPORT step=${step.step_key} run=${run.id} decision=${decision.action} attempts=${decision.attempts}`);
+        if (decision.action === "requeue") {
+          await requeueForBodyTransport(admin, step, decision.attempts);
+          return;
+        }
+        await admin
+          .from("run_steps")
+          .update({
+            status: "failed",
+            error: "transport_retry_exhausted",
+            completed_at: new Date().toISOString(),
+          })
+          .eq("id", step.id);
+        await failRun(admin, run, decision.message);
         return;
       }
       // Strictly classified quick retry: ONLY pre-response network failures,
