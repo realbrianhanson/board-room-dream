@@ -735,7 +735,7 @@ Return ONLY valid JSON matching this shape:
 }
 
 If rejected, amended_* may be empty strings / empty array.`;
-  await admin.from("run_steps").insert({
+  await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
     step_key: "cr_verdict_chair",
