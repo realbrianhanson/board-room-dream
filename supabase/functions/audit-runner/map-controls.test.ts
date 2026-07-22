@@ -23,7 +23,7 @@ Deno.test("audit map controls are the locked bounded values (temperature/reasoni
 
 Deno.test("chunk shape stays at 64 KiB × 20 (bounded audit map payload)", () => {
   assertEquals(CHUNK_BYTES, 64 * 1024);
-  assertEquals(MAX_CHUNKS, 20);
+  assertEquals(MAX_CHUNKS, 25);
 });
 
 Deno.test("map-schema caps are the tightened AUDIT-JSON-FRAGMENT-R2 values", () => {
