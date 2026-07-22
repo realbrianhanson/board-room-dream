@@ -999,37 +999,59 @@ export async function createInitialSteps(admin: any, run: any) {
 
 // ============================== Audit helpers ==============================
 
+import {
+  buildMergeInput,
+  CAPS as AF_CAPS,
+  FINDING_SCHEMA_DOC,
+  normalizeFindings,
+} from "../_shared/audit-findings.ts";
+
 export async function queueAuditChairMerge(admin: any, run: any, steps: any[]) {
   // Collect every completed seat report — single-chunk (audit_<seat>) and
-  // map-reduce chunked (audit_<seat>_cN) alike.
+  // map-reduce chunked (audit_<seat>_cN) alike. Strip prose/prompt/raw
+  // repo and ship only normalized finding objects to the Chair. See
+  // _shared/audit-findings.ts for the payload cap.
   const seatSteps = steps.filter(
     (x: any) => /^audit_(inspector|contrarian|strategist)/.test(x.step_key) && x.status === "completed",
   );
-  const combined = seatSteps
-    .map((st: any) => `--- ${st.step_key.toUpperCase()} ---\n${JSON.stringify(st.response_json ?? { missing: true }, null, 2)}`)
-    .join("\n\n");
+  const seatReports = seatSteps.map((st: any) => ({
+    step_key: st.step_key,
+    seat: String(st.seat ?? ""),
+    findings: normalizeFindings(
+      Array.isArray(st.response_json?.findings) ? st.response_json.findings : [],
+      String(st.seat ?? ""),
+    ),
+  }));
+  const { block, totalFindings } = buildMergeInput(seatReports);
   const isFinal = run.consensus?.audit_kind === "final_az";
-  const system = `You are the Chair. The seats independently reviewed the student's code — possibly split across chunks, so the same underlying issue may be reported more than once. Merge, dedupe across seats AND chunks, and assign FINAL severities.
+  const system = `You are the Chair. The seats independently reviewed the student's code — possibly split across chunks, so the same underlying issue may be reported more than once. Merge, dedupe across seats AND chunks, assign FINAL severities, and produce ONE audit report.
 
 Severities:
-- P0: broken build, data loss risk, auth/RLS bypass, secret exposure.
+- P0: broken build, data loss risk, auth/RLS bypass, secret exposure (an actual private credential, not a public anon key).
 - P1: contract miss (batch/PRD says X, code does Y), critical UX flow broken, insecure default.
 - P2: notable UX / copy / design-brief drift, minor a11y, small refactor.
 - P3: nits and polish suggestions.
+
+P0/P1 MUST have concrete repo-relative file_path, specific evidence explaining the exact vulnerable/broken construct, and confidence high/medium. If you can only justify a filename or a category of risk, downgrade to P2 — the validator will do it anyway.
+
+${FINDING_SCHEMA_DOC}
 
 Return ONLY valid JSON:
 {
   "verdict": "clean" | "findings",
   "summary": "one paragraph",
-  "findings": [ { "seat": "inspector"|"contrarian"|"strategist", "severity": "P0"|"P1"|"P2"|"P3", "file_path": "path/or/empty", "title": "...", "description": "..." } ],
-  "fix_prompt_md": "Full Lovable-ready fix batch prompt (REQUIRED if any P0-P2 exists). Follow the batch skeleton: 'Batch N.M — <name>. Numbered items only, no scope creep.\\n\\n1. ...\\n\\nKeep everything else identical.\\nTypecheck when done.'"${isFinal ? `,
+  "findings": [ ...findings objects... ],
+  "fix_prompt_md": "Full Lovable-ready fix batch prompt (REQUIRED if any supported P0/P1 exists after downgrade). Follow the batch skeleton: 'Batch N.M — <name>. Numbered items only, no scope creep.\\n\\n1. ...\\n\\nAcceptance checks:\\n1. ...\\n\\nKeep everything else identical.\\nTypecheck when done.' Cite the exact file_path (and lines when present) from the evidence in each item."${isFinal ? `,
   "final_qa_prompt_md": "Human QA batch prompt (channel 'human'). Numbered checks the student runs by hand.",
   "test_script": ["step 1", "step 2", "..."]` : ""}
 }
 
-If verdict is "clean", findings is [] and fix_prompt_md is "".
+Hard output limits (enforced by validator):
+- MAX ${AF_CAPS.mergeFindingsMax} deduplicated findings.
+- Total serialized findings JSON <= ${AF_CAPS.mergeSerializedMax} characters — compress evidence, never drop supported P0/P1.
+- title <= ${AF_CAPS.titleMax}, description <= ${AF_CAPS.descriptionMax}, evidence <= ${AF_CAPS.evidenceMax}.
 
-Size discipline: keep total output tight — max ~25 findings (merge duplicates aggressively; prefer the highest-severity instance), descriptions one to two sentences each, and fix_prompt_md focused on P0-P2 items only. You are being generated under a hard time limit; a complete concise answer beats a truncated thorough one.
+If verdict is "clean", findings is [] and fix_prompt_md is "".
 
 Coverage honesty: the summary must state how much of the app was actually read (the CODE COVERAGE line below). Never imply full A-Z coverage beyond what the seats reviewed.`;
 
@@ -1044,10 +1066,12 @@ Coverage honesty: the summary must state how much of the app was actually read (
       json_output: true,
       reasoning_effort: "medium",
       max_tokens: 6500,
-
       messages: [
         { role: "system", content: system },
-        { role: "user", content: `CODE COVERAGE: ${Number(run.consensus?.files_analyzed ?? 0) || "unknown"} files were read across the seat steps.\n\nSEAT REPORTS (${seatSteps.length})\n\n${combined}\n\nProduce your JSON now.` },
+        {
+          role: "user",
+          content: `CODE COVERAGE: ${Number(run.consensus?.files_analyzed ?? 0) || "unknown"} files were read across the seat steps.\n\nNORMALIZED SEAT FINDINGS (${totalFindings} across ${seatReports.length} steps — prose stripped)\n\n${block}\n\nMerge, dedupe, downgrade unsupported serious claims, and produce your JSON now.`,
+        },
       ],
     },
   });

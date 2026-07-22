@@ -33,6 +33,10 @@ type Finding = {
   file_path: string | null;
   title: string;
   description: string | null;
+  evidence: string | null;
+  confidence: "high" | "medium" | "low";
+  line_start: number | null;
+  line_end: number | null;
   status: "open" | "fix_drafted" | "resolved" | "dismissed";
   seat: string | null;
   fix_batch_id: string | null;
