@@ -816,12 +816,18 @@ export async function queueBatchesReview(admin: any, run: any, draftJson: any) {
   "issues": [ { "batch_no": <number or null>, "severity": "blocking"|"major"|"minor", "text": "specific issue and the fix" } ]
 }
 
-Verdict "approve" only if there are zero blocking issues. Be specific — name the batch and the exact item. Every issue must cite either a live path from the LIVE REPO CONTRACT or the missing CREATE/ADD instruction it depends on.
+Hard output limits (enforced by validator):
+- issues array: MAX 10 items. Merge duplicates. Drop minor items if you must trim.
+- issue.text: 10-350 characters. One tight sentence naming the batch, the exact problem, and the fix. No restating the draft or the plan.
+- Total serialized JSON: <=6,000 characters. If close, cut wording, not blocking findings.
+
+Verdict "approve" only if there are zero blocking issues. Every issue must cite either a live path from the LIVE REPO CONTRACT or the missing CREATE/ADD instruction it depends on.
 
 Review rules (apply strictly):
 - BLOCKING: any UPDATE target that does not appear verbatim in the LIVE REPO CONTRACT — the batch is invented; say which real path the student should use, or that the item should be labelled CREATE/ADD with dependencies sequenced first.
 - BLOCKING: any schema/route/function name that contradicts the LIVE REPO CONTRACT (e.g. renamed table, wrong column, non-existent route).
 - NOT A FINDING: treating a filename alone as proof of a leaked secret. Public Supabase anon/publishable keys are not secret exposure. Only flag secrets when the batch itself embeds or exports actual secret material.`;
+
   const prompts: Record<string, string> = {
     inspector: `Batches review — Inspector. Check the drafted build sequence for coverage and dependency integrity:
 - Every MVP feature in the PRD lands in some batch; name any orphan (blocking).
