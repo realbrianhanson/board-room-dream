@@ -478,9 +478,13 @@ async function executeStep(admin: any, run: any, step: any) {
         return;
       }
       let parsed: any = candidate;
-      if (fallbackMeta) {
+      if (fallbackMeta || tailClosed) {
         if (!parsed || typeof parsed !== "object") parsed = {};
-        parsed._meta = { ...(parsed._meta ?? {}), fallback: fallbackMeta };
+        parsed._meta = {
+          ...(parsed._meta ?? {}),
+          ...(fallbackMeta ? { fallback: fallbackMeta } : {}),
+          ...(tailClosed ? { tail_closed: tailClosed } : {}),
+        };
       }
       await admin
         .from("run_steps")
