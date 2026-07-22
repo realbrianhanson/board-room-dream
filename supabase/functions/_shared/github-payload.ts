@@ -179,3 +179,67 @@ export function formatFiles(files: FilePayload[]): string {
     .map((f) => `\n=== FILE: ${f.path} (${f.bytes} bytes) ===\n${f.content}`)
     .join("\n");
 }
+
+// -------- Target-repo migration ledger (JIT compiler schema authority) --------
+//
+// Fetches every supabase/migrations/*.sql file from the linked target repo
+// and returns the ordered list plus a compact status. NEVER uses the platform
+// database as evidence for the target project's schema.
+
+import {
+  MIGRATION_MAX_FILE_BYTES,
+  MIGRATION_MAX_FILES,
+  MIGRATION_MAX_TOTAL_BYTES,
+  type LedgerFetchStatus,
+  type MigrationFile,
+} from "./target-schema-inventory.ts";
+
+export async function fetchTargetMigrations(
+  token: string,
+  repo: string,
+): Promise<LedgerFetchStatus> {
+  try {
+    const repoRes = await gh(token, `/repos/${repo}`);
+    if (repoRes.status >= 300) {
+      return { ok: false, code: "SCHEMA_LEDGER_FETCH_FAILED", message: `repo: ${repoRes.body?.message ?? repoRes.status}` };
+    }
+    const branch = repoRes.body?.default_branch ?? "main";
+    const headRes = await gh(token, `/repos/${repo}/commits/${branch}`);
+    if (headRes.status >= 300) {
+      return { ok: false, code: "SCHEMA_LEDGER_FETCH_FAILED", message: `head: ${headRes.body?.message ?? headRes.status}` };
+    }
+    const headSha: string = headRes.body?.sha;
+    const tree = await gh(token, `/repos/${repo}/git/trees/${headSha}?recursive=1`);
+    const paths: string[] = tree.status < 300 && Array.isArray(tree.body?.tree)
+      ? tree.body.tree
+          .filter((t: any) => t.type === "blob" && /^supabase\/migrations\/[^/]+\.sql$/i.test(String(t.path ?? "")))
+          .map((t: any) => String(t.path))
+      : [];
+    paths.sort();
+    if (paths.length > MIGRATION_MAX_FILES) {
+      return { ok: false, code: "SCHEMA_LEDGER_TOO_LARGE", message: `target repo has ${paths.length} migrations (cap ${MIGRATION_MAX_FILES})` };
+    }
+    const files: MigrationFile[] = [];
+    let total = 0;
+    for (const p of paths) {
+      const c = await gh(token, `/repos/${repo}/contents/${encodeURI(p)}?ref=${headSha}`);
+      if (c.status >= 300 || Array.isArray(c.body)) continue;
+      const size: number = c.body?.size ?? 0;
+      if (size > MIGRATION_MAX_FILE_BYTES) {
+        return { ok: false, code: "SCHEMA_LEDGER_TOO_LARGE", message: `migration ${p} is ${size} bytes (cap ${MIGRATION_MAX_FILE_BYTES})` };
+      }
+      const sql = c.body?.encoding === "base64"
+        ? decodeGithubBase64(String(c.body?.content ?? ""))
+        : String(c.body?.content ?? "");
+      total += sql.length;
+      if (total > MIGRATION_MAX_TOTAL_BYTES) {
+        return { ok: false, code: "SCHEMA_LEDGER_TOO_LARGE", message: `migrations exceed ${MIGRATION_MAX_TOTAL_BYTES} bytes` };
+      }
+      files.push({ path: p, sql });
+    }
+    return { ok: true, files, totalBytes: total };
+  } catch (e) {
+    return { ok: false, code: "SCHEMA_LEDGER_FETCH_FAILED", message: (e as Error).message };
+  }
+}
+}
