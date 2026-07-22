@@ -36,12 +36,31 @@ export type CleanFinding = {
 export const CAPS = {
   seatFindingsMax: 12,
   seatSerializedMax: 8_000,
-  mergeFindingsMax: 30,
-  mergeSerializedMax: 18_000,
+  // AUDIT-MERGE-BOUNDED-R3: Chair merge tightened from 30/18000 → 12/9000.
+  // Live run ddf72827 truncated at 6485 tokens (of 6500) emitting the old
+  // shape mid-field. Merge now targets a materially smaller schema so the
+  // 6500-token budget has real headroom, and per-field caps prevent a
+  // single verbose finding from blowing the total.
+  mergeFindingsMax: 12,
+  mergeSerializedMax: 9_000,
   titleMax: 160,
   descriptionMax: 900,
   evidenceMax: 500,
   mergePayloadMax: 80_000,
+  // Merge-specific per-field caps (stricter than the seat-report caps
+  // above). Enforced by validateMerged; if the Chair emits over these, the
+  // merge step fails hard rather than persist an oversized report.
+  mergeTitleMax: 120,
+  mergeDescriptionMax: 320,
+  mergeEvidenceMax: 200,
+  mergeSummaryMax: 600,
+  // Merge correction pass (single retry). Materially smaller than the base
+  // merge shape; NEVER 30/18000.
+  mergeCorrectionFindingsMax: 8,
+  mergeCorrectionSerializedMax: 6_000,
+  mergeCorrectionSummaryMax: 360,
+  mergeCorrectionDescriptionMax: 240,
+  mergeCorrectionEvidenceMax: 140,
   // Map/extraction (per-chunk per-seat) — deliberately narrower than the merge
   // input caps. The live 2400-token map budget was too tight for the prior
   // 12/8000 schema and produced structurally complete JSON that ended one
