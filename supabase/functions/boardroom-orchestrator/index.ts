@@ -85,7 +85,24 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-22.active-run-uniqueness.1";
+const BUILD_VERSION = "2026-07-22.audit-lifecycle.1";
+
+// Terminal-fail a run and, when it drives an audit, fail the audit row in
+// lockstep so audits/runs never drift. Budget pauses and recoverable requeues
+// must NOT call this — they leave the run recoverable and the audit intact.
+async function failRun(admin: any, run: any, errorMsg: string): Promise<void> {
+  await admin
+    .from("boardroom_runs")
+    .update({ status: "failed", error: errorMsg })
+    .eq("id", run.id);
+  const auditId: string | undefined = run?.consensus?.audit_id;
+  if (run?.kind === "audit" && auditId) {
+    await admin
+      .from("audits")
+      .update({ status: "failed", completed_at: new Date().toISOString() })
+      .eq("id", auditId);
+  }
+}
 
 function fireSelfTick(body: any = {}) {
   // Register the background kick with EdgeRuntime.waitUntil so the platform
