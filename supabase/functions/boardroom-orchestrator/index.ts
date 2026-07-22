@@ -8,7 +8,9 @@ import {
   callSeat,
   NoUserKey,
   SeatUnavailable,
+  shouldQuickRetry,
 } from "../_shared/openrouter-proxy.ts";
+
 
 import {
   SEATS,
