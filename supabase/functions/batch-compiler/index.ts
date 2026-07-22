@@ -16,7 +16,7 @@ import {
   SeatUnavailable,
 } from "../_shared/openrouter-proxy.ts";
 import { assembleFromGithub, formatFiles, ghToken, redactSecrets } from "../_shared/github-payload.ts";
-import { loadFieldManual } from "../_shared/lovable-field-manual.ts";
+import { detectStackFromRepo, loadFieldManual, renderStackBlock } from "../_shared/lovable-field-manual.ts";
 import { batchAuthorityError, shapeError, type Parsed } from "./validators.ts";
 
 const BUILD_VERSION = "2026-07-22.lovable-execution-contract.g1";
