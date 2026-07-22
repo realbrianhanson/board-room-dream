@@ -959,7 +959,7 @@ Constraints: 6-8 batches (prefer 6), unique ascending integer batch_no starting 
     ? `LOCKED DESIGN BRIEF\n\n${design.content_md}`
     : `NO LOCKED DESIGN BRIEF.`;
   const user = `${repoContract}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nYOUR DRAFT\n\n${JSON.stringify(draftJson?.batches ?? [], null, 2)}\n\nREVIEW ISSUES\n\n${issues}\n\nProduce the revised JSON now.`;
-  await admin.from("run_steps").insert({
+  await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
     step_key: "batches_revise_chair",
