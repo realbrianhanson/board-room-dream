@@ -185,8 +185,24 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
   if (stepKey.startsWith("batches_review_") || stepKey === "cr_review_inspector") {
     if (!["approve", "revise"].includes(parsed.verdict)) return "Missing/invalid verdict.";
     if (!Array.isArray(parsed.issues)) return "Missing issues array.";
+    const issues = parsed.issues;
+    if (issues.length > 10) return `issues has ${issues.length} entries — max 10. Merge duplicates and keep only the highest-severity items.`;
+    const payloadLen = JSON.stringify(parsed).length;
+    if (payloadLen > 6000) return `Total serialized review JSON is ${payloadLen} characters — exceeds 6,000. Trim wording without dropping blocking issues.`;
+    for (let i = 0; i < issues.length; i++) {
+      const iss = issues[i];
+      if (!iss || typeof iss !== "object") return `issues[${i}] must be an object.`;
+      if (!["blocking", "major", "minor"].includes(iss.severity)) return `issues[${i}].severity must be blocking|major|minor.`;
+      if (iss.batch_no !== null && !(Number.isInteger(iss.batch_no) && iss.batch_no >= 1)) {
+        return `issues[${i}].batch_no must be a positive integer or null.`;
+      }
+      if (typeof iss.text !== "string") return `issues[${i}].text must be a string.`;
+      const t = iss.text.trim();
+      if (t.length < 10 || t.length > 350) return `issues[${i}].text is ${t.length} chars — must be 10-350.`;
+    }
     return null;
   }
+
   if (stepKey === "r_final_ruling_chair") {
     if (typeof parsed.final_md !== "string" || !parsed.final_md.trim()) return "Missing final_md.";
     if (!Array.isArray(parsed.dissent_ledger)) return "Missing dissent_ledger array.";
