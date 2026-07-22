@@ -1066,10 +1066,9 @@ export async function queueBatchesRevise(admin: any, run: any, draftJson: any, r
     .map((s: any) => `--- ${SEAT_LABEL[s.seat as Seat]} ---\n${JSON.stringify(s.response_json ?? { missing: true }, null, 2)}`)
     .join("\n\n");
   const isImport = !!project?.is_import;
-  const batchRangeText = isImport ? "3-6" : "6-8";
-  const batchCountRule = isImport
-    ? "Between 3 and 6 batches, chosen to be the smallest count that covers the locked improvement plan. Merge overlapping concerns; do NOT pad to reach six."
-    : "Exactly 6 batches unless a 7th/8th is strictly required. Merge overlapping concerns.";
+  const revisePolicy = batchPromptPolicy(isImport);
+  const batchRangeText = revisePolicy.rangeText;
+  const batchCountRule = revisePolicy.countRule;
   const system = `Batches revision — you are the Chair. The Inspector and Contrarian reviewed your drafted build sequence and found issues. FIX every blocking issue and every major issue you agree with — do not merely acknowledge them. Keep every uncontested batch verbatim. The LIVE REPO CONTRACT outranks any guessed name in your original draft or the PRD; correct invented paths to the real ones, or relabel them CREATE/ADD with proper dependency ordering.
 
 ${manual}
