@@ -219,19 +219,31 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
   if (stepKey === "batches_chair" || stepKey === "batches_revise_chair") {
     if (!parsed || !Array.isArray(parsed.batches)) return "Missing batches array.";
     const b = parsed.batches;
-    if (b.length < 6 || b.length > 14) return "batches must contain 6-14 items.";
-    let prev = 0;
-    const seen = new Set<number>();
-    for (const item of b) {
+    if (b.length < 6 || b.length > 8) return "batches must contain 6-8 items (strongly prefer 6). Merge overlapping concerns rather than adding another batch.";
+    // Payload size ceiling — total serialized batches must fit under 32,000 chars.
+    const payloadLen = JSON.stringify(b).length;
+    if (payloadLen > 32000) return `Total serialized batches payload is ${payloadLen} characters — exceeds 32,000. Trim repeated context and prose without cutting scope.`;
+    for (let i = 0; i < b.length; i++) {
+      const item = b[i];
       if (!item || typeof item !== "object") return "Each batch must be an object.";
       const n = Number(item.batch_no);
-      if (!Number.isFinite(n) || n <= prev) return "batch_no must be unique and strictly ascending.";
-      if (seen.has(n)) return "batch_no values must be unique.";
-      seen.add(n);
-      prev = n;
+      if (!Number.isInteger(n) || n !== i + 1) return `batch_no must be exact sequential 1..N — got ${item?.batch_no} at index ${i}.`;
       if (typeof item.title !== "string" || !item.title.trim()) return "Each batch needs a title.";
       if (!["lovable", "supabase", "human"].includes(item.channel)) return "Each batch.channel must be lovable, supabase, or human.";
       if (typeof item.prompt_md !== "string" || !item.prompt_md.trim()) return "Each batch needs a non-empty prompt_md.";
+      const promptLen = item.prompt_md.length;
+      const isCode = item.channel === "lovable" || item.channel === "supabase";
+      if (isCode) {
+        if (promptLen < 900 || promptLen > 3200) return `Batch ${n} prompt_md is ${promptLen} chars — code batches must be 900-3,200 characters.`;
+        if (!/Acceptance checks:/.test(item.prompt_md)) return `Batch ${n} (code) must include an "Acceptance checks:" line.`;
+        if (!/Keep everything else identical\./.test(item.prompt_md)) return `Batch ${n} (code) must end with "Keep everything else identical."`;
+        if (!/Typecheck when done\./.test(item.prompt_md)) return `Batch ${n} (code) must end with "Typecheck when done."`;
+      } else {
+        // human channel
+        if (promptLen < 300 || promptLen > 2400) return `Batch ${n} prompt_md is ${promptLen} chars — human batches must be 300-2,400 characters.`;
+        if (/Typecheck when done\./.test(item.prompt_md)) return `Batch ${n} (human) must not include "Typecheck when done."`;
+        if (/Acceptance checks:/.test(item.prompt_md)) return `Batch ${n} (human) must not include "Acceptance checks:" — write plain-language numbered steps only.`;
+      }
     }
     return null;
   }
