@@ -4,6 +4,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { assembleFromGithub, formatFiles, ghToken, redactSecrets } from "../_shared/github-payload.ts";
 import { loadFieldManual } from "../_shared/lovable-field-manual.ts";
+import { checkFinalAuditEligibility } from "../_shared/audit-eligibility.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -434,17 +435,13 @@ Deno.serve(async (req) => {
         .from("batches")
         .select("id, status")
         .eq("project_id", projectId);
-      const noBatches = !batches?.length;
-      if (project.is_import && noBatches) {
-        // Imports without a build sequence are immediately eligible.
-        if (source === "github" && !project.github_repo) {
-          return j(400, { error: "Link your repo or paste your code first." });
-        }
-      } else {
-        if (noBatches) return j(400, { error: "No batches to audit" });
-        const unresolved = batches!.filter((b: any) => !["passed", "skipped"].includes(b.status));
-        if (unresolved.length) return j(400, { error: "All batches must be passed or skipped before the A-Z audit" });
-      }
+      const eligibility = checkFinalAuditEligibility({
+        isImport: project.is_import,
+        batches: (batches ?? []) as Array<{ status: string }>,
+        source,
+        githubRepo: project.github_repo,
+      });
+      if (!eligibility.ok) return j(400, { error: eligibility.error });
 
       const res = await beginAudit({
         admin, userId, project, batchId: null,

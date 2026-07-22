@@ -7,6 +7,7 @@ import { CodeSourcePicker } from "@/components/code-source-picker";
 import { GitHubRepoCard } from "@/components/github-repo-card";
 import { ProjectJourney } from "@/components/project-journey";
 import { useProjectJourney } from "@/hooks/use-project-journey";
+import { extractFunctionsErrorMessage } from "@/lib/functions-error";
 import {
   canStartFinal,
   latestFinal as pickLatestFinal,
@@ -150,7 +151,10 @@ function AuditCenterPage() {
       const payload: Record<string, unknown> = { action: "start_final_audit", project_id: projectId, source };
       if (source === "paste") payload.pasted_code = pasted;
       const { data, error } = await supabase.functions.invoke("audit-runner", { body: payload });
-      if (error) throw new Error(error.message);
+      if (error) {
+        const msg = await extractFunctionsErrorMessage(error);
+        throw new Error(msg);
+      }
       if ((data as any)?.error) throw new Error((data as any).error);
       toast.success("The board is reading your code.");
       setShowPaste(false);
