@@ -149,8 +149,19 @@ export function GitHubRepoCard({
       <div className="rounded-xl border border-border bg-surface-1 p-5">
         <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(38_65%_70%)]">Real-code audits</p>
         <h3 className="mt-2 font-display text-xl text-foreground">Audits read your real code.</h3>
-        {!gh ? (
-          <div className="mt-3 h-8 animate-pulse rounded-md bg-surface-2" />
+        {ghError ? (
+          <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+            <p>Couldn't check GitHub connector — {ghError}.</p>
+            <button
+              type="button"
+              onClick={() => setStatusTick((n) => n + 1)}
+              className="mt-2 rounded-md border border-destructive/40 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/10"
+            >
+              Retry
+            </button>
+          </div>
+        ) : !gh ? (
+          <div className="mt-3 h-8 animate-pulse rounded-md bg-surface-2" aria-label="Loading GitHub status" />
         ) : !gh.configured ? (
           <p className="mt-2 text-sm text-muted-foreground">
             GitHub isn't configured yet — the program admin sets two backend secrets to enable it. Until then, audits will offer a paste-your-code mode (ships with the audit engine).
