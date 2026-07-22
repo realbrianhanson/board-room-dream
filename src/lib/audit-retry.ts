@@ -27,8 +27,10 @@ export function previousFinals<T extends AuditRow>(audits: T[]): T[] {
 }
 
 export function hasActiveFinal<T extends AuditRow>(audits: T[]): boolean {
-  const latest = latestFinal(audits);
-  return !!latest && latest.status === "running";
+  // Duplicate-final guard: if ANY retained final_az audit is still running,
+  // block a new start — never just the newest row. An older still-running
+  // audit + a newer failed/findings row must still be treated as active.
+  return finalAudits(audits).some((a) => a.status === "running");
 }
 
 /**
