@@ -99,7 +99,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-27.batch-compact.l2";
+const BUILD_VERSION = "2026-07-27.import-trust.l1";
 
 import {
   failRun,
@@ -1629,20 +1629,30 @@ async function handleRequest(req: Request): Promise<Response> {
       }
     }
 
+    // Imports require a successful A–Z audit (status IN clean/findings) before
+    // convening the improvement board. Failed/running rows do not count.
+    if (kind === "plan" && project.is_import) {
+      const { data: auditRows } = await admin
+        .from("audits")
+        .select("id, status")
+        .eq("project_id", projectId)
+        .eq("user_id", userId)
+        .eq("kind", "final_az")
+        .in("status", ["clean", "findings"])
+        .limit(1);
+      if (!auditRows || auditRows.length === 0) {
+        return j(409, { error: "Complete a successful A–Z audit before convening the improvement board." });
+      }
+    }
+
     if (kind === "design" || kind === "batches") {
       const locked = await loadLockedPlan(admin, projectId);
       if (!locked) {
-        if (kind === "design" && project.is_import) {
-          // Design Council for imports may run without a locked plan: need repo or description.
-          const intake = await loadIntake(admin, projectId);
-          const hasDesc = !!intake?.answers?.description;
-          if (!project.github_repo && !hasDesc) {
-            return j(400, { error: "Link your repo or describe the app so the board can see it." });
-          }
-        } else {
-          // 'batches' ALWAYS requires a locked plan — imports must lock their improvement plan first.
-          return j(400, { error: kind === "design" ? "The board locks the plan before it debates the look." : "The board locks the plan before it sequences the build." });
-        }
+        return j(400, {
+          error: kind === "design"
+            ? "The board locks a build-safe plan before it debates the look."
+            : "The board locks a build-safe plan before it sequences the build.",
+        });
       }
     }
     if (kind === "batches") {
@@ -1652,6 +1662,7 @@ async function handleRequest(req: Request): Promise<Response> {
         .eq("project_id", projectId);
       if ((count ?? 0) > 0) return j(400, { error: "This project already has a build sequence." });
     }
+
 
 
     let consensusMeta: any = null;
