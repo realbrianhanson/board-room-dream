@@ -25,6 +25,10 @@ const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? Deno.env.get("SUPABASE_PUB
 const PIPELINE_SECRET = Deno.env.get("PIPELINE_SECRET")!;
 const ORCH_URL = `${SUPABASE_URL}/functions/v1/boardroom-orchestrator`;
 
+// Runtime build stamp, returned on unauthenticated requests so the live build
+// is verifiable with a single curl. Bump on every audit-runner change.
+export const BUILD_VERSION = "2026-07-26.rendered-chunk-budget.i1";
+
 function j(status: number, body: any) {
   return new Response(JSON.stringify(body), {
     status,
@@ -116,12 +120,17 @@ ${jsonShape}`;
 // timeouts on final GitHub audits (see run 4462a4ef, ~221k user-message
 // characters on the last chunk). chunkFilesFor bin-packs greedily and
 // fragments files at UTF-8-safe boundaries when file sizes don't line up with
-// the CHUNK_BYTES grid — every rendered chunk stays <= 64 KiB and count <= 20
-// whenever total encoded source content <= 1.28 MiB. Fragments retain the
-// original file path so audit evidence still cites real paths.
+// the CHUNK_BYTES grid — every RENDERED chunk (the formatFiles() output that
+// actually ships in the model request) stays <= 64 KiB, count <= 20, and the
+// SOURCE ceiling is a fixed 1,228,800 bytes (~1.2 MiB) independent of the
+// rendered wrapper overhead. Fragments retain the original file path so audit
+// evidence still cites real paths.
 export const CHUNK_BYTES = 64 * 1024;
 export const MAX_CHUNKS = 20;
-export const MAX_TOTAL_BYTES = CHUNK_BYTES * MAX_CHUNKS;
+// Source-byte ceiling (encoded file content only, excluding per-file wrapper
+// overhead). Deliberately decoupled from CHUNK_BYTES * MAX_CHUNKS so wrapper
+// growth never expands the underlying source budget.
+export const MAX_TOTAL_BYTES = 1_228_800;
 
 // Bounded controls for AUDIT MAP/extraction steps (per-chunk seat reviews).
 // Map seats are evidence gatherers, not deep synthesis, so a low reasoning
@@ -131,6 +140,22 @@ export const MAX_TOTAL_BYTES = CHUNK_BYTES * MAX_CHUNKS;
 export const AUDIT_MAP_TEMPERATURE = 0.2;
 export const AUDIT_MAP_REASONING_EFFORT: "low" | "medium" | "high" = "low";
 export const AUDIT_MAP_MAX_TOKENS = 2400;
+
+// formatFiles() emits, per file:
+//   "\n=== FILE: <path> (<bytes> bytes) ===\n<content>"
+// and joins entries with a "\n". Static wrapper (path + digit reserve removed)
+// is 25 bytes: "\n=== FILE: " (11) + " (" (2) + " bytes) ===\n" (12).
+// Digit reserve = 6 (max fragment ≤ CHUNK_BYTES = 65,536 uses ≤ 5 digits;
+// reserve 6 so packing is safe regardless of the eventual .toString length).
+// Join separator = 1 byte for every non-first fragment in a group.
+export const FORMAT_STATIC_WRAPPER = 25;
+export const FORMAT_DIGIT_RESERVE = 6;
+export const FORMAT_JOIN_SEP = 1;
+
+function wrapperOverhead(pathBytes: number, digitsReserve: number, isFirst: boolean): number {
+  return FORMAT_STATIC_WRAPPER + pathBytes + digitsReserve +
+    (isFirst ? 0 : FORMAT_JOIN_SEP);
+}
 
 // Returns the largest byte prefix length <= maxBytes that ends on a UTF-8
 // codepoint boundary (i.e., the byte at position `cut` is not a continuation
@@ -149,44 +174,57 @@ export function chunkFilesFor(
   const encoder = new TextEncoder();
   const decoder = new TextDecoder("utf-8", { fatal: false });
 
-  // Normalize to true encoded bytes; the caller's .bytes hint may be stale.
-  const items = files.map((f) => ({ path: f.path, enc: encoder.encode(f.content) }));
-  const total = items.reduce((n, i) => n + i.enc.length, 0);
-  if (total > MAX_TOTAL_BYTES) {
+  const items = files.map((f) => ({
+    path: f.path,
+    pathBytes: encoder.encode(f.path).length,
+    enc: encoder.encode(f.content),
+  }));
+  const totalSource = items.reduce((n, i) => n + i.enc.length, 0);
+  if (totalSource > MAX_TOTAL_BYTES) {
     throw new Error(
-      `audit content total ${total} bytes exceeds ceiling ${MAX_TOTAL_BYTES}`,
+      `audit content total ${totalSource} source bytes exceeds ceiling ${MAX_TOTAL_BYTES}`,
     );
   }
 
   const chunks: { path: string; content: string; bytes: number }[][] = [];
   let current: { path: string; content: string; bytes: number }[] = [];
-  let size = 0;
+  let rendered = 0; // bytes already committed to `current` including wrappers
 
   const seal = () => {
     if (current.length) {
       chunks.push(current);
       current = [];
-      size = 0;
+      rendered = 0;
     }
   };
 
   for (const it of items) {
     let offset = 0;
     while (offset < it.enc.length) {
-      let space = CHUNK_BYTES - size;
-      if (space <= 0) {
+      const isFirst = current.length === 0;
+      const overheadReserve = wrapperOverhead(
+        it.pathBytes,
+        FORMAT_DIGIT_RESERVE,
+        isFirst,
+      );
+      const budgetLeft = CHUNK_BYTES - rendered - overheadReserve;
+      if (budgetLeft <= 0) {
+        if (isFirst) {
+          throw new Error(
+            `cannot fit any fragment of ${it.path}: wrapper overhead ${overheadReserve} exceeds CHUNK_BYTES ${CHUNK_BYTES}`,
+          );
+        }
         seal();
         continue;
       }
       const remaining = it.enc.length - offset;
-      let take = Math.min(remaining, space);
+      let take = Math.min(remaining, budgetLeft);
       if (take < remaining) {
-        // Must fragment: cut on a UTF-8-safe boundary within the available space.
         const cut = safeUtf8Cut(it.enc.subarray(offset), take);
         if (cut === 0) {
-          if (current.length === 0) {
+          if (isFirst) {
             throw new Error(
-              `cannot fragment ${it.path}: single codepoint exceeds CHUNK_BYTES ${CHUNK_BYTES}`,
+              `cannot fragment ${it.path}: single codepoint exceeds available space ${budgetLeft}`,
             );
           }
           seal();
@@ -195,10 +233,19 @@ export function chunkFilesFor(
         take = cut;
       }
       const slice = it.enc.subarray(offset, offset + take);
-      current.push({ path: it.path, content: decoder.decode(slice), bytes: take });
-      size += take;
+      const actualOverhead = wrapperOverhead(
+        it.pathBytes,
+        String(take).length,
+        isFirst,
+      );
+      current.push({
+        path: it.path,
+        content: decoder.decode(slice),
+        bytes: take,
+      });
+      rendered += actualOverhead + take;
       offset += take;
-      if (size >= CHUNK_BYTES) seal();
+      if (rendered >= CHUNK_BYTES) seal();
     }
   }
   seal();
@@ -219,26 +266,30 @@ export function assertChunkInvariants(
       `audit chunks (${chunkGroups.length}) exceed MAX_CHUNKS ${MAX_CHUNKS}`,
     );
   }
-  let total = 0;
+  const encoder = new TextEncoder();
+  let totalSource = 0;
   for (const group of chunkGroups) {
-    let groupBytes = 0;
+    let groupSource = 0;
     for (const f of group) {
       if (f.bytes > CHUNK_BYTES) {
         throw new Error(
           `audit fragment ${f.path} bytes ${f.bytes} exceeds CHUNK_BYTES ${CHUNK_BYTES}`,
         );
       }
-      groupBytes += f.bytes;
+      groupSource += f.bytes;
     }
-    total += groupBytes;
-    if (groupBytes > CHUNK_BYTES) {
+    totalSource += groupSource;
+    const renderedBytes = encoder.encode(formatFiles(group)).length;
+    if (renderedBytes > CHUNK_BYTES) {
       throw new Error(
-        `audit chunk exceeds ${CHUNK_BYTES} bytes (${groupBytes}) with ${group.length} files`,
+        `audit RENDERED chunk exceeds ${CHUNK_BYTES} bytes (${renderedBytes}) with ${group.length} files`,
       );
     }
   }
-  if (total > MAX_TOTAL_BYTES) {
-    throw new Error(`audit chunks total ${total} bytes exceed ceiling ${MAX_TOTAL_BYTES}`);
+  if (totalSource > MAX_TOTAL_BYTES) {
+    throw new Error(
+      `audit chunks total ${totalSource} source bytes exceed ceiling ${MAX_TOTAL_BYTES}`,
+    );
   }
 }
 
@@ -248,6 +299,7 @@ function chunkFiles(files: { path: string; content: string; bytes: number }[]): 
   const rendered = groups.map((g) => formatFiles(g));
   return rendered.length ? rendered : [formatFiles([])];
 }
+
 
 
 async function insertAuditSteps(
@@ -308,23 +360,35 @@ Produce your JSON now.`;
         round: 1,
         seat,
         status: "queued",
-        request: {
-          json_output: true,
-          // Map/extraction controls — see AUDIT_MAP_* constants. Applied to
-          // every per-chunk seat review; the Chair merge step queues its own
-          // request without these caps.
-          temperature: AUDIT_MAP_TEMPERATURE,
-          reasoning_effort: AUDIT_MAP_REASONING_EFFORT,
-          max_tokens: AUDIT_MAP_MAX_TOKENS,
-          messages: [
-            { role: "system", content: seatPrompt(seat, isFinal) },
-            { role: "user", content: user },
-          ],
-        },
+        request: buildMapStepRequest(seat, isFinal, user),
       });
     }
   });
   await admin.from("run_steps").insert(rows);
+}
+
+// Extracted for direct testability: proves every map/extraction request
+// carries the AUDIT_MAP_* caps. The Chair merge request lives in
+// boardroom-orchestrator/queues.ts::queueAuditChairMerge and MUST NOT
+// inherit these caps.
+export function buildMapStepRequest(
+  seat: "inspector" | "contrarian" | "strategist",
+  isFinal: boolean,
+  user: string,
+): Record<string, unknown> {
+  return {
+    json_output: true,
+    // Map/extraction controls — see AUDIT_MAP_* constants. Applied to
+    // every per-chunk seat review; the Chair merge step queues its own
+    // request without these caps.
+    temperature: AUDIT_MAP_TEMPERATURE,
+    reasoning_effort: AUDIT_MAP_REASONING_EFFORT,
+    max_tokens: AUDIT_MAP_MAX_TOKENS,
+    messages: [
+      { role: "system", content: seatPrompt(seat, isFinal) },
+      { role: "user", content: user },
+    ],
+  };
 }
 
 
@@ -464,10 +528,10 @@ async function beginAudit(params: {
         token,
         project.github_repo,
         isFinal
-          ? { baseSha, maxFiles: 200, maxTotalBytes: MAX_CHUNKS * CHUNK_BYTES, preferKeyFiles: true }
+          ? { baseSha, maxFiles: 200, maxTotalBytes: MAX_TOTAL_BYTES, preferKeyFiles: true }
           : { baseSha },
       );
-      chunks = isFinal ? chunkFiles(res.files) : chunkFiles(res.files);
+      chunks = chunkFiles(res.files);
       fileTree = res.fileTree;
       filesAnalyzed = res.files.length;
       headSha = res.headSha;
@@ -561,10 +625,14 @@ async function beginAudit(params: {
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
-  if (req.method !== "POST") return j(405, { error: "Method not allowed" });
+  // Observable build stamp: GET always answers with the live build so a
+  // single curl can confirm what's deployed. POSTs with no auth also get
+  // the stamp on the 401 so failed calls carry the diagnostic.
+  if (req.method === "GET") return j(200, { ok: true, version: BUILD_VERSION });
+  if (req.method !== "POST") return j(405, { error: "Method not allowed", version: BUILD_VERSION });
 
   const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-  if (!token || token === ANON_KEY) return j(401, { error: "Missing or invalid user JWT" });
+  if (!token || token === ANON_KEY) return j(401, { error: "Missing or invalid user JWT", version: BUILD_VERSION });
 
   const userClient = createClient(SUPABASE_URL, ANON_KEY, {
     global: { headers: { Authorization: `Bearer ${token}` } },
