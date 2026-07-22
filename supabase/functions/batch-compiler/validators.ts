@@ -149,7 +149,7 @@ export function batchAuthorityError(
   p: Parsed,
   batch: { title: string; channel: string; batch_no: number },
   fileTreeSet: Set<string>,
-  opts: { source: "github" | "paste"; schemaObjects?: Set<string> } = { source: "github" },
+  opts: { source: "github" | "paste"; schemaObjects?: Set<string>; authority?: OwnerAuthority } = { source: "github" },
 ): string | null {
   if (p.status !== "ready") return null; // only ready prompts need scope enforcement
   // Verification prompt is required for code channels (lovable + supabase), forbidden for human.
