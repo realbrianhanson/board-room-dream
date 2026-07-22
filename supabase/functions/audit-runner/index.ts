@@ -2,7 +2,7 @@
 // Assembles the code payload, creates the audit + boardroom_run + parallel steps,
 // then kicks the orchestrator. Chair merge + finalization happen in the orchestrator.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-import { assembleFromGithub, formatFiles, ghToken, redactSecrets } from "../_shared/github-payload.ts";
+import { assembleFromGithub, ghToken, redactSecrets } from "../_shared/github-payload.ts";
 import { loadFieldManual } from "../_shared/lovable-field-manual.ts";
 import { checkFinalAuditEligibility } from "../_shared/audit-eligibility.ts";
 import {
@@ -412,7 +412,7 @@ async function insertAuditSteps(
   const rows: any[] = [];
   chunks.forEach((code, idx) => {
     const chunkNote = multi
-      ? `\n\nCHUNK ${idx + 1} OF ${chunks.length} — the app is split across parallel review steps. The full file tree (for orientation only):\n${fileTree.join("\n")}\n\nFlag only issues you can verify in THIS chunk's code; do not report files you cannot see as missing.`
+      ? `\n\nCHUNK ${idx + 1} OF ${chunks.length} — the app is split across parallel review steps. The full file tree (for orientation only):\n${fileTree.join("\n")}\n\nFlag only issues you can verify in THIS chunk's code; do not report files you cannot see as missing.\n\nFRAGMENT BOUNDARY RULE (hard): individual files in the CODE section may be split across chunks and shown as "=== FILE: <path> (fragment N of M) (<bytes> bytes) ===". A non-first fragment MAY start mid-token/mid-statement/mid-comment and a non-final fragment MAY end mid-token — that is packaging, not source truncation. Never report a file as truncated, malformed, or syntactically broken solely because a fragment starts or ends mid-token. Cite the original repo-relative path in file_path, never the fragment label.`
       : "";
     const user = `${contract}${outcomeBlock}${chunkNote}
 
