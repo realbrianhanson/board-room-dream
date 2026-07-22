@@ -826,6 +826,9 @@ Verdict "approve" only if there are zero blocking issues. Every issue must cite 
 Review rules (apply strictly):
 - BLOCKING: any UPDATE target that does not appear verbatim in the LIVE REPO CONTRACT — the batch is invented; say which real path the student should use, or that the item should be labelled CREATE/ADD with dependencies sequenced first.
 - BLOCKING: any schema/route/function name that contradicts the LIVE REPO CONTRACT (e.g. renamed table, wrong column, non-existent route).
+- BLOCKING: any batch that asserts "React + Vite" (or any specific stack) as a universal rule when the LIVE REPO CONTRACT shows a different stack (e.g. src/routes/__root.tsx + @tanstack/react-start indicates TanStack Start, not React+Vite). Flag stack assumptions that don't match the detected stack.
+- BLOCKING: any batch that asks Lovable to run browser tests in the SAME prompt as a large build change — verification must be a separate follow-up prompt.
+- BLOCKING: test-tool mismatch — a lovable/UI batch that demands Deno edge tests, or a supabase/backend batch that demands browser-flow tests. Frontend uses Lovable's browser testing + optional frontend tests; backend uses direct edge-fn/RPC calls + Deno tests.
 - NOT A FINDING: treating a filename alone as proof of a leaked secret. Public Supabase anon/publishable keys are not secret exposure. Only flag secrets when the batch itself embeds or exports actual secret material.`;
 
   const prompts: Record<string, string> = {

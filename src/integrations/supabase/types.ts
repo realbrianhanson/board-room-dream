@@ -302,6 +302,7 @@ export type Database = {
           compile_meta: Json | null
           compiled_at: string | null
           compiled_prompt_md: string | null
+          compiled_verification_prompt_md: string | null
           created_at: string
           id: string
           is_fix: boolean
@@ -322,6 +323,7 @@ export type Database = {
           compile_meta?: Json | null
           compiled_at?: string | null
           compiled_prompt_md?: string | null
+          compiled_verification_prompt_md?: string | null
           created_at?: string
           id?: string
           is_fix?: boolean
@@ -342,6 +344,7 @@ export type Database = {
           compile_meta?: Json | null
           compiled_at?: string | null
           compiled_prompt_md?: string | null
+          compiled_verification_prompt_md?: string | null
           created_at?: string
           id?: string
           is_fix?: boolean

@@ -16,10 +16,10 @@ import {
   SeatUnavailable,
 } from "../_shared/openrouter-proxy.ts";
 import { assembleFromGithub, formatFiles, ghToken, redactSecrets } from "../_shared/github-payload.ts";
-import { loadFieldManual } from "../_shared/lovable-field-manual.ts";
+import { detectStackFromRepo, loadFieldManual, renderStackBlock } from "../_shared/lovable-field-manual.ts";
 import { batchAuthorityError, shapeError, type Parsed } from "./validators.ts";
 
-const BUILD_VERSION = "2026-07-22.compile-authority.f1b";
+const BUILD_VERSION = "2026-07-22.lovable-execution-contract.g1";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -164,6 +164,7 @@ const SHAPE = `Return ONLY valid JSON:
 {
   "status": "ready" | "already_done" | "blocked",
   "compiled_prompt_md": "the fresh Lovable prompt (REQUIRED and non-empty when status is 'ready'; empty string otherwise). Its first heading MUST semantically match the CURRENT batch title. Its stated channel MUST match the current batch channel.",
+  "compiled_verification_prompt_md": "a SEPARATE follow-up prompt the founder pastes AFTER Lovable finishes the implementation. REQUIRED (250–1500 chars) when status is 'ready' AND channel is 'lovable' or 'supabase'. MUST start EXACTLY with: 'Verify Batch N after implementation. Do not change product scope.' For 'lovable' batches: instruct Lovable to run its built-in browser testing on the exact user flow (clicks / user-observable). For 'supabase' batches: instruct Lovable to directly call the affected edge functions / RPCs with success AND failure cases, then run/add Deno edge tests; include a permission check when RLS/auth changed. It may fix only failures it reproduces, then rerun the same check. For 'human' channel: this field MUST be omitted or empty string.",
   "primary_intent_summary": "one sentence: the CURRENT batch's primary intent in your own words, so the caller can confirm scope was preserved.",
   "rationale": "one paragraph: what you changed vs the original and why (REQUIRED, always concrete).",
   "drift_notes": [ "specific ways the live code diverged from the plan's guessed names" ],
@@ -187,6 +188,8 @@ RULES (ENFORCED — invalid output is rejected):
 - Do NOT introduce unrelated features, refactors, CI/GitHub-Actions scripts, package.json scripts, or repo-wide sweeps that are not proved prerequisites of the current batch intent.
 - Any shell/SQL command you include MUST actually fail when the check fails. Commands ending in "|| exit 0", "|| true", or "; true" are REJECTED as unsafe non-checks.
 - Do NOT use absolute paths, "..", or duplicate the same (path, action) pair.
+- The compiled implementation prompt MUST NOT ask Lovable to run browser tests in the SAME prompt as the build — verification belongs in compiled_verification_prompt_md and is pasted as a separate follow-up.
+- Never write "React + Vite" as a universal stack rule — use the DETECTED STACK block; unknown/greenfield → say "Lovable's current default stack".
 - status "already_done" and "blocked" MAY use empty touched_paths / evidence / preserved_intents, but rationale MUST cite a concrete file/table/route that grounds the decision.`;
 
 Deno.serve(async (req) => {
@@ -383,6 +386,14 @@ ${schemaBlock}
 LIVE CODE (current repo state)${treeBlock}
 ${codePayload}
 
+${renderStackBlock(detectStackFromRepo({
+  fileTree,
+  packageJson: source === "github"
+    ? (fileTree.includes("package.json") ? (codePayload.match(/=== FILE: package\.json ===([\s\S]*?)(?:=== FILE:|$)/)?.[1] ?? null) : null)
+    : (pastedCode ?? null),
+  hasLiveRepo: source === "github" ? fileTree.length > 0 : !!pastedCode,
+}))}
+
 Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=${batch.channel}) now. Produce your JSON.`;
 
   const fileTreeSet = new Set(fileTree);
@@ -464,6 +475,10 @@ Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=
     .from("batches")
     .update({
       compiled_prompt_md: parsed.status === "ready" ? parsed.compiled_prompt_md : null,
+      compiled_verification_prompt_md:
+        parsed.status === "ready" && (batch.channel === "lovable" || batch.channel === "supabase")
+          ? (parsed.compiled_verification_prompt_md ?? null)
+          : null,
       compiled_at: new Date().toISOString(),
       compile_meta: compileMeta,
     })
@@ -472,6 +487,10 @@ Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=
   return j(200, {
     status: parsed.status,
     compiled_prompt_md: parsed.status === "ready" ? parsed.compiled_prompt_md : "",
+    compiled_verification_prompt_md:
+      parsed.status === "ready" && (batch.channel === "lovable" || batch.channel === "supabase")
+        ? (parsed.compiled_verification_prompt_md ?? "")
+        : "",
     rationale: parsed.rationale,
     drift_notes: parsed.drift_notes,
     preserved_intents: parsed.preserved_intents,

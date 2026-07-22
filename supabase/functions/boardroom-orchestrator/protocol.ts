@@ -252,6 +252,20 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
       if (isCode) {
         if (promptLen < 900 || promptLen > 3200) return `Batch ${n} prompt_md is ${promptLen} chars — code batches must be 900-3,200 characters.`;
         if (!/Acceptance checks:/.test(item.prompt_md)) return `Batch ${n} (code) must include an "Acceptance checks:" line.`;
+        // Count numbered items (1. 2. …) beneath the Acceptance checks: line, until blank line / "Keep everything else…" — must be 2–4.
+        const idx = item.prompt_md.search(/Acceptance checks:\s*$/m);
+        if (idx >= 0) {
+          const after = item.prompt_md.slice(idx).split(/\r?\n/).slice(1);
+          let count = 0;
+          for (const l of after) {
+            const t = l.trim();
+            if (!t) { if (count) break; else continue; }
+            if (/^Keep everything else identical\./i.test(t)) break;
+            if (/^\d+\./.test(t)) count += 1;
+            else break;
+          }
+          if (count < 2 || count > 4) return `Batch ${n} (${item.channel}) must have 2–4 Acceptance checks (found ${count}).`;
+        }
         if (!/Keep everything else identical\./.test(item.prompt_md)) return `Batch ${n} (code) must end with "Keep everything else identical."`;
         if (!/Typecheck when done\./.test(item.prompt_md)) return `Batch ${n} (code) must end with "Typecheck when done."`;
       } else {

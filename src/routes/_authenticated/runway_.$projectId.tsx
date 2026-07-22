@@ -67,6 +67,7 @@ type Batch = {
   built_at: string | null;
   outcome_md: string | null;
   compiled_prompt_md: string | null;
+  compiled_verification_prompt_md: string | null;
   compiled_at: string | null;
   compile_meta: CompileMeta | null;
 };
@@ -503,7 +504,7 @@ function RunwayPage() {
           <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(38_65%_70%)]">The Chair, ready to sequence</p>
           <h2 className="mt-3 font-display text-3xl text-foreground">Turn the locked plan into a build sequence.</h2>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            The Chair drafts 6–14 numbered batches you paste into Lovable, one at a time. Each batch stays small enough to ship cleanly.
+            The Chair drafts 6–8 (usually 6) numbered batches you paste into Lovable, one at a time. Each batch stays small enough to ship cleanly.
           </p>
 
           {!hasDesign && (
@@ -774,6 +775,11 @@ function RunwayPage() {
                   }
                   if (b.compile_meta?.status === "ready" && b.compiled_prompt_md) {
                     copy(b.compiled_prompt_md, "Paste it into Lovable and let it build.");
+                  }
+                }}
+                onCopyVerification={() => {
+                  if (b.compiled_verification_prompt_md) {
+                    copy(b.compiled_verification_prompt_md, "Paste this into Lovable after the build finishes.");
                   }
                 }}
                 onAdvance={(next) => advance(b, next)}
@@ -1081,7 +1087,7 @@ function CompileModal({
 function BatchCard({
   batch, active, locked, activeBatchNo, isOwner, lovableUrl,
   latestAudit, auditFindings, fixBatch, ghRepo,
-  onCopyPrompt, onAdvance, onOpenRollback, onRequestSkip, onOpenAudit, onSaveOutcome, onCompile,
+  onCopyPrompt, onCopyVerification, onAdvance, onOpenRollback, onRequestSkip, onOpenAudit, onSaveOutcome, onCompile,
 }: {
   batch: Batch;
   active: boolean;
@@ -1094,6 +1100,7 @@ function BatchCard({
   fixBatch: Batch | null;
   ghRepo: string | null;
   onCopyPrompt: () => void;
+  onCopyVerification: () => void;
   onAdvance: (next: Batch["status"]) => void;
   onOpenRollback: () => void;
   onRequestSkip: () => void;
@@ -1217,6 +1224,28 @@ function BatchCard({
             <pre className="max-h-[420px] overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-[12px] leading-relaxed text-foreground/90 whitespace-pre-wrap">
 {bodyText}
             </pre>
+          )}
+
+          {isCode && compileReady && batch.compiled_verification_prompt_md && (
+            <details className="mt-3 rounded-lg border border-border/60 bg-surface-2/40 px-3 py-2 group">
+              <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground hover:text-foreground">
+                Verify after Lovable finishes (recommended)
+              </summary>
+              <p className="mt-2 text-xs text-muted-foreground">
+                A separate follow-up prompt. Paste it into Lovable <em>after</em> the build is done — it runs the checks and only fixes failures it reproduces.
+              </p>
+              <pre className="mt-2 max-h-[320px] overflow-auto rounded-lg border border-border bg-background p-3 font-mono text-[12px] leading-relaxed text-foreground/90 whitespace-pre-wrap">
+{batch.compiled_verification_prompt_md}
+              </pre>
+              {isOwner && (
+                <button
+                  onClick={onCopyVerification}
+                  className="mt-2 inline-flex items-center gap-2 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-xs text-foreground transition-colors hover:border-primary/40"
+                >
+                  <Copy className="h-3.5 w-3.5" /> Copy verification prompt
+                </button>
+              )}
+            </details>
           )}
 
 

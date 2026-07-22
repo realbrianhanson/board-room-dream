@@ -7,6 +7,7 @@ export type SatisfiedItem = { item: string; evidence: string };
 export type Parsed = {
   status: "ready" | "already_done" | "blocked";
   compiled_prompt_md: string;
+  compiled_verification_prompt_md?: string;
   rationale: string;
   drift_notes: string[];
   touched_paths: TouchedPath[];
@@ -16,6 +17,11 @@ export type Parsed = {
   added_prerequisites: { item: string; reason: string; evidence: string }[];
   primary_intent_summary: string;
 };
+
+// G1: lovable AND supabase are code channels; human is a console checklist.
+export function isCodeChannel(channel: string): boolean {
+  return channel === "lovable" || channel === "supabase";
+}
 
 const STOPWORDS = new Set([
   "the","a","an","and","or","of","for","to","in","on","with","by","from","at","as","is","are","be","this","that","it",
@@ -142,6 +148,36 @@ export function batchAuthorityError(
   opts: { source: "github" | "paste"; schemaObjects?: Set<string> } = { source: "github" },
 ): string | null {
   if (p.status !== "ready") return null; // only ready prompts need scope enforcement
+  // Verification prompt is required for code channels (lovable + supabase), forbidden for human.
+  const isCode = isCodeChannel(batch.channel);
+  const vp = p.compiled_verification_prompt_md ?? "";
+  if (isCode) {
+    if (!vp || !vp.trim()) {
+      return `status 'ready' requires a non-empty compiled_verification_prompt_md for ${batch.channel} batches.`;
+    }
+    if (vp.length < 250 || vp.length > 1500) {
+      return `compiled_verification_prompt_md is ${vp.length} chars — must be 250–1500.`;
+    }
+    if (!/^\s*Verify\s+Batch\s+\d+\s+after\s+implementation\.\s+Do\s+not\s+change\s+product\s+scope\./i.test(vp)) {
+      return `compiled_verification_prompt_md must start with "Verify Batch N after implementation. Do not change product scope."`;
+    }
+    // Tool routing: lovable → browser test; supabase → direct edge/RPC + Deno test.
+    if (batch.channel === "lovable" && !/browser\s+test|user\s+flow|click/i.test(vp)) {
+      return `lovable verification prompt must invoke Lovable's browser testing / user flow verification.`;
+    }
+    if (batch.channel === "supabase" && !/(edge\s+function|rpc|deno\s+test|edge-function\s+verification)/i.test(vp)) {
+      return `supabase verification prompt must invoke direct edge-function/RPC calls and Deno tests.`;
+    }
+  } else {
+    // human channel — must not carry a verification prompt.
+    if (vp && vp.trim()) {
+      return `human channel batches must not include a compiled_verification_prompt_md.`;
+    }
+  }
+
+
+
+
   if (!titleSemanticallyMatches(p.compiled_prompt_md, batch.title)) {
     return `Compiled prompt title does not semantically match the current batch title "${batch.title}". The current batch row is authoritative — never substitute an older plan's same-number batch.`;
   }
@@ -257,9 +293,11 @@ export function skeletonError(
   if (!titleSemanticallyMatches(m[1], batch.title)) {
     return `First-line title "${m[1]}" does not semantically match current batch title "${batch.title}".`;
   }
-  // Acceptance section required for code batches only.
-  if (batch.channel === "code") {
-    const acceptIdx = text.search(/^\s*(?:#+\s*)?acceptance\b[:\s]*$/im);
+  // Acceptance section required for code batches (lovable + supabase).
+  // G1 FIX: the previous check compared against "code" and never fired because
+  // real batch channels are "lovable" / "supabase" / "human".
+  if (isCodeChannel(batch.channel)) {
+    const acceptIdx = text.search(/^\s*(?:#+\s*)?acceptance(?:\s+checks)?\s*[:\s]*$/im);
     if (acceptIdx < 0) return `Missing "Acceptance" section.`;
     const afterAccept = text.slice(acceptIdx).split(/\n/).slice(1);
     const acceptLines: string[] = [];
