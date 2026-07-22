@@ -365,7 +365,7 @@ Respond with the markdown document ONLY — no JSON, no preamble, no closing rem
   if (loop > 0) parts.push(priorRoundFailureBlock(steps, loop - 1));
   const user = `${parts.join("\n\n")}\n\nWrite the candidate document now.`;
   const imageParts = isDesign ? await loadScreenshotParts(admin, run.user_id, run.project_id) : [];
-  await admin.from("run_steps").insert({
+  await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
     step_key: `r3_draft_chair_loop${loop}`,
