@@ -27,6 +27,21 @@ export function redactSecrets(text: string): string {
   return out;
 }
 
+// Byte-correct base64 -> UTF-8 decode. GitHub's Contents API returns file
+// bodies base64-encoded (with embedded newlines); the previous implementation
+// did `atob(...)` and passed the resulting Latin-1 binary string straight
+// into the model, which corrupted every multi-byte UTF-8 codepoint (em-dash,
+// ellipsis, middot, arrows, non-ASCII names) and produced spurious "mojibake"
+// findings. Route the bytes through TextDecoder instead.
+export function decodeGithubBase64(b64: string): string {
+  const clean = String(b64 ?? "").replace(/\s+/g, "");
+  if (!clean) return "";
+  const bin = atob(clean);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+}
+
 export type FilePayload = { path: string; content: string; bytes: number };
 
 export async function ghToken(admin: any, userId: string): Promise<string | null> {
