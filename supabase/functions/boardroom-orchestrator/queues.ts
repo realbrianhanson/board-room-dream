@@ -865,13 +865,10 @@ export async function queueBatchesStep(admin: any, run: any) {
   // 6-8 (prefer 6). The validator globally accepts 3-8 so this prompt-side
   // range simply constrains the model within the allowed window.
   const isImport = !!project?.is_import;
-  const batchRangeText = isImport ? "3-6" : "6-8";
-  const batchRangePrompt = isImport
-    ? "Produce 3-6 dependency-safe, single-concern build batches — the SMALLEST count that fully covers the locked improvement plan without padding. Do NOT invent extra batches (or Enhancement batches) to reach six."
-    : "Produce 6-8 dependency-safe, single-concern build batches (STRONGLY PREFER 6) that turn the locked plan + PRD into a shippable app — core batches first, then clearly-labeled Enhancement batches so lower-priority value is never silently dropped.";
-  const batchCountRule = isImport
-    ? "Between 3 and 6 batches, chosen to be the smallest count that covers the locked improvement plan. Merge overlapping concerns aggressively; do NOT pad to reach six."
-    : "Exactly 6 batches unless a 7th or 8th is strictly required to keep any single batch below its size limit. Prefer merging overlapping concerns.";
+  const policy = batchPromptPolicy(isImport);
+  const batchRangeText = policy.rangeText;
+  const batchRangePrompt = policy.rangePrompt;
+  const batchCountRule = policy.countRule;
 
   const system = `You are the Chair, sequencing this student's build for their Lovable project. ${batchRangePrompt}
 
