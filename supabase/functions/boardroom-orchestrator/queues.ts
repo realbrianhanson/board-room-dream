@@ -1067,12 +1067,17 @@ export async function queueBatchesRevise(admin: any, run: any, draftJson: any, r
   const issues = reviewSteps
     .map((s: any) => `--- ${SEAT_LABEL[s.seat as Seat]} ---\n${JSON.stringify(s.response_json ?? { missing: true }, null, 2)}`)
     .join("\n\n");
+  const isImport = !!project?.is_import;
+  const batchRangeText = isImport ? "3-6" : "6-8";
+  const batchCountRule = isImport
+    ? "Between 3 and 6 batches, chosen to be the smallest count that covers the locked improvement plan. Merge overlapping concerns; do NOT pad to reach six."
+    : "Exactly 6 batches unless a 7th/8th is strictly required. Merge overlapping concerns.";
   const system = `Batches revision — you are the Chair. The Inspector and Contrarian reviewed your drafted build sequence and found issues. FIX every blocking issue and every major issue you agree with — do not merely acknowledge them. Keep every uncontested batch verbatim. The LIVE REPO CONTRACT outranks any guessed name in your original draft or the PRD; correct invented paths to the real ones, or relabel them CREATE/ADD with proper dependency ordering.
 
 ${manual}
 
 OUTPUT DISCIPLINE (hard limits — the run FAILS if you exceed them):
-- Exactly 6 batches unless a 7th/8th is strictly required. Merge overlapping concerns.
+- ${batchCountRule}
 - Each prompt_md: 900-2,600 characters, MAX 8 numbered items, 2-4 acceptance checks for code batches.
 - Do NOT restate plan/PRD prose, feature lists, or design tokens verbatim. Reference them by name.
 - Total serialized JSON payload: <=24,000 characters. If you approach that, cut prose — not scope.
@@ -1082,7 +1087,7 @@ Return ONLY the same JSON shape as the original draft:
   "batches": [ { "batch_no": 1, "title": "...", "channel": "lovable"|"supabase"|"human", "prompt_md": "..." } ]
 }
 
-Constraints: 6-8 batches (prefer 6), unique ascending integer batch_no starting at 1, every prompt_md within character limits, following the batch skeleton exactly (numbered items, acceptance checks for code batches, "Keep everything else identical.", "Typecheck when done." for code batches). Never delete Enhancement batches to satisfy a reviewer unless the reviewer explicitly flagged them.`;
+Constraints: ${batchRangeText} batches, unique ascending integer batch_no starting at 1, every prompt_md within character limits, following the batch skeleton exactly (numbered items, acceptance checks for code batches, "Keep everything else identical.", "Typecheck when done." for code batches). Never delete Enhancement batches to satisfy a reviewer unless the reviewer explicitly flagged them. For imported apps, NEVER pad to six batches to match a greenfield default.`;
   const compactPlan = compactMarkdown(plan?.content_md ?? "", COMPACT_ARTIFACT_CAP);
   const compactPrd = compactMarkdown(plan?.prd_md ?? "", COMPACT_ARTIFACT_CAP);
   const compactDesign = compactMarkdown(design?.content_md ?? "", COMPACT_ARTIFACT_CAP);
