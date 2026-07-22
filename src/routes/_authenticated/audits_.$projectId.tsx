@@ -2,11 +2,17 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { ArrowRight, Check, ScrollText, ShieldCheck } from "lucide-react";
+import { ArrowRight, Check, ScrollText, ShieldCheck, RotateCcw } from "lucide-react";
 import { CodeSourcePicker } from "@/components/code-source-picker";
 import { GitHubRepoCard } from "@/components/github-repo-card";
 import { ProjectJourney } from "@/components/project-journey";
 import { useProjectJourney } from "@/hooks/use-project-journey";
+import {
+  canStartFinal,
+  latestFinal as pickLatestFinal,
+  previousFinals as pickPreviousFinals,
+  startCtaLabel,
+} from "@/lib/audit-retry";
 
 export const Route = createFileRoute("/_authenticated/audits_/$projectId")({
   component: AuditCenterPage,
