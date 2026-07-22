@@ -1239,7 +1239,7 @@ function BatchCard({
               </pre>
               {isOwner && (
                 <button
-                  onClick={() => copy(batch.compiled_verification_prompt_md ?? "", "Paste this into Lovable after the build finishes.")}
+                  onClick={onCopyVerification}
                   className="mt-2 inline-flex items-center gap-2 rounded-md border border-border bg-surface-1 px-3 py-1.5 text-xs text-foreground transition-colors hover:border-primary/40"
                 >
                   <Copy className="h-3.5 w-3.5" /> Copy verification prompt
