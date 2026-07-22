@@ -92,44 +92,14 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-25.terminal-parent-hygiene.i1";
+const BUILD_VERSION = "2026-07-26.first-terminal-wins.i1";
 
-// Terminal statuses for a boardroom_run. A terminal parent must never own a
-// queued/running child: failRun() eagerly terminalizes siblings, and every
-// requeue path funnels through requeue_step_if_parent_active() which cancels
-// the child instead of resurrecting work under a dead parent.
-const TERMINAL_RUN_STATUSES = ["failed", "completed", "consensus", "chair_ruled"] as const;
-
-// Terminal-fail a run and, when it drives an audit, fail the audit row in
-// lockstep so audits/runs never drift. Budget pauses and recoverable requeues
-// must NOT call this — they leave the run recoverable and the audit intact.
-// Also terminalizes every queued/running SIBLING step so the run cannot
-// accumulate ghost work after failure. In-flight model calls that finish
-// after this still get cost-accounted by the proxy (recordCall is atomic
-// and independent of this transition), but their late status write is
-// blocked by the .eq('status','running') guard in executeStep.
-async function failRun(admin: any, run: any, errorMsg: string): Promise<void> {
-  await admin
-    .from("boardroom_runs")
-    .update({ status: "failed", error: errorMsg })
-    .eq("id", run.id);
-  await admin
-    .from("run_steps")
-    .update({
-      status: "failed",
-      error: "cancelled_parent_terminal",
-      completed_at: new Date().toISOString(),
-    })
-    .eq("run_id", run.id)
-    .in("status", ["queued", "running"]);
-  const auditId: string | undefined = run?.consensus?.audit_id;
-  if (run?.kind === "audit" && auditId) {
-    await admin
-      .from("audits")
-      .update({ status: "failed", completed_at: new Date().toISOString() })
-      .eq("id", auditId);
-  }
-}
+import {
+  failRun,
+  requeueLegacyNullStartOrphans,
+  requeueStepIfParentActive,
+  TERMINAL_RUN_STATUSES,
+} from "./hygiene.ts";
 
 function fireSelfTick(body: any = {}) {
   // Register the background kick with EdgeRuntime.waitUntil so the platform
@@ -220,26 +190,10 @@ function withHardTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T
   });
 }
 
-// Atomic parent-aware requeue: the SECURITY DEFINER RPC locks the parent
-// run, transitions the step only when the parent is still active
-// (queued/running/paused/paused_budget); otherwise terminalizes the step
-// with error='cancelled_parent_terminal'. Returns 'requeued' |
-// 'cancelled_parent_terminal' | 'not_found'.
-async function requeueStepIfParentActive(
-  admin: any,
-  stepId: string,
-  newRequest: any,
-  newError: string,
-): Promise<"requeued" | "cancelled_parent_terminal" | "not_found"> {
-  const { data, error } = await admin.rpc("requeue_step_if_parent_active", {
-    p_step_id: stepId,
-    p_new_request: newRequest,
-    p_new_error: newError,
-  });
-  if (error) throw new Error(`requeue_step_if_parent_active failed: ${error.message ?? error}`);
-  const out = String(data ?? "");
-  return (out === "requeued" || out === "cancelled_parent_terminal") ? out : "not_found";
-}
+// requeueStepIfParentActive / failRun / requeueLegacyNullStartOrphans /
+// TERMINAL_RUN_STATUSES live in ./hygiene.ts so they can be unit tested
+// without booting Deno.serve. See that module for behavior contracts.
+
 
 async function requeueForTimeout(admin: any, step: any): Promise<string> {
   const timeoutAttempts = Number(step.request?._timeout_attempts ?? 0) + 1;
@@ -1420,13 +1374,11 @@ async function pipelineTick(admin: any) {
 
   // Legacy/pre-migration orphans have no started_at at all — every live claim
   // now stamps it, so a 'running' row with started_at IS NULL can only be an
-  // orphan. Requeue those too (gated on run age as a belt-and-suspenders).
-  await admin
-    .from("run_steps")
-    .update({ status: "queued", error: "requeued_stale" })
-    .eq("status", "running")
-    .is("started_at", null)
-    .lt("created_at", staleCutoff);
+  // orphan. Route each row through the parent-aware RPC so a terminal parent
+  // gets 'cancelled_parent_terminal' instead of the row being bulk-flipped
+  // back to 'queued' and resurrected under a dead run.
+  await requeueLegacyNullStartOrphans(admin, staleCutoff);
+
 
   const { data: runs } = await admin
     .from("boardroom_runs")

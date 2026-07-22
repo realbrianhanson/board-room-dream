@@ -52,7 +52,38 @@ SELECT 'missing_step_returns_not_found' AS label,
        requeue_step_if_parent_active(
          '99999999-9999-9999-9999-999999999999',
          '{}'::jsonb, 'x'
+        ) AS result;
+
+-- Paused parent: recoverable, step should be requeued.
+INSERT INTO boardroom_runs (id, project_id, user_id, kind, status)
+VALUES ('44444444-4444-4444-4444-444444444444',
+        (SELECT id FROM projects LIMIT 1),
+        (SELECT user_id FROM projects LIMIT 1),
+        'test', 'paused');
+INSERT INTO run_steps (id, run_id, user_id, step_key, round, seat, status, started_at)
+VALUES ('cccccccc-cccc-cccc-cccc-cccccccccccc',
+        '44444444-4444-4444-4444-444444444444',
+        (SELECT user_id FROM projects LIMIT 1),
+        'k3', 1, 'chair', 'running', now());
+SELECT 'paused_parent_returns_requeued' AS label,
+       requeue_step_if_parent_active(
+         'cccccccc-cccc-cccc-cccc-cccccccccccc', '{}'::jsonb, 'requeued_paused'
        ) AS result;
+SELECT 'paused_parent_step_state' AS label, status FROM run_steps
+  WHERE id='cccccccc-cccc-cccc-cccc-cccccccccccc';
+
+-- No-op transition: calling requeue on a step whose parent is terminal AND
+-- the step is already 'failed' should still return cancelled_parent_terminal
+-- (parent status is authoritative) and MUST NOT flip the step back to queued.
+UPDATE run_steps SET status='failed', error='cancelled_parent_terminal'
+  WHERE id='bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+SELECT 'terminal_parent_no_op_return' AS label,
+       requeue_step_if_parent_active(
+         'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{}'::jsonb, 'x'
+       ) AS result;
+SELECT 'terminal_parent_no_op_state' AS label, status
+  FROM run_steps WHERE id='bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+
 
 -- Permission checks: only service_role may execute.
 DO $$ BEGIN
