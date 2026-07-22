@@ -105,7 +105,7 @@ Deno.serve(async (req) => {
         [{ role: "user", content: userPrompt }],
         // First attempt grounds the verdict in live web search; the retry
         // drops the plugin so a search hiccup never blocks validation.
-        { json: true, temperature: 0.3, projectId: intake.project_id, online: attempt === 0 },
+        { json: true, temperature: 0.3, projectId: intake.project_id, online: attempt === 0, maxTokens: 3500 },
       );
       verdict = parseVerdict(res.content);
       if (!verdict) lastErr = { status: 200, body: "unparseable" };
