@@ -227,9 +227,59 @@ ${formatFiles(res.files)}`;
 
 
 
-// Signed URLs for the founder's uploaded screenshots (newest first, max 4).
-// 24h expiry comfortably covers queue → execution, including budget pauses.
-export async function loadScreenshotParts(admin: any, userId: string, projectId: string): Promise<any[]> {
+// Compact variant of the live repo contract used ONLY by batch draft/review/
+// revise. Same failure semantics as loadLiveRepoContract for imports (repo
+// token, non-empty tree, at least one readable key file) — but the render is
+// deterministically capped to <=24 KiB of key evidence and up to 250 tree
+// paths. The JIT batch-compiler regrounds each individual batch against the
+// full live code/schema before Copy is enabled, so we do not need to ship
+// 25 whole files to reviewers.
+export async function loadCompactBatchRepoContract(admin: any, project: any): Promise<string> {
+  const isImport = !!project?.is_import;
+  if (!isImport) {
+    return `LIVE REPO CONTRACT\n(none — this is a fresh project; every path, table, and function must be labelled CREATE/ADD and sequenced so its dependencies come first.)`;
+  }
+  if (!project?.github_repo) {
+    throw new RepoContractUnavailable(
+      "This import project has no linked GitHub repo, so the board cannot ground batches in the real code. Link the repo in Settings and try again.",
+    );
+  }
+  const token = await ghToken(admin, project.user_id);
+  if (!token) {
+    throw new RepoContractUnavailable(
+      "GitHub is not connected for this owner, so the board cannot read the real repo. Reconnect GitHub in Settings and try again.",
+    );
+  }
+  let res: Awaited<ReturnType<typeof assembleFromGithub>>;
+  try {
+    res = await assembleFromGithub(token, project.github_repo, {
+      // We only need architectural evidence — the renderer's 24 KiB cap
+      // trims further. Keep per-file bytes small so no single file drowns
+      // out manifests / router roots / migrations.
+      maxFiles: 40,
+      maxFileBytes: 32 * 1024,
+      maxTotalBytes: 200 * 1024,
+      preferKeyFiles: true,
+    });
+  } catch (e) {
+    throw new RepoContractUnavailable(
+      `The board could not read the linked repo ${project.github_repo}: ${(e as Error).message}. Fix repo access and retry.`,
+    );
+  }
+  if (!res.files.length || !res.fileTree.length) {
+    throw new RepoContractUnavailable(
+      `The board could not read any files from ${project.github_repo}. The repo may be empty, private without access, or renamed. Fix and retry.`,
+    );
+  }
+  return renderCompactRepoContract({
+    repo: project.github_repo,
+    fileTree: res.fileTree,
+    files: res.files,
+  });
+}
+
+
+
   try {
     const prefix = `${userId}/${projectId}`;
     const { data: files } = await admin.storage
