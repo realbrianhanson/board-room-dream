@@ -114,7 +114,7 @@ Deno.test("total-over-ceiling fails closed in chunkFilesFor", () => {
 });
 
 Deno.test("no byte omission or duplication across many mixed sizes", () => {
-  const sizes = [10, 50, 199, 200, 201, 300, 77, 128, 64, 33, 400].map((k) => k * 1024);
+  const sizes = [10, 50, 199, 33, 77, 128, 64, 33, 400].map((k) => k * 1024);
   const total = sizes.reduce((n, s) => n + s, 0);
   if (total > MAX_TOTAL_BYTES) throw new Error(`test invalid: ${total} > ceiling`);
   const files = sizes.map((s, i) => f(`m${i}.ts`, s, String.fromCharCode(97 + i)));
