@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { CodeSourcePicker } from "@/components/code-source-picker";
 import { GitHubRepoCard } from "@/components/github-repo-card";
 import { startGithubConnect } from "@/lib/github-connect";
+import { selectDisplayedRun } from "@/lib/run-selection";
 import { ProjectJourney } from "@/components/project-journey";
 import { useProjectJourney } from "@/hooks/use-project-journey";
 import {
