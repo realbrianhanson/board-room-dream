@@ -4,6 +4,12 @@
 import { assembleFromGithub, formatFiles, ghToken } from "../_shared/github-payload.ts";
 import { loadFieldManual } from "../_shared/lovable-field-manual.ts";
 import {
+  injectOwnerAuthority,
+  loadOwnerAuthority,
+  OWNER_AUTHORITY_RULES,
+  type OwnerAuthority,
+} from "../_shared/owner-authority.ts";
+import {
   SEATS,
   type Seat,
   SEAT_LABEL,
@@ -15,6 +21,42 @@ import {
   candidateForLoop,
   lastCandidateLoop,
 } from "./protocol.ts";
+
+// Load owner authority once per run and cache on the run object so every
+// queue function in the run's lifetime pays for a single DB round trip.
+async function ensureAuthority(admin: any, run: any): Promise<OwnerAuthority> {
+  if (!(run as any).__authority__) {
+    (run as any).__authority__ = await loadOwnerAuthority(admin, {
+      projectId: run.project_id,
+      founderNotes: run.founder_notes ?? null,
+    });
+  }
+  return (run as any).__authority__;
+}
+
+// Wrapper around admin.from("run_steps").insert(...) that prepends the OWNER
+// AUTHORITY rules to every system prompt and the compact owner-source block
+// to every user prompt in the payload. Use this in place of `.insert(rows)`
+// for any board step where the reviewer must not be able to be overruled by
+// a locked plan, board draft, dissent, Chair ruling, or consensus score.
+async function queueSteps(admin: any, run: any, rowsIn: any | any[]): Promise<any> {
+  const authority = await ensureAuthority(admin, run);
+  const rows = Array.isArray(rowsIn) ? rowsIn : [rowsIn];
+  for (const row of rows) {
+    const msgs = row?.request?.messages;
+    if (!Array.isArray(msgs)) continue;
+    for (const m of msgs) {
+      if (m?.role === "system" && typeof m.content === "string") {
+        m.content = `${OWNER_AUTHORITY_RULES}\n\n${m.content}`;
+      } else if (m?.role === "user") {
+        const injected = injectOwnerAuthority("", m.content, authority);
+        m.content = injected.user;
+      }
+    }
+  }
+  return admin.from("run_steps").insert(rowsIn);
+}
+
 
 
 export async function loadLockedPlan(admin: any, projectId: string) {
