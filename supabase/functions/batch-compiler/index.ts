@@ -250,7 +250,7 @@ Deno.serve(async (req) => {
     loadOpenFindings(admin, batch.project_id),
     loadFieldManual(admin),
     loadCurrentBatches(admin, batch.project_id),
-    source === "github" ? loadSchemaInventory(admin) : Promise.resolve({ tables: [], columnsByTable: {}, rpcs: [], objectsLower: new Set<string>() }),
+    source === "github" ? loadSchemaInventory(admin) : Promise.resolve({ tables: [] as string[], columnsByTable: {} as Record<string, string[]>, rpcs: [] as string[], objectsLower: new Set<string>() }),
     admin.from("batches").select("id", { count: "exact", head: true }).eq("project_id", batch.project_id),
   ]);
 
