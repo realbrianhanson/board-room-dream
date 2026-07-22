@@ -155,6 +155,7 @@ function RunwayPage() {
 
   const [urlEdit, setUrlEdit] = useState("");
   const [showRollback, setShowRollback] = useState(false);
+  const [extraBudgetUsd, setExtraBudgetUsd] = useState("2.00");
   const [showSkipConfirm, setShowSkipConfirm] = useState<Batch | null>(null);
   const [audits, setAudits] = useState<AuditRow[]>([]);
   const [findings, setFindings] = useState<FindingRow[]>([]);
@@ -374,15 +375,21 @@ function RunwayPage() {
   }
 
 
-  async function resumeRun(runId: string) {
+  async function resumeRun(runId: string, extraBudget?: number) {
     setGenerating(true);
     try {
-      const { data, error } = await supabase.functions.invoke("boardroom-orchestrator", {
-        body: { action: "resume", run_id: runId },
-      });
+      const body: any = { action: "resume", run_id: runId };
+      if (extraBudget !== undefined && extraBudget > 0) {
+        body.extra_budget_usd = extraBudget;
+      }
+      const { data, error } = await supabase.functions.invoke("boardroom-orchestrator", { body });
       if (error) throw error;
       if ((data as any)?.error) throw new Error((data as any).error);
-      toast.success("Resuming the run…");
+      if (extraBudget !== undefined && extraBudget > 0) {
+        toast.success(`Added $${extraBudget.toFixed(2)} extra budget and resuming…`);
+      } else {
+        toast.success("Resuming the run…");
+      }
       await loadAll();
     } catch (err: any) {
       toast.error(err?.message ?? "Failed to resume");
@@ -570,13 +577,52 @@ function RunwayPage() {
             </div>
           )}
           {isOwner && (
-            <button
-              onClick={() => resumeRun(run.id)}
-              disabled={generating}
-              className="mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
-            >
-              <Rocket className="h-4 w-4" /> {generating ? "Resuming…" : "Resume the run"}
-            </button>
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+              {run.status === "paused_budget" && (
+                <div className="min-w-[200px] flex-1">
+                  <label
+                    htmlFor="extraBudget"
+                    className="mb-1.5 block font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground"
+                  >
+                    Extra run budget (USD)
+                  </label>
+                  <input
+                    id="extraBudget"
+                    type="number"
+                    min={0.5}
+                    max={20}
+                    step={0.5}
+                    value={extraBudgetUsd}
+                    onChange={(e) => setExtraBudgetUsd(e.target.value)}
+                    disabled={generating}
+                    className="w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-foreground outline-none focus:border-primary disabled:opacity-60"
+                  />
+                </div>
+              )}
+              <button
+                onClick={() => {
+                  if (run.status === "paused_budget") {
+                    const n = parseFloat(extraBudgetUsd);
+                    if (!Number.isFinite(n) || n < 0.5 || n > 20) {
+                      toast.error("Enter an extra budget between $0.50 and $20.");
+                      return;
+                    }
+                    resumeRun(run.id, Number(n.toFixed(2)));
+                  } else {
+                    resumeRun(run.id);
+                  }
+                }}
+                disabled={generating}
+                className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+              >
+                <Rocket className="h-4 w-4" />{" "}
+                {generating
+                  ? "Resuming…"
+                  : run.status === "paused_budget"
+                  ? "Resume with added budget"
+                  : "Resume the run"}
+              </button>
+            </div>
           )}
         </div>
       )}
