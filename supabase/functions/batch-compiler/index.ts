@@ -322,7 +322,13 @@ Authority rules (F1):
 - Add only the smallest prerequisite strictly required to complete THIS batch's intent. Every added item goes in added_prerequisites with reason + evidence.
 - Never introduce unrelated features, refactors, CI/GitHub Actions scripts, package.json scripts, or repo-wide sweeps unless they are a proved dependency of the current batch intent.
 - Preserve every still-needed numbered item from the original prompt_md in preserved_intents; deliberately omitted items go in satisfied_items with concrete evidence.
-- Keep the batch skeleton: numbered items, click-only acceptance checks, "Keep everything else identical.", "Typecheck when done." (code batches only).
+- Keep the batch skeleton exactly (ENFORCED):
+  * First line: \`Batch ${batch.batch_no} — <title semantically matching the current title>. Numbered items only, no scope creep.\`
+  * Then the numbered items, each starting with \`1.\`, \`2.\`, … — no bullets, no free-form paragraphs.
+  * If channel is "code": include an "Acceptance" section with 2–4 click-only checks (one per line).
+  * Ends EXACTLY with the two lines:\n    Keep everything else identical.\n    Typecheck when done.
+  * Total length 900–3200 characters.
+  * NEVER merely echo the original prompt when live reality (repo/schema) contradicts it — rewrite to match the live code.
 
 Ground every claim:
 - Every UPDATE/VERIFY path must be listed in touched_paths and exist verbatim in the LIVE REPO CONTRACT file tree.
@@ -330,9 +336,10 @@ Ground every claim:
 - Every asserted fact about how the app currently behaves must have an evidence item citing a real file path and what in that file grounds the claim.
 - A filename alone is NEVER proof of an exposed secret. Public Supabase anon/publishable keys are NOT secrets.
 - Any shell or SQL command you include MUST fail loudly when its check fails. Reject any command containing "|| exit 0", "|| true", or "; true".
+- If the DB SCHEMA INVENTORY lists a table/function/policy the batch wants to CREATE, you MUST convert it to ALTER/VERIFY or move it to satisfied_items with current-column evidence. This applies to bare, schema-qualified, quoted, and backticked identifiers alike, and to narrative phrasings like "Create a Postgres RPC name(...)".
 
 Decide a status:
-- "ready": emit compiled_prompt_md whose first heading matches the current batch title, with non-empty touched_paths, evidence, and preserved_intents.
+- "ready": emit compiled_prompt_md that satisfies the skeleton above, with non-empty touched_paths, evidence, and preserved_intents.
 - "already_done": the live code already satisfies THIS batch's intent — empty prompt/paths/evidence, rationale cites the concrete files that already implement it; satisfied_items lists each intent with evidence.
 - "blocked": a prerequisite the batch depends on is missing — empty prompt/paths/evidence, rationale names exactly what must exist first.
 
