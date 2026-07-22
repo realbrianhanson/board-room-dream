@@ -1302,7 +1302,7 @@ async function afterStepComplete(admin: any, runIn: any) {
         try {
           await queueBatchesRevise(admin, run, draft.response_json, completed);
         } catch (e) {
-          if (e instanceof RepoContractUnavailable || e instanceof BatchContextTooLarge) {
+          if (e instanceof RepoContractUnavailable || e instanceof BatchContextTooLarge || e instanceof MarkdownCompactionImpossible) {
             await failRun(admin, run, e.message);
             return;
           }
@@ -1319,7 +1319,7 @@ async function afterStepComplete(admin: any, runIn: any) {
     try {
       await queueBatchesReview(admin, run, draft.response_json);
     } catch (e) {
-      if (e instanceof RepoContractUnavailable || e instanceof BatchContextTooLarge) {
+      if (e instanceof RepoContractUnavailable || e instanceof BatchContextTooLarge || e instanceof MarkdownCompactionImpossible) {
         await failRun(admin, run, e.message);
         return;
       }
@@ -1711,7 +1711,7 @@ async function handleRequest(req: Request): Promise<Response> {
     try {
       await createInitialSteps(admin, run);
     } catch (e) {
-      if (e instanceof RepoContractUnavailable || e instanceof BatchContextTooLarge) {
+      if (e instanceof RepoContractUnavailable || e instanceof BatchContextTooLarge || e instanceof MarkdownCompactionImpossible) {
         await admin
           .from("boardroom_runs")
           .update({ status: "failed", error: e.message })
@@ -1894,7 +1894,7 @@ async function handleRequest(req: Request): Promise<Response> {
     } catch (e) {
       await admin.from("boardroom_runs").delete().eq("id", run.id);
       await restore();
-      const msg = (e instanceof RepoContractUnavailable || e instanceof BatchContextTooLarge)
+      const msg = (e instanceof RepoContractUnavailable || e instanceof BatchContextTooLarge || e instanceof MarkdownCompactionImpossible)
         ? e.message
         : `Failed to seed regen run (restored old batches): ${(e as Error).message}`;
       return j(400, { error: msg });
