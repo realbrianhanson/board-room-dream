@@ -42,6 +42,23 @@ export const CAPS = {
   descriptionMax: 900,
   evidenceMax: 500,
   mergePayloadMax: 80_000,
+  // Map/extraction (per-chunk per-seat) — deliberately narrower than the merge
+  // input caps. The live 2400-token map budget was too tight for the prior
+  // 12/8000 schema and produced structurally complete JSON that ended one
+  // token short of the outer "]}" (run e2c5faf3). Narrowing the shape gives
+  // the low-reasoning map call actual headroom under a max_tokens of 4000.
+  mapFindingsMax: 6,
+  mapSerializedMax: 4_000,
+  mapTitleMax: 120,
+  mapDescriptionMax: 400,
+  mapEvidenceMax: 240,
+  // Post-truncation correction — asks ONLY for a compact, complete
+  // reconstruction. Must not repeat the failure mode: never 12 findings,
+  // never 8000 chars.
+  correctionFindingsMax: 3,
+  correctionSerializedMax: 3_000,
+  correctionDescriptionMax: 240,
+  correctionEvidenceMax: 160,
 } as const;
 
 export const FINDING_SCHEMA_DOC = `Each finding MUST be an object with EXACTLY these keys:
