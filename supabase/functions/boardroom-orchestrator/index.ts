@@ -764,6 +764,35 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
     await admin.from("batches").update({ status: "fix_needed" }).eq("id", audit.batch_id);
   }
 
+  // Final A-Z audits: any serious findings + a real fix prompt must NOT be
+  // silently discarded. Append one pending Lovable fix batch at the next
+  // integer batch_no and link the findings to it.
+  if (isFinal && hasSerious && fixPrompt) {
+    const { data: last } = await admin
+      .from("batches")
+      .select("batch_no")
+      .eq("project_id", audit.project_id)
+      .order("batch_no", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const nextNo = Math.floor(Number(last?.batch_no ?? 0)) + 1;
+    const { data: inserted } = await admin
+      .from("batches")
+      .insert({
+        project_id: audit.project_id,
+        user_id: audit.user_id,
+        batch_no: nextNo,
+        title: "Fix — Final A-Z Audit",
+        channel: "lovable",
+        prompt_md: fixPrompt,
+        status: "pending",
+        is_fix: true,
+      })
+      .select("id")
+      .single();
+    fixBatchId = inserted?.id ?? null;
+  }
+
   if (findings.length) {
     await admin.from("audit_findings").insert(
       findings.map((f: any) => ({
