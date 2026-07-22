@@ -104,24 +104,58 @@ ${jsonShape}`;
 // Map-reduce: large repos are split into chunks; every seat reviews every
 // chunk in its own step, and the Chair merge dedupes across chunk reports.
 // Single-chunk audits keep the legacy step keys (audit_<seat>).
-const CHUNK_BYTES = 300 * 1024;
-const MAX_CHUNKS = 4;
+// 200 KiB × 6 keeps the same 1.2 MiB total ceiling as the previous 300 KiB × 4
+// but shrinks per-call prompt tokens so watchdog timeouts no longer swallow
+// entire seat rounds on large repos.
+export const CHUNK_BYTES = 200 * 1024;
+export const MAX_CHUNKS = 6;
+export const MAX_TOTAL_BYTES = CHUNK_BYTES * MAX_CHUNKS;
 
-function chunkFiles(files: { path: string; content: string; bytes: number }[]): string[] {
-  const chunks: string[] = [];
-  let current: typeof files = [];
+export function chunkFilesFor(
+  files: { path: string; content: string; bytes: number }[],
+): { path: string; content: string; bytes: number }[][] {
+  const chunks: { path: string; content: string; bytes: number }[][] = [];
+  let current: { path: string; content: string; bytes: number }[] = [];
   let size = 0;
   for (const f of files) {
     if (current.length && size + f.bytes > CHUNK_BYTES && chunks.length < MAX_CHUNKS - 1) {
-      chunks.push(formatFiles(current));
+      chunks.push(current);
       current = [];
       size = 0;
     }
     current.push(f);
     size += f.bytes;
   }
-  if (current.length) chunks.push(formatFiles(current));
-  return chunks.length ? chunks : [formatFiles([])];
+  if (current.length) chunks.push(current);
+  return chunks;
+}
+
+export function assertChunkInvariants(
+  chunkGroups: { path: string; content: string; bytes: number }[][],
+): void {
+  let total = 0;
+  for (const group of chunkGroups) {
+    const groupBytes = group.reduce((n, f) => n + f.bytes, 0);
+    total += groupBytes;
+    if (groupBytes > CHUNK_BYTES) {
+      // Only allowed when the group is a single indivisible source file.
+      if (!(group.length === 1 && group[0].bytes > CHUNK_BYTES)) {
+        throw new Error(
+          `audit chunk exceeds ${CHUNK_BYTES} bytes (${groupBytes}) with ${group.length} files`,
+        );
+      }
+    }
+  }
+  if (total > MAX_TOTAL_BYTES) {
+    throw new Error(`audit chunks total ${total} bytes exceed ceiling ${MAX_TOTAL_BYTES}`);
+  }
+}
+
+function chunkFiles(files: { path: string; content: string; bytes: number }[]): string[] {
+  const groups = chunkFilesFor(files);
+  assertChunkInvariants(groups);
+  const rendered = groups.map((g) => formatFiles(g));
+  return rendered.length ? rendered : [formatFiles([])];
 }
 
 async function insertAuditSteps(
