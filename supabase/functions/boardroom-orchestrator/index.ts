@@ -20,6 +20,7 @@ import {
   checkConsensus,
   resolveConsensusThreshold,
   validateStepJson,
+  correctionForStep,
 } from "./protocol.ts";
 import {
   createInitialSteps,
@@ -217,7 +218,7 @@ async function requeueForTimeout(admin: any, step: any): Promise<void> {
 async function requeueForValidation(admin: any, step: any, baseMessages: any[], assistantContent: string, validationError: string, truncated: boolean): Promise<void> {
   const attempts = Number(step.request?._validation_attempts ?? 0) + 1;
   const correctionText = truncated
-    ? `Your JSON was truncated. Return exactly 6 batches; each prompt_md <=2,800 characters; total JSON <=28,000 characters. Preserve required coverage but remove repeated context.`
+    ? correctionForStep(step.step_key)
     : `Your previous response failed validation: ${validationError}\nReturn ONLY the required JSON object, no prose, no code fences.`;
   const correctionMessages = [
     ...baseMessages,
@@ -239,6 +240,7 @@ async function requeueForValidation(admin: any, step: any, baseMessages: any[], 
     })
     .eq("id", step.id);
 }
+
 
 async function executeStep(admin: any, run: any, step: any) {
   const baseMessages = step.request?.messages ?? [];
