@@ -106,44 +106,118 @@ ${jsonShape}`;
 // Single-chunk audits keep the legacy step keys (audit_<seat>).
 // 200 KiB × 6 keeps the same 1.2 MiB total ceiling as the previous 300 KiB × 4
 // but shrinks per-call prompt tokens so watchdog timeouts no longer swallow
-// entire seat rounds on large repos.
+// entire seat rounds on large repos. chunkFilesFor bin-packs greedily and
+// fragments files at UTF-8-safe boundaries when file sizes don't line up with
+// the CHUNK_BYTES grid — every rendered chunk stays <= 200 KiB and count <= 6
+// whenever total encoded source content <= 1.2 MiB. Fragments retain the
+// original file path so audit evidence still cites real paths.
 export const CHUNK_BYTES = 200 * 1024;
 export const MAX_CHUNKS = 6;
 export const MAX_TOTAL_BYTES = CHUNK_BYTES * MAX_CHUNKS;
 
+// Returns the largest byte prefix length <= maxBytes that ends on a UTF-8
+// codepoint boundary (i.e., the byte at position `cut` is not a continuation
+// byte). Returns 0 if no such boundary exists within maxBytes.
+export function safeUtf8Cut(bytes: Uint8Array, maxBytes: number): number {
+  if (maxBytes >= bytes.length) return bytes.length;
+  if (maxBytes <= 0) return 0;
+  let cut = maxBytes;
+  while (cut > 0 && (bytes[cut] & 0xC0) === 0x80) cut--;
+  return cut;
+}
+
 export function chunkFilesFor(
-  files: { path: string; content: string; bytes: number }[],
+  files: { path: string; content: string; bytes?: number }[],
 ): { path: string; content: string; bytes: number }[][] {
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+
+  // Normalize to true encoded bytes; the caller's .bytes hint may be stale.
+  const items = files.map((f) => ({ path: f.path, enc: encoder.encode(f.content) }));
+  const total = items.reduce((n, i) => n + i.enc.length, 0);
+  if (total > MAX_TOTAL_BYTES) {
+    throw new Error(
+      `audit content total ${total} bytes exceeds ceiling ${MAX_TOTAL_BYTES}`,
+    );
+  }
+
   const chunks: { path: string; content: string; bytes: number }[][] = [];
   let current: { path: string; content: string; bytes: number }[] = [];
   let size = 0;
-  for (const f of files) {
-    if (current.length && size + f.bytes > CHUNK_BYTES && chunks.length < MAX_CHUNKS - 1) {
+
+  const seal = () => {
+    if (current.length) {
       chunks.push(current);
       current = [];
       size = 0;
     }
-    current.push(f);
-    size += f.bytes;
+  };
+
+  for (const it of items) {
+    let offset = 0;
+    while (offset < it.enc.length) {
+      let space = CHUNK_BYTES - size;
+      if (space <= 0) {
+        seal();
+        continue;
+      }
+      const remaining = it.enc.length - offset;
+      let take = Math.min(remaining, space);
+      if (take < remaining) {
+        // Must fragment: cut on a UTF-8-safe boundary within the available space.
+        const cut = safeUtf8Cut(it.enc.subarray(offset), take);
+        if (cut === 0) {
+          if (current.length === 0) {
+            throw new Error(
+              `cannot fragment ${it.path}: single codepoint exceeds CHUNK_BYTES ${CHUNK_BYTES}`,
+            );
+          }
+          seal();
+          continue;
+        }
+        take = cut;
+      }
+      const slice = it.enc.subarray(offset, offset + take);
+      current.push({ path: it.path, content: decoder.decode(slice), bytes: take });
+      size += take;
+      offset += take;
+      if (size >= CHUNK_BYTES) seal();
+    }
   }
-  if (current.length) chunks.push(current);
+  seal();
+
+  if (chunks.length > MAX_CHUNKS) {
+    throw new Error(
+      `audit chunks (${chunks.length}) exceed MAX_CHUNKS ${MAX_CHUNKS}`,
+    );
+  }
   return chunks;
 }
 
 export function assertChunkInvariants(
   chunkGroups: { path: string; content: string; bytes: number }[][],
 ): void {
+  if (chunkGroups.length > MAX_CHUNKS) {
+    throw new Error(
+      `audit chunks (${chunkGroups.length}) exceed MAX_CHUNKS ${MAX_CHUNKS}`,
+    );
+  }
   let total = 0;
   for (const group of chunkGroups) {
-    const groupBytes = group.reduce((n, f) => n + f.bytes, 0);
-    total += groupBytes;
-    if (groupBytes > CHUNK_BYTES) {
-      // Only allowed when the group is a single indivisible source file.
-      if (!(group.length === 1 && group[0].bytes > CHUNK_BYTES)) {
+    let groupBytes = 0;
+    for (const f of group) {
+      if (f.bytes > CHUNK_BYTES) {
         throw new Error(
-          `audit chunk exceeds ${CHUNK_BYTES} bytes (${groupBytes}) with ${group.length} files`,
+          `audit fragment ${f.path} bytes ${f.bytes} exceeds CHUNK_BYTES ${CHUNK_BYTES}`,
         );
       }
+      groupBytes += f.bytes;
+    }
+    total += groupBytes;
+    if (groupBytes > CHUNK_BYTES) {
+      throw new Error(
+        `audit chunk exceeds ${CHUNK_BYTES} bytes (${groupBytes}) with ${group.length} files`,
+      );
     }
   }
   if (total > MAX_TOTAL_BYTES) {
@@ -157,6 +231,7 @@ function chunkFiles(files: { path: string; content: string; bytes: number }[]): 
   const rendered = groups.map((g) => formatFiles(g));
   return rendered.length ? rendered : [formatFiles([])];
 }
+
 
 async function insertAuditSteps(
   admin: any,
