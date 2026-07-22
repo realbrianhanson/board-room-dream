@@ -456,7 +456,7 @@ Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=
     rationale: parsed.rationale,
     touched_paths: parsed.touched_paths,
     evidence: parsed.evidence,
-    schema_inventory_size: { tables: schemaInv.tables.length, rpcs: schemaInv.rpcs.length },
+    schema_inventory_size: { tables: schemaInv.tables.length, routines: schemaInv.routines.length, ok: schemaInv.ok },
     build_version: BUILD_VERSION,
   };
 
