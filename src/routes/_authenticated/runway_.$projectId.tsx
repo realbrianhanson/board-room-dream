@@ -792,6 +792,8 @@ function RunwayPage() {
               audit={finalAudit}
               findings={finalAudit ? (findingsByAudit.get(finalAudit.id) ?? []) : []}
               projectId={projectId}
+              isImport={!!project?.is_import}
+              hasPlan={hasPlan}
               onOpen={() => setAuditModal({ kind: "final_az" })}
             />
           )}
@@ -1418,26 +1420,31 @@ function FindingChips({ findings }: { findings: FindingRow[] }) {
 }
 
 function FinalAuditCard({
-  isOwner, audit, findings, projectId, onOpen,
+  isOwner, audit, findings, projectId, isImport, hasPlan, onOpen,
 }: {
   isOwner: boolean;
   audit: AuditRow | null;
   findings: FindingRow[];
   projectId: string;
+  isImport: boolean;
+  hasPlan: boolean;
   onOpen: () => void;
 }) {
   const running = audit?.status === "running";
   const clean = audit?.status === "clean";
   const flagged = audit?.status === "findings";
+  const subtitle = isImport
+    ? hasPlan
+      ? "The board reads the whole app against the locked improvement plan and the security checklist."
+      : "The board reads the whole app against your import goals, any locked artifacts that exist, and the security checklist — no plan or PRD is required to run this audit."
+    : "Every batch has passed. One last review of the entire codebase against the plan, the PRD, and the security checklist.";
   return (
     <div className="rounded-xl border border-primary/30 bg-surface-1 p-6">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(38_65%_70%)]">Final A–Z audit</p>
           <h3 className="mt-2 font-display text-2xl text-foreground">The board reads the whole app.</h3>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Every batch has passed. One last review of the entire codebase against the plan, the PRD, and the security checklist.
-          </p>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{subtitle}</p>
         </div>
         <ShieldCheck className="h-6 w-6 text-[hsl(38_65%_70%)]" />
       </div>
