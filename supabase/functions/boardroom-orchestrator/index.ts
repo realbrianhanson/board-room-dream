@@ -1005,15 +1005,23 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
   const verdict = evaluation.verdict;
   const filesAnalyzed = Number(run.consensus?.files_analyzed ?? 0) || null;
 
+  const counts = {
+    P0: findings.filter((f) => f.severity === "P0").length,
+    P1: findings.filter((f) => f.severity === "P1").length,
+    P2: findings.filter((f) => f.severity === "P2").length,
+    P3: findings.filter((f) => f.severity === "P3").length,
+  };
+  // R3 — never let the persisted summary.text assert a severity class the
+  // post-downgrade counts don't support. Live regression: audit 2d953efb had
+  // counts.P0=0 but summary text said "P0". reconcileAuditSummaryText is
+  // deterministic and only trims/replaces — never invents facts.
+  const { reconcileAuditSummaryText } = await import("../_shared/audit-findings.ts");
+  const reconciledText = reconcileAuditSummaryText(mergedSummaryText, counts);
+
   const summary = {
     verdict,
-    text: mergedSummaryText,
-    counts: {
-      P0: findings.filter((f) => f.severity === "P0").length,
-      P1: findings.filter((f) => f.severity === "P1").length,
-      P2: findings.filter((f) => f.severity === "P2").length,
-      P3: findings.filter((f) => f.severity === "P3").length,
-    },
+    text: reconciledText,
+    counts,
     validation_downgrades: downgrades,
   };
 
