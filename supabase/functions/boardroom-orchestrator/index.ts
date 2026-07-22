@@ -692,6 +692,17 @@ async function finalizeBlueprint(admin: any, run: any, steps: any[]) {
       });
       const preErr = finalizePlanAuthorityError(prdMd, features, authority);
       if (preErr) {
+        // Invalidate the plan_versions row that was inserted upstream: PRD
+        // failed the owner-authority gate, so this plan must not be used
+        // as a build-safe input by later design/batches/compiler reads.
+        if (planVersionId) {
+          try {
+            await admin
+              .from("plan_versions")
+              .update({ is_build_safe: false, invalidated_reason: "owner_authority_prd_gate_failed" })
+              .eq("id", planVersionId);
+          } catch { /* best-effort */ }
+        }
         await failRun(admin, run, preErr);
         await insertAlert(admin, {
           user_id: run.user_id,
@@ -710,6 +721,7 @@ async function finalizeBlueprint(admin: any, run: any, steps: any[]) {
       await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
       return;
     }
+
   }
 
   if (planVersionId && prdMd) {
