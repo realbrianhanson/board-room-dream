@@ -89,7 +89,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-22.streamed-body-timeout.1";
+const BUILD_VERSION = "2026-07-22.batch-output-integrity.e1";
 
 // Terminal-fail a run and, when it drives an audit, fail the audit row in
 // lockstep so audits/runs never drift. Budget pauses and recoverable requeues
@@ -214,15 +214,15 @@ async function requeueForTimeout(admin: any, step: any): Promise<void> {
     .eq("id", step.id);
 }
 
-async function requeueForValidation(admin: any, step: any, baseMessages: any[], assistantContent: string, validationError: string): Promise<void> {
+async function requeueForValidation(admin: any, step: any, baseMessages: any[], assistantContent: string, validationError: string, truncated: boolean): Promise<void> {
   const attempts = Number(step.request?._validation_attempts ?? 0) + 1;
+  const correctionText = truncated
+    ? `Your JSON was truncated. Return exactly 6 batches; each prompt_md <=2,800 characters; total JSON <=28,000 characters. Preserve required coverage but remove repeated context.`
+    : `Your previous response failed validation: ${validationError}\nReturn ONLY the required JSON object, no prose, no code fences.`;
   const correctionMessages = [
     ...baseMessages,
     { role: "assistant", content: assistantContent },
-    {
-      role: "user",
-      content: `Your previous response failed validation: ${validationError}\nReturn ONLY the required JSON object, no prose, no code fences.`,
-    },
+    { role: "user", content: correctionText },
   ];
   await admin
     .from("run_steps")
@@ -230,7 +230,7 @@ async function requeueForValidation(admin: any, step: any, baseMessages: any[], 
       status: "queued",
       started_at: null,
       completed_at: null,
-      error: "invalid_json_requeued",
+      error: truncated ? "truncated_output_requeued" : "invalid_json_requeued",
       request: {
         ...(step.request ?? {}),
         messages: correctionMessages,
@@ -355,10 +355,17 @@ async function executeStep(admin: any, run: any, step: any) {
       try { candidate = JSON.parse(content); } catch { candidate = null; }
       const err = candidate ? validateStepJson(step.step_key, candidate, run.kind) : "Response was not parseable JSON.";
       if (err) {
-        // Invocation-safe correction: NEVER mark completed with invalid
-        // output and NEVER make two long model calls in one invocation.
-        // Queue the correction into a fresh invocation, allowing exactly
-        // one retry before failing the run loudly.
+        // Detect truncation: provider finish_reason of length/max_tokens, OR
+        // unparseable JSON whose content is close to the requested max_tokens
+        // ceiling (heuristic: >=95% of max_tokens * ~4 chars/token).
+        const finishReason = (result as any)?.finishReason;
+        const maxTokens = Number(step.request?.max_tokens) > 0 ? Number(step.request.max_tokens) : 0;
+        const nearMax = !candidate && maxTokens > 0 && content.length >= Math.floor(maxTokens * 4 * 0.95);
+        const truncated = finishReason === "length" || finishReason === "max_tokens" || nearMax;
+
+        // Invocation-safe correction: NEVER mark completed with invalid output
+        // and NEVER make two long model calls in one invocation. Queue the
+        // correction into a fresh invocation, exactly one retry before failing.
         const validationAttempts = Number(step.request?._validation_attempts ?? 0);
         if (validationAttempts >= 1) {
           const vmsg = `Step ${step.step_key} produced invalid JSON after one correction pass: ${err}`;
@@ -366,7 +373,7 @@ async function executeStep(admin: any, run: any, step: any) {
             .from("run_steps")
             .update({
               status: "failed",
-              error: "invalid_json_after_correction",
+              error: truncated ? "truncated_after_correction" : "invalid_json_after_correction",
               response_text: content,
               tokens_in: usage.tokensIn,
               tokens_out: usage.tokensOut,
@@ -377,7 +384,7 @@ async function executeStep(admin: any, run: any, step: any) {
           await failRun(admin, run, vmsg);
           return;
         }
-        await requeueForValidation(admin, step, baseMessages, content, err);
+        await requeueForValidation(admin, step, baseMessages, content, err, truncated);
         return;
       }
       let parsed: any = candidate;
@@ -1485,7 +1492,7 @@ async function handleRequest(req: Request): Promise<Response> {
     }
     if (action === "resume") {
       const extra = Number(body?.extra_budget_usd ?? 0);
-      const patch: any = { status: "queued" };
+      const patch: any = { status: "queued", error: null };
       if (extra > 0) patch.budget_usd = Number(run.budget_usd) + extra;
       await admin.from("boardroom_runs").update(patch).eq("id", runId);
       fireSelfTick();

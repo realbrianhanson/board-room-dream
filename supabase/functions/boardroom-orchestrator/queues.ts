@@ -707,13 +707,20 @@ export async function queueBatchesStep(admin: any, run: any) {
   // catches and fails the run with a human-readable error.
   const repoContract = await loadLiveRepoContract(admin, project);
 
-  const system = `You are the Chair, sequencing this student's build for their Lovable project. Produce 6-14 dependency-safe, single-concern build batches that turn the locked plan + PRD into a shippable app — core batches first, then clearly-labeled Enhancement batches so lower-priority value is never silently dropped.
+  const system = `You are the Chair, sequencing this student's build for their Lovable project. Produce 6-8 dependency-safe, single-concern build batches (STRONGLY PREFER 6) that turn the locked plan + PRD into a shippable app — core batches first, then clearly-labeled Enhancement batches so lower-priority value is never silently dropped.
 
 ${manual}
 
+OUTPUT DISCIPLINE (hard limits — the run FAILS if you exceed them):
+- 6-8 batches total. Aim for 6. Merge overlapping concerns rather than adding a 9th batch.
+- Each prompt_md: 900-3,200 characters, MAX 8 numbered implementation items.
+- Code batches: 2-4 acceptance checks (not 5).
+- Do NOT restate plan/PRD prose, feature lists, or design tokens verbatim in prompts. Reference them by name.
+- Total serialized JSON payload: <=32,000 characters. If you approach that, cut prose — not scope.
+
 Rules for EVERY batch:
 - Numbered items with EXACT scope — no wishlists. Name exact routes, components, tables, and columns from the PRD in every item.
-- Code batches (channel 'lovable' or 'supabase') include an "Acceptance checks:" list — 2-5 numbered checks the student verifies in the preview with clicks only.
+- Code batches (channel 'lovable' or 'supabase') include an "Acceptance checks:" list — 2-4 numbered checks the student verifies in the preview with clicks only.
 - Ends with the sentence: "Keep everything else identical."
 - Code batches (channel 'lovable' or 'supabase') also end with: "Typecheck when done."
 - Channel 'supabase' = pure database/schema/RLS/edge-function work. State access rules for every table in plain words.
@@ -721,7 +728,7 @@ Rules for EVERY batch:
 - Channel 'lovable' = frontend + integration work the student will paste into Lovable.
 - Sequence so nothing depends on a later batch. Auth/data foundations early. Polish/SEO/analytics late.
 - EVERY feature in the FEATURES list must land in some batch. Must-have/high-priority features go in the core batches; lower-priority features go in final batches titled "Enhancement — <name>" (same skeleton, same rigor). Never silently drop a listed feature.
-- If a DEFERRED VALUE section is provided, harvest the still-valuable ideas that do not contradict the locked plan into the Enhancement batches too — the student paid for that thinking; do not lose it. Never resurrect anything the board explicitly rejected as harmful.
+- If a DEFERRED VALUE section is provided, harvest the still-valuable ideas that do not contradict the locked plan into the Enhancement batches too. Never resurrect anything the board explicitly rejected as harmful.
 - REPO GROUNDING (critical): The LIVE REPO CONTRACT is authoritative. Any path/route/component/table/function that already exists there is an UPDATE target and MUST match the contract verbatim. Anything not in the contract MUST be labelled CREATE/ADD, and its dependencies MUST be sequenced earlier. Never invent an UPDATE against a filename that is not in the contract.
 - Every prompt_md follows this skeleton:
   """
@@ -746,7 +753,7 @@ Return ONLY valid JSON:
   ]
 }
 
-Constraints: 6-14 batches, unique ascending integer batch_no starting at 1, every prompt_md non-empty, FULL length, and following the skeleton exactly.`;
+Constraints: 6-8 batches (prefer 6), unique ascending integer batch_no starting at 1, every prompt_md within character limits, following the skeleton exactly.`;
 
   const featuresBlock = Array.isArray(plan?.features) && plan!.features.length
     ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
@@ -772,7 +779,7 @@ Constraints: 6-14 batches, unique ascending integer batch_no starting at 1, ever
     request: {
       json_output: true,
       reasoning_effort: "high",
-      max_tokens: 10000,
+      max_tokens: 8000,
 
       messages: [
         { role: "system", content: system },
@@ -885,12 +892,18 @@ export async function queueBatchesRevise(admin: any, run: any, draftJson: any, r
 
 ${manual}
 
+OUTPUT DISCIPLINE (hard limits — the run FAILS if you exceed them):
+- 6-8 batches total. Aim for 6. Merge overlapping concerns rather than adding a 9th batch.
+- Each prompt_md: 900-3,200 characters, MAX 8 numbered items, 2-4 acceptance checks for code batches.
+- Do NOT restate plan/PRD prose, feature lists, or design tokens verbatim. Reference them by name.
+- Total serialized JSON payload: <=32,000 characters. If you approach that, cut prose — not scope.
+
 Return ONLY the same JSON shape as the original draft:
 {
   "batches": [ { "batch_no": 1, "title": "...", "channel": "lovable"|"supabase"|"human", "prompt_md": "..." } ]
 }
 
-Constraints: 6-14 batches, unique ascending integer batch_no starting at 1, every prompt_md non-empty, FULL length, following the batch skeleton exactly (numbered items, acceptance checks for code batches, "Keep everything else identical.", "Typecheck when done." for code batches). Never delete Enhancement batches to satisfy a reviewer unless the reviewer explicitly flagged them.`;
+Constraints: 6-8 batches (prefer 6), unique ascending integer batch_no starting at 1, every prompt_md within character limits, following the batch skeleton exactly (numbered items, acceptance checks for code batches, "Keep everything else identical.", "Typecheck when done." for code batches). Never delete Enhancement batches to satisfy a reviewer unless the reviewer explicitly flagged them.`;
   const designSection = design?.content_md
     ? `LOCKED DESIGN BRIEF\n\n${design.content_md}`
     : `NO LOCKED DESIGN BRIEF.`;
@@ -905,7 +918,7 @@ Constraints: 6-14 batches, unique ascending integer batch_no starting at 1, ever
     request: {
       json_output: true,
       reasoning_effort: "high",
-      max_tokens: 10000,
+      max_tokens: 8000,
 
       messages: [
         { role: "system", content: system },
