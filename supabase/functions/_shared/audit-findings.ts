@@ -343,6 +343,13 @@ export function downgradeUnsupported(
       return { ...f, severity: "P2" as Severity };
     }
 
+    // Rule 5: speculative WHY ("appears", "may", "could", "likely", "seems")
+    // cannot support P0/P1 no matter how well-formed the QUOTE looks.
+    if ((sev === "P0" || sev === "P1") && whyIsSpeculative(f.evidence)) {
+      push(sev, "P2", "WHY: uses speculative hedge ('appears/may/could/likely/seems')");
+      return { ...f, severity: "P2" as Severity };
+    }
+
     // Baseline QUOTE/WHY + concrete-path/evidence/confidence gate.
     const reasons: string[] = [];
     if (!isConcretePath(f.file_path)) reasons.push("missing concrete file_path");
