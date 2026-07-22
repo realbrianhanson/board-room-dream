@@ -397,6 +397,7 @@ export async function callSeat(
     if (options.json) body.response_format = { type: "json_object" };
     if (options.reasoningEffort) body.reasoning = { effort: options.reasoningEffort };
     if (options.online) body.plugins = [{ id: "web", max_results: 5 }];
+    if (options.maxTokens && options.maxTokens > 0) body.max_tokens = options.maxTokens;
     return body;
   };
 
