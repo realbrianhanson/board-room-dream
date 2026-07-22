@@ -252,6 +252,48 @@ export type Database = {
           },
         ]
       }
+      batch_generation_archives: {
+        Row: {
+          batches_json: Json
+          created_at: string
+          id: string
+          project_id: string
+          source_run_id: string | null
+          user_id: string
+        }
+        Insert: {
+          batches_json: Json
+          created_at?: string
+          id?: string
+          project_id: string
+          source_run_id?: string | null
+          user_id: string
+        }
+        Update: {
+          batches_json?: Json
+          created_at?: string
+          id?: string
+          project_id?: string
+          source_run_id?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "batch_generation_archives_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "batch_generation_archives_source_run_id_fkey"
+            columns: ["source_run_id"]
+            isOneToOne: false
+            referencedRelation: "boardroom_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       batches: {
         Row: {
           batch_no: number
