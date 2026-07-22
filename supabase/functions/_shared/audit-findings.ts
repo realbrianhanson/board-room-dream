@@ -622,6 +622,16 @@ Universal-helper claim rule: any claim that a helper/validator/middleware "appli
 "every call goes through Y" requires 'CALLER: <quote from a reachable current caller>'. Missing
 marker → downgraded to P2.
 
+Client-surface security claim rule (frontend src/*): any P0/P1 that alleges an auth/admin/RLS/privilege/
+unauthorized/direct-SELECT bypass and cites a src/* frontend file MUST include a compact
+'SERVER_AUTH: <quote of the current vulnerable server RLS/RPC/edge/security-definer construct>' marker.
+UI-only observation without SERVER_AUTH is downgraded to P2.
+
+Product-strategy/copy claim rule: findings about copy, positioning, acquisition, pricing/monetization,
+onboarding activation, or buyer-reach cannot be P0/P1 without either 'OWNER_CONTRACT: <verbatim owner
+intake / founder note / locked-PRD requirement>' or 'RUNTIME_FAILURE: <error>'. Without one, they are
+downgraded to P2 (still visible as product-quality findings).
+
 Cumulative-ledger rule: SQL migrations are a cumulative ledger. An older migration is NOT proof of the current effective state. Corroborate any P0/P1 based on a migration against later migrations / current grants / current RLS policies / current triggers / current code — the QUOTE must come from the CURRENT effective definition, not a superseded one. Otherwise downgrade to P2 or drop.
 
 Client-side vs server-side authorization: a client-side route/UI role check is navigation UX, not the authorization boundary. Do NOT flag it as an exploit unless the underlying server (RLS / RPC / edge function / security-definer) is concretely bypassable and you can QUOTE the vulnerable server construct.
