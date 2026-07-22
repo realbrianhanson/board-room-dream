@@ -431,7 +431,7 @@ Authority rules (F1):
 - Keep the batch skeleton exactly (ENFORCED):
   * First line: \`Batch ${batch.batch_no} — <title semantically matching the current title>. Numbered items only, no scope creep.\`
   * Then the numbered items, each starting with \`1.\`, \`2.\`, … — no bullets, no free-form paragraphs.
-  * If channel is "code": include an "Acceptance" section with 2–4 click-only checks (one per line).
+  * For code channels ("lovable" and "supabase"): include an "Acceptance" section with 2–4 click-only checks (one per line).
   * Ends EXACTLY with the two lines:\n    Keep everything else identical.\n    Typecheck when done.
   * Total length 900–3200 characters.
   * NEVER merely echo the original prompt when live reality (repo/schema) contradicts it — rewrite to match the live code.
@@ -529,7 +529,7 @@ Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=
           title: batch.title,
           channel: batch.channel,
           batch_no: Number(batch.batch_no),
-        }, fileTreeSet, { source, schemaObjects: schemaInv.objectsLower, authority });
+        }, fileTreeSet, { source, schemaObjects: toCollisionSet(targetInv), authority });
       }
       if (!err) {
         parsed = candidate as Parsed;
@@ -603,7 +603,10 @@ Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=
     rationale: parsed.rationale,
     touched_paths: parsed.touched_paths,
     evidence: parsed.evidence,
-    schema_inventory_size: { tables: schemaInv.tables.length, routines: schemaInv.routines.length, ok: schemaInv.ok },
+    target_repo_migrations: targetMigrationsProvenance,
+    target_inventory_ok: targetInvOk,
+    target_inventory_reason: targetInvReason,
+    schema_touching_batch: schemaTouching,
     build_version: BUILD_VERSION,
   };
 
