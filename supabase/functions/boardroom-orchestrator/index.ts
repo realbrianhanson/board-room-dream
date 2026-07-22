@@ -173,19 +173,69 @@ async function claimOneStep(admin: any, runId: string) {
 }
 
 
-// Hard ceiling on a single model call, enforced at the ORCHESTRATOR level so a
-// step can never hang the pipeline regardless of what the proxy does.
-const STEP_HARD_TIMEOUT_MS = 210_000;
+// Hard ceiling on a single model call, enforced at the ORCHESTRATOR level so
+// a step can never hang the pipeline regardless of what the proxy does. Kept
+// under the platform's ~150s invocation cap so the abort fires while the
+// isolate is still alive — otherwise the timer dies with the invocation and
+// only the once-a-minute watchdog rescues the step. Any hard-timeout is
+// treated exactly like a proxy timeout: requeue with force_fallback.
+const STEP_HARD_TIMEOUT_MS = 120_000;
 
 function withHardTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const t = setTimeout(() => {
       const err = new Error(`Step ${label} exceeded hard timeout ${ms}ms`);
       (err as any).isHardTimeout = true;
+      (err as any).isTimeout = true;
       reject(err);
     }, ms);
     p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
   });
+}
+
+async function requeueForTimeout(admin: any, step: any): Promise<void> {
+  const timeoutAttempts = Number(step.request?._timeout_attempts ?? 0) + 1;
+  await admin
+    .from("run_steps")
+    .update({
+      status: "queued",
+      started_at: null,
+      completed_at: null,
+      error: "timeout_failover",
+      request: {
+        ...(step.request ?? {}),
+        _timeout_attempts: timeoutAttempts,
+        // Never switch back to the timed-out primary — the reserve answers next.
+        force_fallback: true,
+      },
+    })
+    .eq("id", step.id);
+}
+
+async function requeueForValidation(admin: any, step: any, baseMessages: any[], assistantContent: string, validationError: string): Promise<void> {
+  const attempts = Number(step.request?._validation_attempts ?? 0) + 1;
+  const correctionMessages = [
+    ...baseMessages,
+    { role: "assistant", content: assistantContent },
+    {
+      role: "user",
+      content: `Your previous response failed validation: ${validationError}\nReturn ONLY the required JSON object, no prose, no code fences.`,
+    },
+  ];
+  await admin
+    .from("run_steps")
+    .update({
+      status: "queued",
+      started_at: null,
+      completed_at: null,
+      error: "invalid_json_requeued",
+      request: {
+        ...(step.request ?? {}),
+        messages: correctionMessages,
+        _validation_attempts: attempts,
+      },
+    })
+    .eq("id", step.id);
 }
 
 async function executeStep(admin: any, run: any, step: any) {
@@ -193,80 +243,27 @@ async function executeStep(admin: any, run: any, step: any) {
   const jsonMode = !!step.request?.json_output;
   console.log(`[exec] start step=${step.step_key} seat=${step.seat} run=${run.id}`);
 
+  // Quick 429/5xx retry is capped at 1 AND only fires for errors that hit
+  // before the model produced any response — timeouts requeue in a fresh
+  // invocation instead, and invalid JSON requeues for a fresh correction.
   let networkAttempt = 0;
   while (true) {
+    let result: Awaited<ReturnType<typeof callSeat>>;
     try {
-      let messages = [...baseMessages];
-      let parsed: any = null;
-      let content = "";
-      let usage = { tokensIn: 0, tokensOut: 0, costUsd: 0 };
-      let fallbackMeta: any = null;
-      let validationAttempt = 0;
-
-      // Structured JSON path: one re-prompt on invalid.
-      while (true) {
-        console.log(`[exec] calling model step=${step.step_key} attempt=${networkAttempt}`);
-        const result = await withHardTimeout(
-          callSeat(run.user_id, step.seat as Seat, messages, {
-            runId: run.id,
-            projectId: run.project_id,
-            temperature: Number(step.request?.temperature ?? 0.4),
-            reasoningEffort: step.request?.reasoning_effort,
-            json: jsonMode,
-            forceFallback: !!step.request?.force_fallback,
-          }),
-          STEP_HARD_TIMEOUT_MS,
-          step.step_key,
-        );
-        console.log(`[exec] model returned step=${step.step_key} cost=${result.costUsd} model=${result.model}`);
-        content = result.content;
-        usage = { tokensIn: result.tokensIn, tokensOut: result.tokensOut, costUsd: result.costUsd };
-        if (result.fallback) fallbackMeta = result.fallback;
-        if (!jsonMode) break;
-        let candidate: any;
-        try {
-          candidate = JSON.parse(content);
-        } catch {
-          candidate = null;
-        }
-        const err = candidate ? validateStepJson(step.step_key, candidate, run.kind) : "Response was not parseable JSON.";
-        if (!err) {
-          parsed = candidate;
-          break;
-        }
-        if (validationAttempt >= 1) {
-          parsed = { invalid: true, raw: content, validation_error: err };
-          break;
-        }
-        validationAttempt++;
-        messages = [
-          ...messages,
-          { role: "assistant", content },
-          {
-            role: "user",
-            content: `Your previous response failed validation: ${err}\nReturn ONLY the required JSON object, no prose, no code fences.`,
-          },
-        ];
-      }
-
-      if (fallbackMeta) {
-        if (!parsed || typeof parsed !== "object") parsed = {};
-        parsed._meta = { ...(parsed._meta ?? {}), fallback: fallbackMeta };
-      }
-
-      await admin
-        .from("run_steps")
-        .update({
-          status: "completed",
-          response_text: content,
-          response_json: parsed,
-          tokens_in: usage.tokensIn,
-          tokens_out: usage.tokensOut,
-          cost_usd: usage.costUsd,
-          completed_at: new Date().toISOString(),
-        })
-        .eq("id", step.id);
-      return;
+      console.log(`[exec] calling model step=${step.step_key} attempt=${networkAttempt} force_fallback=${!!step.request?.force_fallback}`);
+      result = await withHardTimeout(
+        callSeat(run.user_id, step.seat as Seat, baseMessages, {
+          runId: run.id,
+          projectId: run.project_id,
+          temperature: Number(step.request?.temperature ?? 0.4),
+          reasoningEffort: step.request?.reasoning_effort,
+          json: jsonMode,
+          forceFallback: !!step.request?.force_fallback,
+          maxTokens: Number(step.request?.max_tokens) > 0 ? Number(step.request.max_tokens) : undefined,
+        }),
+        STEP_HARD_TIMEOUT_MS,
+        step.step_key,
+      );
     } catch (e) {
       if (e instanceof DailyCapExceeded) {
         const capCopy =
@@ -309,16 +306,26 @@ async function executeStep(admin: any, run: any, step: any) {
         await failRun(admin, run, (e as Error).message);
         return;
       }
-      if ((e as any)?.isHardTimeout) {
-        console.log(`[exec] HARD TIMEOUT step=${step.step_key} run=${run.id}`);
-        const tmsg = `Step ${step.step_key} timed out — the model did not respond in time.`;
-        await admin
-          .from("run_steps")
-          .update({ status: "failed", error: "hard_timeout", completed_at: new Date().toISOString() })
-          .eq("id", step.id);
-        await failRun(admin, run, tmsg);
+      // Timeout (proxy abort OR orchestrator hard-timeout): invocation-safe
+      // failover. Requeue with force_fallback so the reserve answers in a
+      // FRESH invocation. If we already forced the fallback and it also
+      // timed out, fail loudly — the seat is truly stuck.
+      if ((e as any)?.isTimeout || (e as any)?.isHardTimeout) {
+        const model = (e as any)?.attemptedModel ?? "unknown";
+        console.log(`[exec] TIMEOUT step=${step.step_key} run=${run.id} model=${model} force_fallback=${!!step.request?.force_fallback}`);
+        if (step.request?.force_fallback) {
+          const tmsg = `Step ${step.step_key} timed out on the reserve model — even the fallback could not answer in time.`;
+          await admin
+            .from("run_steps")
+            .update({ status: "failed", error: "timeout_failover_exhausted", completed_at: new Date().toISOString() })
+            .eq("id", step.id);
+          await failRun(admin, run, tmsg);
+          return;
+        }
+        await requeueForTimeout(admin, step);
         return;
       }
+      // Pre-response 429/5xx/network blip: one quick same-invocation retry.
       if (networkAttempt === 0) {
         networkAttempt++;
         await new Promise((r) => setTimeout(r, 800));
@@ -333,8 +340,79 @@ async function executeStep(admin: any, run: any, step: any) {
       await failRun(admin, run, msg);
       return;
     }
+
+    // Success path — the model answered. Validate structured output.
+    const content = result.content;
+    const usage = { tokensIn: result.tokensIn, tokensOut: result.tokensOut, costUsd: result.costUsd };
+    const fallbackMeta = result.fallback ?? null;
+
+    if (jsonMode) {
+      let candidate: any = null;
+      try { candidate = JSON.parse(content); } catch { candidate = null; }
+      const err = candidate ? validateStepJson(step.step_key, candidate, run.kind) : "Response was not parseable JSON.";
+      if (err) {
+        // Invocation-safe correction: NEVER mark completed with invalid
+        // output and NEVER make two long model calls in one invocation.
+        // Queue the correction into a fresh invocation, allowing exactly
+        // one retry before failing the run loudly.
+        const validationAttempts = Number(step.request?._validation_attempts ?? 0);
+        if (validationAttempts >= 1) {
+          const vmsg = `Step ${step.step_key} produced invalid JSON after one correction pass: ${err}`;
+          await admin
+            .from("run_steps")
+            .update({
+              status: "failed",
+              error: "invalid_json_after_correction",
+              response_text: content,
+              tokens_in: usage.tokensIn,
+              tokens_out: usage.tokensOut,
+              cost_usd: usage.costUsd,
+              completed_at: new Date().toISOString(),
+            })
+            .eq("id", step.id);
+          await failRun(admin, run, vmsg);
+          return;
+        }
+        await requeueForValidation(admin, step, baseMessages, content, err);
+        return;
+      }
+      let parsed: any = candidate;
+      if (fallbackMeta) {
+        if (!parsed || typeof parsed !== "object") parsed = {};
+        parsed._meta = { ...(parsed._meta ?? {}), fallback: fallbackMeta };
+      }
+      await admin
+        .from("run_steps")
+        .update({
+          status: "completed",
+          response_text: content,
+          response_json: parsed,
+          tokens_in: usage.tokensIn,
+          tokens_out: usage.tokensOut,
+          cost_usd: usage.costUsd,
+          completed_at: new Date().toISOString(),
+        })
+        .eq("id", step.id);
+      return;
+    }
+
+    // Non-JSON free-markdown path — complete as-is.
+    await admin
+      .from("run_steps")
+      .update({
+        status: "completed",
+        response_text: content,
+        response_json: fallbackMeta ? { _meta: { fallback: fallbackMeta } } : null,
+        tokens_in: usage.tokensIn,
+        tokens_out: usage.tokensOut,
+        cost_usd: usage.costUsd,
+        completed_at: new Date().toISOString(),
+      })
+      .eq("id", step.id);
+    return;
   }
 }
+
 
 
 async function lockPlanAndQueueBlueprint(
