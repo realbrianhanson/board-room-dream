@@ -270,11 +270,13 @@ Requirements: at least ONE objection targeting EACH of the three other seats, at
       status: "queued",
       request: {
         json_output: true,
+        max_tokens: 3500,
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
         ],
       },
+
     };
   });
   await admin.from("run_steps").insert(rows);
