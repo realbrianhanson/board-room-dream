@@ -1155,10 +1155,14 @@ export async function createInitialSteps(admin: any, run: any) {
       await admin.from("boardroom_runs").update({ status: "failed", error: "Missing change_request_id" }).eq("id", run.id);
       return;
     }
+    // Tenant scoping: id + run.project_id + run.user_id. A CR from another
+    // project/owner must never seed steps for this run.
     const { data: activeCr } = await admin
       .from("change_requests")
       .select("*")
       .eq("id", crId)
+      .eq("project_id", run.project_id)
+      .eq("user_id", run.user_id)
       .maybeSingle();
     if (!activeCr) {
       await admin.from("boardroom_runs").update({ status: "failed", error: "Change request not found" }).eq("id", run.id);
