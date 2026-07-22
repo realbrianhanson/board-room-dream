@@ -282,6 +282,51 @@ export function chunkFilesFor(
   return chunks;
 }
 
+// A rendered chunk fragment. `fragmentIndex` and `fragmentTotal` are the
+// per-path fragment number and total across the WHOLE audit's chunk set
+// (annotateFragments assigns them after packing).
+export type ChunkFragment = {
+  path: string;
+  content: string;
+  bytes: number;
+  fragmentIndex?: number;
+  fragmentTotal?: number;
+};
+
+// Post-pack annotation: walk every group, count how many fragments each
+// original path was split into, and assign 1-based fragmentIndex/total.
+// Preserves the input groups' order and content — only enriches metadata.
+export function annotateFragments(
+  groups: { path: string; content: string; bytes: number }[][],
+): ChunkFragment[][] {
+  const totals = new Map<string, number>();
+  for (const g of groups) for (const f of g) totals.set(f.path, (totals.get(f.path) ?? 0) + 1);
+  const seen = new Map<string, number>();
+  return groups.map((g) =>
+    g.map((f) => {
+      const total = totals.get(f.path) ?? 1;
+      const idx = (seen.get(f.path) ?? 0) + 1;
+      seen.set(f.path, idx);
+      return { ...f, fragmentIndex: idx, fragmentTotal: total };
+    })
+  );
+}
+
+// Audit-specific renderer. Emits an unambiguous fragment marker whenever
+// a source file was split across chunks so the seat can distinguish a real
+// file boundary from a mid-token/mid-statement fragment boundary. Non-
+// fragmented files render identically to formatFiles() to keep single-file
+// audits byte-for-byte stable.
+export function renderAuditChunkGroup(group: ChunkFragment[]): string {
+  if (!group.length) return "(no code files were readable)";
+  return group.map((f) => {
+    const total = f.fragmentTotal ?? 1;
+    const idx = f.fragmentIndex ?? 1;
+    const marker = total > 1 ? ` (fragment ${idx} of ${total})` : "";
+    return `\n=== FILE: ${f.path}${marker} (${f.bytes} bytes) ===\n${f.content}`;
+  }).join("\n");
+}
+
 export function assertChunkInvariants(
   chunkGroups: { path: string; content: string; bytes: number }[][],
 ): void {
@@ -291,8 +336,10 @@ export function assertChunkInvariants(
     );
   }
   const encoder = new TextEncoder();
+  const annotated = annotateFragments(chunkGroups);
   let totalSource = 0;
-  for (const group of chunkGroups) {
+  for (let gi = 0; gi < annotated.length; gi++) {
+    const group = annotated[gi];
     let groupSource = 0;
     for (const f of group) {
       if (f.bytes > CHUNK_BYTES) {
@@ -303,7 +350,7 @@ export function assertChunkInvariants(
       groupSource += f.bytes;
     }
     totalSource += groupSource;
-    const renderedBytes = encoder.encode(formatFiles(group)).length;
+    const renderedBytes = encoder.encode(renderAuditChunkGroup(group)).length;
     if (renderedBytes > CHUNK_BYTES) {
       throw new Error(
         `audit RENDERED chunk exceeds ${CHUNK_BYTES} bytes (${renderedBytes}) with ${group.length} files`,
@@ -320,8 +367,9 @@ export function assertChunkInvariants(
 function chunkFiles(files: { path: string; content: string; bytes: number }[]): string[] {
   const groups = chunkFilesFor(files);
   assertChunkInvariants(groups);
-  const rendered = groups.map((g) => formatFiles(g));
-  return rendered.length ? rendered : [formatFiles([])];
+  const annotated = annotateFragments(groups);
+  const rendered = annotated.map((g) => renderAuditChunkGroup(g));
+  return rendered.length ? rendered : [renderAuditChunkGroup([])];
 }
 
 
