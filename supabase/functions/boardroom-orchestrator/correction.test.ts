@@ -49,7 +49,7 @@ Deno.test("correctionForStep — unknown steps route to generic copy", () => {
   }
 });
 
-Deno.test("validateStepJson — batches_review_ enforces 0-10, severities, batch_no, text length, payload", () => {
+Deno.test("validateStepJson — batches_review_ enforces 0-8, severities, batch_no, text length, payload", () => {
   const ok = { verdict: "revise", issues: [{ batch_no: 1, severity: "blocking", text: "Batch 1 references src/nope.tsx which is not in the repo — use src/routes/index.tsx." }] };
   assertEquals(validateStepJson("batches_review_inspector", ok), null);
 
@@ -59,8 +59,8 @@ Deno.test("validateStepJson — batches_review_ enforces 0-10, severities, batch
   const badVerdict = validateStepJson("batches_review_inspector", { verdict: "maybe", issues: [] });
   assertStringIncludes(String(badVerdict), "verdict");
 
-  const tooMany = { verdict: "revise", issues: Array.from({ length: 11 }, () => ({ batch_no: 1, severity: "minor", text: "x".repeat(30) })) };
-  assertStringIncludes(String(validateStepJson("batches_review_inspector", tooMany)), "max 10");
+  const tooMany = { verdict: "revise", issues: Array.from({ length: 9 }, () => ({ batch_no: 1, severity: "minor", text: "x".repeat(30) })) };
+  assertStringIncludes(String(validateStepJson("batches_review_inspector", tooMany)), "max 8");
 
   const badSev = { verdict: "revise", issues: [{ batch_no: 1, severity: "critical", text: "x".repeat(30) }] };
   assertStringIncludes(String(validateStepJson("batches_review_inspector", badSev)), "severity");
@@ -72,11 +72,11 @@ Deno.test("validateStepJson — batches_review_ enforces 0-10, severities, batch
   assertEquals(validateStepJson("batches_review_inspector", nullBatchNoOk), null);
 
   const tooShort = { verdict: "revise", issues: [{ batch_no: 1, severity: "minor", text: "short" }] };
-  assertStringIncludes(String(validateStepJson("batches_review_inspector", tooShort)), "10-350");
+  assertStringIncludes(String(validateStepJson("batches_review_inspector", tooShort)), "10-280");
 
-  const tooLong = { verdict: "revise", issues: [{ batch_no: 1, severity: "minor", text: "x".repeat(351) }] };
-  assertStringIncludes(String(validateStepJson("batches_review_inspector", tooLong)), "10-350");
+  const tooLong = { verdict: "revise", issues: [{ batch_no: 1, severity: "minor", text: "x".repeat(281) }] };
+  assertStringIncludes(String(validateStepJson("batches_review_inspector", tooLong)), "10-280");
 
-  const oversize = { verdict: "revise", issues: Array.from({ length: 10 }, () => ({ batch_no: 1, severity: "minor", text: "y".repeat(600) })) };
-  assertStringIncludes(String(validateStepJson("batches_review_inspector", oversize)), "6,000");
+  const oversize = { verdict: "revise", issues: Array.from({ length: 8 }, () => ({ batch_no: 1, severity: "minor", text: "y".repeat(270) })) };
+  assertStringIncludes(String(validateStepJson("batches_review_inspector", oversize)), "4,500");
 });
