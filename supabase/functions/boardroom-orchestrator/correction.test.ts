@@ -111,15 +111,15 @@ Deno.test("validateStepJson — audit_chair_merge rejects evidence over cap and 
       file_path: "src/foo.ts",
       title: "Concrete P0",
       description: "Something concrete is broken.",
-      // Over the 200-char mergeEvidenceMax, exactly the live failure shape.
-      evidence: "QUOTE: " + "x".repeat(220) + " | WHY: it proves the issue",
+      // Over the 280-char mergeEvidenceMax, exactly the live failure shape.
+      evidence: "QUOTE: " + "x".repeat(300) + " | WHY: it proves the issue",
       confidence: "high",
       line_start: 10,
       line_end: 20,
     }],
   };
   const err = validateStepJson("audit_chair_merge", badEvidence);
-  assert(err && /evidence/.test(err) && /200/.test(err), `expected evidence-over-200 error, got: ${err}`);
+  assert(err && /evidence/.test(err) && /280/.test(err), `expected evidence-over-280 error, got: ${err}`);
   // And the routed correction must be the merge contract, not seat/map copy.
   const c = correctionForStep("audit_chair_merge");
   assertStringIncludes(c, "audit merge");
