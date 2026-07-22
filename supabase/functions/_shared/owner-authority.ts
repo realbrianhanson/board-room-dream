@@ -473,3 +473,42 @@ export function preLockAuthorityError(
   if (!violations.length) return null;
   return `proposal_requires_owner_approval — the following executable artifacts contain high-impact directives without verified owner authorization and CANNOT be locked, queued, or promoted. Each item must be removed, replaced with a repo-proven preservation/repair, or accompanied by a valid [OWNER-AUTHORIZED: source="..." quote="..."] marker whose quote appears verbatim in intake, founder_notes, or an approved change_request AND whose text references the same category:\n${violations.join("\n")}`;
 }
+
+// Convenience wrappers for the two finalization gates. They call
+// preLockAuthorityError with the exact artifacts each callsite is about to
+// commit (plan_versions row update / plan_versions row insert). Exported
+// (instead of inlined in the orchestrator) so they can be exercised by
+// behavior-level regression tests without a fake supabase client.
+export function finalizePlanAuthorityError(
+  prdMd: string,
+  features: unknown,
+  authority: OwnerAuthority,
+): string | null {
+  return preLockAuthorityError(
+    [
+      { label: "plan.prd_md (pending finalization)", text: String(prdMd ?? "") },
+      {
+        label: "plan.features (pending finalization)",
+        text: JSON.stringify(features ?? []),
+      },
+    ],
+    authority,
+  );
+}
+
+export function finalizeChangeRequestAuthorityError(
+  v: any,
+  authority: OwnerAuthority,
+): string | null {
+  return preLockAuthorityError(
+    [
+      { label: "change_request.amended_plan_md (pending finalization)", text: String(v?.amended_plan_md ?? "") },
+      { label: "change_request.amended_prd_md (pending finalization)", text: String(v?.amended_prd_md ?? "") },
+      {
+        label: "change_request.amended_features (pending finalization)",
+        text: JSON.stringify(v?.amended_features ?? []),
+      },
+    ],
+    authority,
+  );
+}
