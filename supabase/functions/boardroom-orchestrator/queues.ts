@@ -18,6 +18,7 @@ import {
   renderCompactRepoContract,
 } from "../_shared/batch-context.ts";
 export { BatchContextTooLarge } from "../_shared/batch-context.ts";
+import { batchPromptPolicy, productStrategyContract } from "../_shared/batch-count-policy.ts";
 import {
   SEATS,
   type Seat,
