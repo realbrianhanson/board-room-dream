@@ -403,10 +403,14 @@ ${renderStackBlock(detectStackFromRepo({
 Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=${batch.channel}) now. Produce your JSON.`;
 
   const fileTreeSet = new Set(fileTree);
+  // Inject the OWNER AUTHORITY rules + compact owner-source block. The
+  // deterministic post-validator below runs regardless of what the model
+  // returns, so this is defense-in-depth, not the only gate.
+  const injected = injectOwnerAuthority(system, user, authority);
   // Bounded cost: one primary call plus at most one structured correction pass.
   let messages: any[] = [
-    { role: "system", content: system },
-    { role: "user", content: user },
+    { role: "system", content: injected.system },
+    { role: "user", content: injected.user },
   ];
   let parsed: Parsed | null = null;
   let lastErr: string | null = null;
@@ -428,7 +432,7 @@ Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=
           title: batch.title,
           channel: batch.channel,
           batch_no: Number(batch.batch_no),
-        }, fileTreeSet, { source, schemaObjects: schemaInv.objectsLower });
+        }, fileTreeSet, { source, schemaObjects: schemaInv.objectsLower, authority });
       }
       if (!err) {
         parsed = candidate as Parsed;
