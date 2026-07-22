@@ -1861,7 +1861,7 @@ async function handleRequest(req: Request): Promise<Response> {
     } catch (e) {
       await admin.from("boardroom_runs").delete().eq("id", run.id);
       await restore();
-      const msg = e instanceof RepoContractUnavailable
+      const msg = (e instanceof RepoContractUnavailable || e instanceof BatchContextTooLarge)
         ? e.message
         : `Failed to seed regen run (restored old batches): ${(e as Error).message}`;
       return j(400, { error: msg });
