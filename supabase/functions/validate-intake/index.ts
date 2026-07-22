@@ -35,11 +35,19 @@ const DIMENSIONS = [
 type Scores = Record<(typeof DIMENSIONS)[number], { score: number; evidence: string }>;
 type Verdict = { scores: Scores; total: number; verdict: "pass" | "kill"; pivot?: string };
 
-function buildUserPrompt(answers: any) {
-  return `You will score a founder's app intake on five dimensions from 1 to 10. Return ONLY strict JSON:\n{\n  "scores": {\n    "painful_problem": {"score": 1-10, "evidence": "one sentence"},\n    "reachable_buyer": {"score": 1-10, "evidence": "one sentence"},\n    "monetization_path": {"score": 1-10, "evidence": "one sentence"},\n    "buildable_scope": {"score": 1-10, "evidence": "one sentence"},\n    "differentiation": {"score": 1-10, "evidence": "one sentence"}\n  },\n  "pivot": "one sentence — only if verdict is kill, else empty string"\n}\n\nINTAKE ANSWERS\n1. Idea: ${answers?.idea ?? ""}\n2. Buyer: ${answers?.buyer ?? ""}\n3. Pain: ${answers?.pain ?? ""}\n4. Money: ${answers?.money ?? ""}\n5. Inspiration: ${answers?.inspiration ?? ""}\n\nScore honestly. Kill weak ideas fast. If web search results are available, ground your evidence in real competitors and real demand signals — name them in the evidence sentences.`;
+function hasMonetizationDetails(answers: any): boolean {
+  const trim = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  return !!(trim(answers?.paid_offer) && trim(answers?.price_anchor) && trim(answers?.upgrade_trigger));
 }
 
-function parseVerdict(content: string): Verdict | null {
+export function buildUserPrompt(answers: any) {
+  const paidOffer = String(answers?.paid_offer ?? "").trim() || "(not supplied)";
+  const priceAnchor = String(answers?.price_anchor ?? "").trim() || "(not supplied)";
+  const upgradeTrigger = String(answers?.upgrade_trigger ?? "").trim() || "(not supplied)";
+  return `You will score a founder's app intake on five dimensions from 1 to 10. Return ONLY strict JSON:\n{\n  "scores": {\n    "painful_problem": {"score": 1-10, "evidence": "one sentence"},\n    "reachable_buyer": {"score": 1-10, "evidence": "one sentence"},\n    "monetization_path": {"score": 1-10, "evidence": "one sentence"},\n    "buildable_scope": {"score": 1-10, "evidence": "one sentence"},\n    "differentiation": {"score": 1-10, "evidence": "one sentence"}\n  },\n  "pivot": "one sentence — only if verdict is kill, else empty string"\n}\n\nINTAKE ANSWERS\n1. Idea: ${answers?.idea ?? ""}\n2. Buyer: ${answers?.buyer ?? ""}\n3. Pain: ${answers?.pain ?? ""}\n4. Money model: ${answers?.money ?? ""}\n   4a. Paid offer (what they pay for): ${paidOffer}\n   4b. Price anchor (best guess): ${priceAnchor}\n   4c. Upgrade trigger (buy/renew/upgrade): ${upgradeTrigger}\n5. Inspiration: ${answers?.inspiration ?? ""}\n\nMONETIZATION SCORING RULE (hard):\n- The monetization_path score MUST be grounded in the paid_offer + price_anchor + upgrade_trigger triple (4a/4b/4c). Reference them by name in the evidence sentence.\n- If ANY of 4a/4b/4c is "(not supplied)" you MUST cap monetization_path at 5 and say so in the evidence — the founder has not shown a real path to money yet. Do NOT award 8+ for a strong money "model" alone.\n\nScore honestly. Kill weak ideas fast. If web search results are available, ground your evidence in real competitors and real demand signals — name them in the evidence sentences.`;
+}
+
+export function parseVerdict(content: string, answers: any = null): Verdict | null {
   let parsed: any;
   try { parsed = JSON.parse(content); } catch {
     const m = content.match(/\{[\s\S]*\}/);
@@ -51,12 +59,21 @@ function parseVerdict(content: string): Verdict | null {
   const out: any = {};
   let total = 0;
   let anyLow = false;
+  const monetizationCap = answers && !hasMonetizationDetails(answers) ? 5 : null;
   for (const d of DIMENSIONS) {
-    const s = Number(scores?.[d]?.score);
+    let s = Number(scores?.[d]?.score);
     const evidence = String(scores?.[d]?.evidence ?? "");
     if (!Number.isFinite(s) || s < 1 || s > 10) return null;
-    out[d] = { score: Math.round(s), evidence };
-    total += Math.round(s);
+    s = Math.round(s);
+    // Deterministic backstop: cap monetization_path when 4a/4b/4c are not
+    // all supplied. The model is instructed to do this itself; the cap here
+    // ensures legacy intakes and rare disobedience cannot award a strong
+    // monetization score without the concrete offer/anchor/trigger triple.
+    if (d === "monetization_path" && monetizationCap !== null && s > monetizationCap) {
+      s = monetizationCap;
+    }
+    out[d] = { score: s, evidence };
+    total += s;
     if (s <= 3) anyLow = true;
   }
   const verdict: "pass" | "kill" = total < 30 || anyLow ? "kill" : "pass";
