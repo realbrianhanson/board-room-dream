@@ -63,18 +63,18 @@ function ResetPasswordPage() {
           to="/"
           className="mb-8 block text-center font-display text-sm tracking-[0.28em] text-muted-foreground transition-colors hover:text-foreground"
         >
-          BOARDROOM
+          APP BLUEPRINT
         </Link>
 
         <div className="rounded-xl border border-border bg-surface-1 p-8 shadow-2xl shadow-black/40">
           <h1 className="font-display text-3xl text-foreground">Set a new password</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            {ready
-              ? "Choose a new password for your account."
-              : "Verifying your reset link…"}
+            {ready === "ok" && "Choose a new password for your account."}
+            {ready === "pending" && "Verifying your reset link…"}
+            {ready === "invalid" && "This reset link is invalid or has expired."}
           </p>
 
-          {ready && (
+          {ready === "ok" && (
             <form onSubmit={handleSubmit} className="mt-6 space-y-4">
               <div>
                 <label className="mb-1.5 block text-xs uppercase tracking-widest text-muted-foreground">
@@ -125,7 +125,22 @@ function ResetPasswordPage() {
             </form>
           )}
 
-          {!ready && message && (
+          {ready === "invalid" && (
+            <div className="mt-6 space-y-3 text-sm text-muted-foreground">
+              <p>
+                Password-reset links expire quickly for security. Request a fresh
+                one from the sign-in page and open it right away.
+              </p>
+              <Link
+                to="/auth"
+                className="inline-block rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
+              >
+                Request a new reset link
+              </Link>
+            </div>
+          )}
+
+          {ready !== "ok" && message && (
             <p
               className={`mt-6 text-sm ${
                 message.tone === "error" ? "text-destructive" : "text-success"
