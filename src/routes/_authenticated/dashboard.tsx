@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Plus, ArrowRight, Lightbulb, Package, Trash2 } from "lucide-react";
 import { ProjectJourney } from "@/components/project-journey";
 import { buildJourney } from "@/lib/project-journey";
+import { projectStatusLine } from "@/lib/project-status-line";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   component: DashboardPage,
@@ -616,8 +617,7 @@ function ProjectCard({
             )}
           </div>
           <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
-            {project.status}
-            {project.current_batch_no > 0 && ` · batch ${project.current_batch_no}`}
+            {projectStatusLine(project)}
           </p>
         </div>
         <div className="flex items-center gap-2">
