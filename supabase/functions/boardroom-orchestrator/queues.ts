@@ -10,6 +10,15 @@ import {
   type OwnerAuthority,
 } from "../_shared/owner-authority.ts";
 import {
+  assertBatchRequestSize,
+  BatchContextTooLarge,
+  compactMarkdown,
+  COMPACT_ARTIFACT_CAP,
+  isBatchGenerationStep,
+  renderCompactRepoContract,
+} from "../_shared/batch-context.ts";
+export { BatchContextTooLarge } from "../_shared/batch-context.ts";
+import {
   SEATS,
   type Seat,
   SEAT_LABEL,
