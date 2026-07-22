@@ -997,10 +997,13 @@ ${manual}
 
 ${shape}`,
   };
-  const designSection = design?.content_md
-    ? `LOCKED DESIGN BRIEF\n\n${design.content_md}`
+  const compactPlan = compactMarkdown(plan?.content_md ?? "", COMPACT_ARTIFACT_CAP);
+  const compactPrd = compactMarkdown(plan?.prd_md ?? "", COMPACT_ARTIFACT_CAP);
+  const compactDesign = compactMarkdown(design?.content_md ?? "", COMPACT_ARTIFACT_CAP);
+  const designSection = compactDesign
+    ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}`
     : `NO LOCKED DESIGN BRIEF.`;
-  const user = `${repoContract}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nDRAFT BATCHES\n\n${draftBlock}\n\nProduce your JSON now.`;
+  const user = `${repoContract}\n\nLOCKED PLAN (compact)\n\n${compactPlan || "(no plan)"}\n\nPRD (compact)\n\n${compactPrd || "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nDRAFT BATCHES\n\n${draftBlock}\n\nProduce your JSON now.`;
   const rows = (["inspector", "contrarian"] as const).map((seat) => ({
     run_id: run.id,
     user_id: run.user_id,
