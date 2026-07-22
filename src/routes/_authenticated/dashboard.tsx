@@ -132,6 +132,7 @@ function DashboardPage() {
   const [impUrl, setImpUrl] = useState("");
   const [impGoals, setImpGoals] = useState<string[]>(["code_audit"]);
   const [impBuyer, setImpBuyer] = useState("");
+  const [impAcquisitionChannel, setImpAcquisitionChannel] = useState("");
   const [impPaidOffer, setImpPaidOffer] = useState("");
   const [impPriceAnchor, setImpPriceAnchor] = useState("");
   const [impUpgradeTrigger, setImpUpgradeTrigger] = useState("");
@@ -147,6 +148,7 @@ function DashboardPage() {
     setImpUrl("");
     setImpGoals(["code_audit"]);
     setImpBuyer("");
+    setImpAcquisitionChannel("");
     setImpPaidOffer("");
     setImpPriceAnchor("");
     setImpUpgradeTrigger("");
@@ -248,6 +250,7 @@ function DashboardPage() {
 
   const importStrategyReady =
     impBuyer.trim().length > 1 &&
+    impAcquisitionChannel.trim().length > 1 &&
     impPaidOffer.trim().length > 1 &&
     impPriceAnchor.trim().length > 0 &&
     impUpgradeTrigger.trim().length > 1 &&
@@ -291,6 +294,7 @@ function DashboardPage() {
           lovable_project_url: impUrl.trim() || null,
           goals: impGoals,
           buyer: impBuyer.trim(),
+          acquisition_channel: impAcquisitionChannel.trim(),
           paid_offer: impPaidOffer.trim(),
           price_anchor: impPriceAnchor.trim(),
           upgrade_trigger: impUpgradeTrigger.trim(),
@@ -497,6 +501,12 @@ function DashboardPage() {
               value={impBuyer}
               onChange={setImpBuyer}
               placeholder="Independent finance advisers running solo practices"
+            />
+            <ImportStrategyField
+              label="Acquisition channel — where can you reach the first 10 buyers in 30 days?"
+              value={impAcquisitionChannel}
+              onChange={setImpAcquisitionChannel}
+              placeholder="LinkedIn DMs to advisers I already follow · niche subreddit · industry Slack"
             />
             <ImportStrategyField
               label="Paid offer — what is paid for"
