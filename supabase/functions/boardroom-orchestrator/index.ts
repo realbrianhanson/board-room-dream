@@ -1231,16 +1231,16 @@ async function processRun(admin: any, runId: string) {
 
 
 async function pipelineTick(admin: any) {
-  // Rescue steps orphaned by a dead invocation: an edge function caps out
-  // near ~400s wall clock, so anything 'running' for 15+ minutes belongs to
-  // an invocation that no longer exists. Requeue it; the atomic claim keeps
-  // double-execution impossible for live invocations.
-  // Nothing legitimate runs longer than the platform's ~150s invocation
-  // window, so a step 'running' for 4+ minutes belongs to a dead invocation.
-  // Escalate per rescue: attempt 2+ forces the seat's fallback model (the
-  // primary keeps outliving the window); attempt 4 fails the run loudly
-  // instead of looping forever. This watchdog runs from the per-minute cron,
-  // so unlike in-isolate timers it cannot be killed mid-flight.
+  // Last-resort backup for steps orphaned by a dead invocation: the platform
+  // can kill an isolate at any moment (~150s cap) and take its in-isolate
+  // timers with it, so a step 'running' for 3+ minutes belongs to an
+  // invocation that no longer exists. The primary timeout failover lives in
+  // executeStep — this watchdog only catches the rare case where the
+  // invocation died BEFORE executeStep's catch block could requeue.
+  //
+  // Escalation preserves prior state so we never switch back to the timed-out
+  // primary model: existing force_fallback stays sticky, existing
+  // _timeout_attempts is preserved, and _attempts caps the rescue count.
   const staleCutoff = new Date(Date.now() - 3 * 60 * 1000).toISOString();
   const { data: staleSteps } = await admin
     .from("run_steps")
@@ -1249,7 +1249,8 @@ async function pipelineTick(admin: any) {
     .lt("started_at", staleCutoff);
   for (const st of staleSteps ?? []) {
     const attempts = Number(st.request?._attempts ?? 0) + 1;
-    if (attempts >= 4) {
+    const alreadyForced = !!st.request?.force_fallback;
+    if (attempts >= 4 || (alreadyForced && attempts >= 2)) {
       await admin
         .from("run_steps")
         .update({ status: "failed", error: "stuck_model_call", completed_at: new Date().toISOString() })
@@ -1271,11 +1272,18 @@ async function pipelineTick(admin: any) {
         status: "queued",
         started_at: null,
         error: "requeued_stale",
-        request: { ...(st.request ?? {}), _attempts: attempts, force_fallback: attempts >= 1 },
+        request: {
+          ...(st.request ?? {}),
+          _attempts: attempts,
+          // Sticky: once force_fallback is on, NEVER switch back to the
+          // timed-out primary. First rescue also forces the fallback.
+          force_fallback: alreadyForced || attempts >= 1,
+        },
       })
       .eq("id", st.id)
       .eq("status", "running");
   }
+
   // Legacy/pre-migration orphans have no started_at at all — every live claim
   // now stamps it, so a 'running' row with started_at IS NULL can only be an
   // orphan. Requeue those too (gated on run age as a belt-and-suspenders).
