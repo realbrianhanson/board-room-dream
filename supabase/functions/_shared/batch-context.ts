@@ -8,7 +8,7 @@
 
 export const MAX_BATCH_REQUEST_CHARS = 100_000;
 export const COMPACT_ARTIFACT_CAP = 10_000;
-export const COMPACT_REPO_KEY_BYTES = 24 * 1024;
+export const COMPACT_REPO_TOTAL_BYTES = 24 * 1024; // Total rendered contract, not just key-evidence.
 export const COMPACT_REPO_TREE_PATHS = 250;
 
 export class BatchContextTooLarge extends Error {
@@ -21,6 +21,19 @@ export class BatchContextTooLarge extends Error {
     this.name = "BatchContextTooLarge";
     this.stepKey = stepKey;
     this.chars = chars;
+  }
+}
+
+export class MarkdownCompactionImpossible extends Error {
+  readonly capChars: number;
+  readonly requiredChars: number;
+  constructor(capChars: number, requiredChars: number) {
+    super(
+      `markdown_compaction_impossible: cap=${capChars} chars but the marker plus every H1/H2/H3 heading needs ${requiredChars} chars — cannot preserve every heading verbatim without silently dropping one`,
+    );
+    this.name = "MarkdownCompactionImpossible";
+    this.capChars = capChars;
+    this.requiredChars = requiredChars;
   }
 }
 
@@ -42,15 +55,30 @@ export function safeUtf8Cut(s: string, maxBytes: number): string {
   return dec.decode(bytes.subarray(0, cut));
 }
 
+// Cut a JS string at a UTF-16 boundary that never splits a surrogate pair.
+export function sliceCodepointsSafe(s: string, maxChars: number): string {
+  if (maxChars <= 0) return "";
+  if (s.length <= maxChars) return s;
+  let cut = maxChars;
+  const code = s.charCodeAt(cut - 1);
+  if (code >= 0xD800 && code <= 0xDBFF) cut -= 1;
+  return s.slice(0, cut);
+}
+
 // Heading-balanced compaction. We preserve every H1/H2/H3 heading verbatim
 // and take a bounded excerpt from each section rather than truncating the
 // whole document at the head — otherwise "Security", "Data model", and any
 // other late section vanishes silently in a way reviewers can't detect.
+//
+// Contract:
+//   - marker + every H1/H2/H3 line survives verbatim, or the function throws
+//     MarkdownCompactionImpossible (never silently drops a heading).
+//   - output.length <= capChars by construction. Never uses a blind slice
+//     and never splits a UTF-16 surrogate pair.
 export function compactMarkdown(md: string | null | undefined, capChars: number): string {
   const text = String(md ?? "");
   if (text.length <= capChars) return text;
   const MARKER = "> [COMPACTED — consult locked artifact or JIT compiler for the full text]\n\n";
-  const budget = Math.max(1000, capChars - MARKER.length);
 
   type Section = { heading: string; body: string[] };
   const sections: Section[] = [{ heading: "", body: [] }];
@@ -59,33 +87,62 @@ export function compactMarkdown(md: string | null | undefined, capChars: number)
     else sections[sections.length - 1].body.push(line);
   }
 
-  const headingCost = sections.reduce(
-    (n, s) => n + (s.heading ? s.heading.length + 1 : 0),
-    0,
-  );
-  const bodyBudget = Math.max(0, budget - headingCost);
+  // Each heading is emitted as "<heading>\n". Reserve that cost verbatim
+  // BEFORE any body allocation — headings are non-negotiable.
+  const headingSections = sections.filter((s) => s.heading);
+  const headingsCost = headingSections.reduce((n, s) => n + s.heading.length + 1, 0);
+  // Additional slack: 1 char newline per body-emitting section + " …" per truncated tail.
+  const bodySlack = sections.length * 3;
+  const required = MARKER.length + headingsCost;
+  if (required > capChars) {
+    throw new MarkdownCompactionImpossible(capChars, required);
+  }
+
+  const bodyBudget = Math.max(0, capChars - required - bodySlack);
   const totalBody = Math.max(
     1,
     sections.reduce((n, s) => n + s.body.join("\n").length, 0),
   );
 
-  const parts: string[] = [MARKER];
+  // parts is a tagged list so the defensive shave step at the end never
+  // touches a heading or the marker.
+  type Part = { kind: "marker" | "heading" | "body"; text: string };
+  const parts: Part[] = [{ kind: "marker", text: MARKER }];
   for (const s of sections) {
-    if (s.heading) parts.push(s.heading);
+    if (s.heading) parts.push({ kind: "heading", text: s.heading + "\n" });
     const bodyStr = s.body.join("\n").replace(/^\n+|\n+$/g, "");
-    if (!bodyStr) continue;
-    const share = Math.max(160, Math.floor(bodyBudget * (bodyStr.length / totalBody)));
+    if (!bodyStr || bodyBudget === 0) continue;
+    const share = Math.floor(bodyBudget * (bodyStr.length / totalBody));
+    if (share < 8) continue;
     if (bodyStr.length <= share) {
-      parts.push(bodyStr);
+      parts.push({ kind: "body", text: bodyStr + "\n" });
     } else {
-      const cut = bodyStr.slice(0, share).replace(/\s+\S*$/, "");
-      parts.push(`${cut} …`);
+      const cut = sliceCodepointsSafe(bodyStr, share).replace(/\s+\S*$/, "");
+      if (cut.length >= 4) parts.push({ kind: "body", text: `${cut} …\n` });
     }
   }
-  let out = parts.join("\n");
+
+  let total = parts.reduce((n, p) => n + p.text.length, 0);
+  // Defensive shave: rounding + body slack can leave us a handful of chars
+  // over. Trim from the TAIL of body parts only, never from headings or the
+  // marker, and always on a safe codepoint boundary.
+  if (total > capChars) {
+    for (let i = parts.length - 1; i >= 0 && total > capChars; i--) {
+      if (parts[i].kind !== "body") continue;
+      const over = total - capChars;
+      const p = parts[i].text;
+      const keep = Math.max(0, p.length - over);
+      const shaved = sliceCodepointsSafe(p, keep);
+      total -= (p.length - shaved.length);
+      parts[i].text = shaved;
+    }
+  }
+  const out = parts.map((p) => p.text).join("");
+  // Post-condition. If we ever exceed capChars here it means a heading alone
+  // outweighs the cap AFTER the required check — surface it loudly rather
+  // than silently splitting a heading.
   if (out.length > capChars) {
-    out = safeUtf8Cut(out, capChars * 4); // approximate — chars, not bytes
-    if (out.length > capChars) out = out.slice(0, Math.max(0, capChars - 4)) + " …";
+    throw new MarkdownCompactionImpossible(capChars, out.length);
   }
   return out;
 }
@@ -135,51 +192,100 @@ export type CompactRepoInput = {
   files: { path: string; content: string; bytes: number }[];
 };
 
+// Render a strictly-bounded LIVE REPO CONTRACT for batch generation. The
+// TOTAL rendered UTF-8 size is capped by COMPACT_REPO_TOTAL_BYTES, not just
+// the key-evidence excerpts. A partial file tree carries an explicit
+// truncation disclosure so reviewers cannot mistakenly claim "path missing
+// from tree ⇒ CREATE/ADD" — the JIT batch-compiler remains the authoritative
+// full-tree/full-code gate.
 export function renderCompactRepoContract(input: CompactRepoInput): string {
-  const treeSlice = input.fileTree.slice(0, COMPACT_REPO_TREE_PATHS);
-  const treeBlock = treeSlice.length ? treeSlice.join("\n") : "(no repo files listed)";
+  const TOTAL = COMPACT_REPO_TOTAL_BYTES;
   const stackBlock = detectStackEvidence(input.fileTree);
+  const totalPaths = input.fileTree.length;
 
-  const scored = input.files
-    .map((f) => ({ f, s: keyEvidenceScore(f.path) }))
-    .sort((a, b) => b.s - a.s || a.f.path.localeCompare(b.f.path));
-
-  const evidenceParts: string[] = [];
-  let usedBytes = 0;
-  const cap = COMPACT_REPO_KEY_BYTES;
-  for (const { f } of scored) {
-    if (usedBytes >= cap) break;
-    const header = `\n=== ${f.path} ===\n`;
-    const headerBytes = utf8Bytes(header);
-    const remaining = cap - usedBytes - headerBytes;
-    if (remaining <= 200) break;
-    // 4 KiB per-file soft cap keeps a single fat file from crowding out others.
-    const perFileCap = Math.min(remaining, 4096);
-    const excerpt = safeUtf8Cut(f.content, perFileCap);
-    if (!excerpt) break;
-    const chunk = header + excerpt;
-    evidenceParts.push(chunk);
-    usedBytes += utf8Bytes(chunk);
-  }
-  const keyBlock = evidenceParts.join("") || "(no readable key files)";
-
-  return `LIVE REPO CONTRACT (COMPACT — batch-generation stage only). The JIT batch-compiler regrounds each individual batch against the full live repo and schema BEFORE Copy is enabled, so this stage is deliberately lean.
+  const rules = `LIVE REPO CONTRACT (COMPACT — batch-generation stage only). The JIT batch-compiler regrounds each individual batch against the full live repo/schema BEFORE Copy is enabled, so this stage is deliberately lean.
 
 Rules for reviewers:
-- The FILE TREE is authoritative for what currently exists. Any path/route/component/table/function that appears here is an UPDATE target and MUST match verbatim.
-- Anything absent from the FILE TREE is CREATE/ADD; dependency ordering is the Chair's job.
-- The KEY EVIDENCE excerpts are bounded architecture snippets, NOT full implementation bodies. Do not demand deep line-level changes against them; escalate that to the compiler.
+- The FILE TREE below is a BOUNDED subset. A path missing from the shown subset is NOT proof the file is absent from the repo — do not flag "invented path" on that basis alone.
+- Reviewers may flag an UPDATE target only when a SHOWN path or the STACK EVIDENCE contradicts the draft. The JIT batch-compiler is the authoritative full-tree/full-code gate.
+- Anything present in the FILE TREE MUST be referenced verbatim when a batch touches it.
+- KEY EVIDENCE excerpts are bounded architecture snippets, NOT full implementation bodies. Escalate line-level changes to the compiler.
 
 REPO: ${input.repo}
 
 STACK EVIDENCE
 ${stackBlock}
+`;
 
-FILE TREE (top ${treeSlice.length} paths)
-${treeBlock}
+  let used = utf8Bytes(rules);
+  if (used >= TOTAL) {
+    // Rules alone must not swallow the whole budget. This is a static
+    // string; if it ever grows past 24 KiB, ship a smaller rules block.
+    return safeUtf8Cut(rules, TOTAL);
+  }
 
-KEY EVIDENCE (<=${COMPACT_REPO_KEY_BYTES} bytes total, architectural files only)
-${keyBlock}`;
+  // Reserve at least ~6 KiB for KEY EVIDENCE so the tree cannot squeeze it
+  // out. Any surplus tree budget rolls back into evidence naturally because
+  // we recompute `used` before allocating the evidence budget.
+  const EVIDENCE_MIN_RESERVE = 6 * 1024;
+  const evidenceHeaderText = `\nKEY EVIDENCE (architectural files only, bounded excerpts)\n`;
+  const evidenceHeaderBytes = utf8Bytes(evidenceHeaderText);
+
+  // FILE TREE — include only WHOLE paths that fit, up to COMPACT_REPO_TREE_PATHS.
+  const scoredPaths = input.fileTree.slice(0, COMPACT_REPO_TREE_PATHS);
+  const treeParts: string[] = [];
+  let treeUsed = 0;
+  // Reserve max plausible tree-header size (before we know shown count).
+  const worstTreeHeader = `\nFILE TREE (showing ${totalPaths} of ${totalPaths} paths, ${totalPaths} omitted for size)\n`;
+  const treeBudget = Math.max(
+    0,
+    TOTAL - used - evidenceHeaderBytes - EVIDENCE_MIN_RESERVE - utf8Bytes(worstTreeHeader),
+  );
+  for (const p of scoredPaths) {
+    const line = (treeParts.length ? "\n" : "") + p;
+    const b = utf8Bytes(line);
+    if (treeUsed + b > treeBudget) break;
+    treeParts.push(p);
+    treeUsed += b;
+  }
+  const shownCount = treeParts.length;
+  const omitted = totalPaths - shownCount;
+  const treeHeader =
+    `\nFILE TREE (showing ${shownCount} of ${totalPaths} paths${omitted > 0 ? `, ${omitted} omitted for size — absence here does not prove the file is missing from the repo` : ""})\n`;
+  const treeBody = shownCount ? treeParts.join("\n") : "(no repo files listed)";
+  const treeSection = treeHeader + treeBody + "\n";
+  used += utf8Bytes(treeSection);
+
+  // KEY EVIDENCE — spend whatever bytes remain, complete headers + UTF-8-safe excerpts.
+  used += evidenceHeaderBytes;
+  const evidenceBudget = Math.max(0, TOTAL - used);
+  const scored = input.files
+    .map((f) => ({ f, s: keyEvidenceScore(f.path) }))
+    .sort((a, b) => b.s - a.s || a.f.path.localeCompare(b.f.path));
+  const evidenceParts: string[] = [];
+  let evidenceUsed = 0;
+  const PER_FILE_SOFT_CAP = 4096;
+  for (const { f } of scored) {
+    if (evidenceUsed >= evidenceBudget) break;
+    const header = `\n=== ${f.path} ===\n`;
+    const headerBytes = utf8Bytes(header);
+    const remaining = evidenceBudget - evidenceUsed - headerBytes;
+    if (remaining <= 200) break;
+    const perFileCap = Math.min(remaining, PER_FILE_SOFT_CAP);
+    const excerpt = safeUtf8Cut(f.content, perFileCap);
+    if (!excerpt) break;
+    const chunk = header + excerpt;
+    const chunkBytes = utf8Bytes(chunk);
+    if (evidenceUsed + chunkBytes > evidenceBudget) break;
+    evidenceParts.push(chunk);
+    evidenceUsed += chunkBytes;
+  }
+  const keyBlock = evidenceParts.join("") || "(no readable key files)";
+
+  const out = rules + treeSection + evidenceHeaderText + keyBlock;
+  // Final invariant check.
+  if (utf8Bytes(out) > TOTAL) return safeUtf8Cut(out, TOTAL);
+  return out;
 }
 
 // The single hard cap every batch-generation step must satisfy before insert.
@@ -195,4 +301,74 @@ export function assertBatchRequestSize(stepKey: string, request: unknown): void 
 export function isBatchGenerationStep(stepKey: string | null | undefined): boolean {
   const k = String(stepKey ?? "");
   return k === "batches_chair" || k === "batches_revise_chair" || k.startsWith("batches_review_");
+}
+
+// ============================== Validation retry builder ==============================
+
+// Pure, testable retry builder. The correction pass echoes the invalid
+// assistant output back for models that need to see it — but that echo can
+// push a near-cap base request past MAX_BATCH_REQUEST_CHARS. In that case
+// we drop ONLY the assistant echo and enrich the correction text so the
+// model still knows both the validation error AND why the echo was omitted.
+// OWNER AUTHORITY, FEATURES, and every other base message survive verbatim.
+export type ValidationRetryInput = {
+  stepKey: string;
+  baseRequest: Record<string, unknown>;
+  baseMessages: unknown[];
+  assistantContent: string;
+  validationError: string;
+  truncated: boolean;
+  correction: string; // Pre-computed via correctionForStep(stepKey).
+};
+
+export type ValidationRetryResult = {
+  request: Record<string, unknown>;
+  mode: "with_echo" | "without_echo";
+  chars: number;
+};
+
+export function buildValidationRetryRequest(input: ValidationRetryInput): ValidationRetryResult {
+  const { stepKey, baseRequest, baseMessages, assistantContent, validationError, truncated, correction } = input;
+  const correctionText = truncated
+    ? correction
+    : `Your previous response failed validation: ${validationError}\nReturn ONLY the required JSON object, no prose, no code fences.`;
+
+  const withEcho = {
+    ...baseRequest,
+    messages: [
+      ...baseMessages,
+      { role: "assistant", content: assistantContent },
+      { role: "user", content: correctionText },
+    ],
+  };
+  const withEchoChars = JSON.stringify(withEcho).length;
+
+  // Non-batch steps do not enforce the 100 KiB cap — legacy behaviour.
+  if (!isBatchGenerationStep(stepKey)) {
+    return { request: withEcho, mode: "with_echo", chars: withEchoChars };
+  }
+  if (withEchoChars <= MAX_BATCH_REQUEST_CHARS) {
+    return { request: withEcho, mode: "with_echo", chars: withEchoChars };
+  }
+
+  // Fallback: drop the invalid assistant echo. State BOTH the original
+  // validation error and the reason the echo is omitted so the model has the
+  // full failure context.
+  const echoLen = assistantContent.length;
+  const reason = truncated
+    ? `truncated (${echoLen} chars)`
+    : `invalid JSON (${echoLen} chars): ${validationError}`;
+  const fallbackCorrection = `${correctionText}\n\n(Retry note: your previous response was ${reason}. Echoing it back into this retry request would exceed the ${MAX_BATCH_REQUEST_CHARS}-char batch-context cap, so it has been omitted. Reproduce the required JSON strictly from the base context above — do not restate the prior draft prose.)`;
+  const withoutEcho = {
+    ...baseRequest,
+    messages: [
+      ...baseMessages,
+      { role: "user", content: fallbackCorrection },
+    ],
+  };
+  const withoutEchoChars = JSON.stringify(withoutEcho).length;
+  if (withoutEchoChars > MAX_BATCH_REQUEST_CHARS) {
+    throw new BatchContextTooLarge(stepKey, withoutEchoChars);
+  }
+  return { request: withoutEcho, mode: "without_echo", chars: withoutEchoChars };
 }

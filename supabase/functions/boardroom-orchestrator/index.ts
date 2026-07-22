@@ -43,7 +43,7 @@ import {
   queueRound4,
   RepoContractUnavailable,
 } from "./queues.ts";
-import { BatchContextTooLarge } from "../_shared/batch-context.ts";
+import { BatchContextTooLarge, buildValidationRetryRequest } from "../_shared/batch-context.ts";
 import {
   finalizeChangeRequestAuthorityError,
   finalizePlanAuthorityError,
@@ -99,7 +99,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-27.batch-compact.m1";
+const BUILD_VERSION = "2026-07-27.batch-compact.l2";
 
 import {
   failRun,
@@ -232,26 +232,48 @@ async function requeueForBodyTransport(admin: any, step: any, attempts: number):
   );
 }
 
-async function requeueForValidation(admin: any, step: any, baseMessages: any[], assistantContent: string, validationError: string, truncated: boolean): Promise<string> {
+async function requeueForValidation(admin: any, run: any, step: any, baseMessages: any[], assistantContent: string, validationError: string, truncated: boolean): Promise<string> {
   const attempts = Number(step.request?._validation_attempts ?? 0) + 1;
-  const correctionText = truncated
-    ? correctionForStep(step.step_key)
-    : `Your previous response failed validation: ${validationError}\nReturn ONLY the required JSON object, no prose, no code fences.`;
-  const correctionMessages = [
-    ...baseMessages,
-    { role: "assistant", content: assistantContent },
-    { role: "user", content: correctionText },
-  ];
-  return await requeueStepIfParentActive(
-    admin,
-    step.id,
-    {
-      ...(step.request ?? {}),
-      messages: correctionMessages,
-      _validation_attempts: attempts,
-    },
-    truncated ? "truncated_output_requeued" : "invalid_json_requeued",
-  );
+  try {
+    const { request: newRequest, mode } = buildValidationRetryRequest({
+      stepKey: String(step.step_key ?? ""),
+      baseRequest: step.request ?? {},
+      baseMessages,
+      assistantContent,
+      validationError,
+      truncated,
+      correction: correctionForStep(step.step_key),
+    });
+    return await requeueStepIfParentActive(
+      admin,
+      step.id,
+      {
+        ...newRequest,
+        _validation_attempts: attempts,
+        _validation_retry_mode: mode,
+      },
+      truncated ? "truncated_output_requeued" : "invalid_json_requeued",
+    );
+  } catch (e) {
+    if (e instanceof BatchContextTooLarge) {
+      // Even the fallback (base + correction, no echo) does not fit. Fail
+      // closed rather than leave the step "running" forever — the watchdog
+      // would otherwise churn on a payload that can never be shrunk safely.
+      await admin
+        .from("run_steps")
+        .update({
+          status: "failed",
+          error: e.message,
+          response_text: assistantContent,
+          completed_at: new Date().toISOString(),
+        })
+        .eq("id", step.id)
+        .eq("status", "running");
+      await failRun(admin, run, e.message);
+      return "cancelled_parent_terminal";
+    }
+    throw e;
+  }
 }
 
 
@@ -435,7 +457,7 @@ async function executeStep(admin: any, run: any, step: any) {
           await failRun(admin, run, vmsg);
           return;
         }
-        const vOutcome = await requeueForValidation(admin, step, baseMessages, content, err, truncated);
+        const vOutcome = await requeueForValidation(admin, run, step, baseMessages, content, err, truncated);
         if (vOutcome === "cancelled_parent_terminal") {
           console.log(`[exec] VALIDATION step=${step.step_key} parent already terminal — step cancelled`);
         }
