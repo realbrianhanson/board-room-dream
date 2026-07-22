@@ -475,6 +475,10 @@ Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=
     .from("batches")
     .update({
       compiled_prompt_md: parsed.status === "ready" ? parsed.compiled_prompt_md : null,
+      compiled_verification_prompt_md:
+        parsed.status === "ready" && (batch.channel === "lovable" || batch.channel === "supabase")
+          ? (parsed.compiled_verification_prompt_md ?? null)
+          : null,
       compiled_at: new Date().toISOString(),
       compile_meta: compileMeta,
     })
