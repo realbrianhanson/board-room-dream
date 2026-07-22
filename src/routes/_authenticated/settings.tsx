@@ -543,27 +543,34 @@ function DefaultDailyCapEditor() {
 }
 
 function ConstitutionEditor() {
+  const [loadState, dispatch] = useReducer(
+    settingsLoadReducer<{ text: string; version: number }>,
+    undefined,
+    initialSettingsLoadState<{ text: string; version: number }>,
+  );
   const [text, setText] = useState("");
   const [version, setVersion] = useState(1);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   async function load() {
-    setLoading(true);
+    dispatch({ type: "retry" });
     const { data, error } = await supabase
       .from("app_settings")
       .select("value, version")
       .eq("key", "constitution")
       .maybeSingle();
-    if (error) toast.error(error.message);
-    else if (data) {
-      setText(((data.value as { text?: string })?.text) ?? "");
-      setVersion(data.version);
+    if (error) {
+      dispatch({ type: "failure", message: error.message });
+      return;
     }
-    setLoading(false);
+    const t = ((data?.value as { text?: string } | null)?.text) ?? "";
+    const v = data?.version ?? 1;
+    setText(t);
+    setVersion(v);
+    dispatch({ type: "success", value: { text: t, version: v } });
   }
   useEffect(() => {
-    load();
+    void load();
   }, []);
 
   async function save() {
@@ -584,7 +591,26 @@ function ConstitutionEditor() {
     setSaving(false);
   }
 
-  if (loading) return <div className="h-40 animate-pulse rounded-md bg-surface-2" />;
+  if (loadState.kind === "loading") {
+    return <div className="h-40 animate-pulse rounded-md bg-surface-2" />;
+  }
+  if (loadState.kind === "error") {
+    return (
+      <div className="rounded-lg border border-destructive/40 bg-surface-2 p-5">
+        <div className="font-mono text-[10px] uppercase tracking-[0.28em] text-destructive">
+          Failed to load constitution
+        </div>
+        <p className="mt-2 text-sm text-muted-foreground">{loadState.message}</p>
+        <button
+          onClick={() => void load()}
+          className="mt-4 rounded-md border border-border bg-surface-1 px-4 py-2 text-sm font-medium text-foreground transition-all hover:bg-surface-2"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+  const canSave = isSaveEnabled(loadState) && !saving;
   return (
     <div className="rounded-lg border border-border bg-surface-2 p-5">
       <div className="mb-3 flex items-center justify-between">
@@ -602,7 +628,7 @@ function ConstitutionEditor() {
       <div className="mt-4">
         <button
           onClick={save}
-          disabled={saving}
+          disabled={!canSave}
           className="rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
         >
           {saving ? "Saving…" : "Save and bump version"}
@@ -611,6 +637,7 @@ function ConstitutionEditor() {
     </div>
   );
 }
+
 
 function SettingsPage() {
   const [role, setRole] = useState<string | null>(null);
