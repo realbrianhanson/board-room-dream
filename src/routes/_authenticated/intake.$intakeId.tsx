@@ -322,7 +322,7 @@ function IntakePage() {
               />
               <MoneyDetail
                 label="Best starting-price guess"
-                hint='A number is best. If you truly don\'t know, type "not set — recommend one" and the board will propose one.'
+                hint={'A number is best. If you truly don\'t know, type "not set — recommend one" and the board will propose one.'}
                 value={answers.price_anchor ?? ""}
                 onChange={(v) => setAnswers((a) => ({ ...a, price_anchor: v }))}
                 onBlur={() => persist(answers)}
