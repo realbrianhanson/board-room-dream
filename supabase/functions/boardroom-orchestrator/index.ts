@@ -951,24 +951,19 @@ async function afterStepComplete(admin: any, runIn: any) {
     const revise = steps.find((x: any) => x.step_key === "batches_revise_chair");
     if (revise) {
       const ok = revise.status === "completed" && revise.response_json && !revise.response_json.invalid;
-      let revisedList: any[] = [];
-      let validationError: string | null = null;
-      if (ok) {
-        const validated = validateStepJson("batches_revise_chair", revise.response_json);
-        if (validated.invalid) {
-          validationError = validated.validation_error ?? "batches_revise_chair failed validation";
-        } else {
-          revisedList = Array.isArray(validated.batches) ? validated.batches : [];
-        }
-      } else {
-        validationError = revise.response_json?.validation_error ?? revise.error ?? "batches_revise_chair did not complete";
-      }
-      if (!revisedList.length) {
+      const revisedList: any[] = ok && Array.isArray(revise.response_json.batches)
+        ? revise.response_json.batches
+        : [];
+      // Extra guard: re-run validation even if executeStep already accepted it.
+      const validationError = ok
+        ? validateStepJson("batches_revise_chair", revise.response_json)
+        : (revise.response_json?.validation_error ?? revise.error ?? "batches_revise_chair did not complete");
+      if (!ok || validationError || !revisedList.length) {
         await admin
           .from("boardroom_runs")
           .update({
             status: "failed",
-            error: `The Chair's revision failed after reviewers flagged blocking issues: ${validationError}. Draft and reviewer notes are preserved in run_steps for diagnosis.`,
+            error: `The Chair's revision failed after reviewers flagged blocking issues: ${validationError ?? "empty batches list"}. Draft and reviewer notes are preserved in run_steps for diagnosis.`,
           })
           .eq("id", run.id);
         return;
@@ -976,6 +971,7 @@ async function afterStepComplete(admin: any, runIn: any) {
       await finalizeBatches(admin, run, revisedList);
       return;
     }
+
 
     // Stage 2: reviews are in — decide whether the Chair must revise.
     const reviews = steps.filter((x: any) => x.step_key.startsWith("batches_review_"));
