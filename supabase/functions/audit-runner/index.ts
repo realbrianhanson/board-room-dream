@@ -5,6 +5,12 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { assembleFromGithub, formatFiles, ghToken, redactSecrets } from "../_shared/github-payload.ts";
 import { loadFieldManual } from "../_shared/lovable-field-manual.ts";
 import { checkFinalAuditEligibility } from "../_shared/audit-eligibility.ts";
+import {
+  type ContractBatch,
+  renderContractSection,
+  type ResolvedContract,
+  resolveFinalAuditContract,
+} from "../_shared/audit-contract.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
