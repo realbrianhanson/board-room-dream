@@ -945,14 +945,35 @@ async function afterStepComplete(admin: any, runIn: any) {
       return;
     }
 
-    // Stage 3: a revision exists — ship it (fall back to the draft if the
-    // revision came back invalid; a reviewed draft beats a dead run).
+    // Stage 3: a revision exists — ship it, but NEVER fall back to the
+    // unrevised draft once reviewers demanded changes. A silent fallback is
+    // what shipped invented UPDATE targets.
     const revise = steps.find((x: any) => x.step_key === "batches_revise_chair");
     if (revise) {
-      const revised = revise.status === "completed" && revise.response_json && !revise.response_json.invalid
-        ? revise.response_json
-        : draft.response_json;
-      await finalizeBatches(admin, run, revised.batches ?? []);
+      const ok = revise.status === "completed" && revise.response_json && !revise.response_json.invalid;
+      let revisedList: any[] = [];
+      let validationError: string | null = null;
+      if (ok) {
+        const validated = validateStepJson("batches_revise_chair", revise.response_json);
+        if (validated.invalid) {
+          validationError = validated.validation_error ?? "batches_revise_chair failed validation";
+        } else {
+          revisedList = Array.isArray(validated.batches) ? validated.batches : [];
+        }
+      } else {
+        validationError = revise.response_json?.validation_error ?? revise.error ?? "batches_revise_chair did not complete";
+      }
+      if (!revisedList.length) {
+        await admin
+          .from("boardroom_runs")
+          .update({
+            status: "failed",
+            error: `The Chair's revision failed after reviewers flagged blocking issues: ${validationError}. Draft and reviewer notes are preserved in run_steps for diagnosis.`,
+          })
+          .eq("id", run.id);
+        return;
+      }
+      await finalizeBatches(admin, run, revisedList);
       return;
     }
 
@@ -965,7 +986,15 @@ async function afterStepComplete(admin: any, runIn: any) {
         (Array.isArray(x.response_json.issues) && x.response_json.issues.some((i: any) => i?.severity === "blocking")),
       );
       if (needsRevision) {
-        await queueBatchesRevise(admin, run, draft.response_json, completed);
+        try {
+          await queueBatchesRevise(admin, run, draft.response_json, completed);
+        } catch (e) {
+          if (e instanceof RepoContractUnavailable) {
+            await failRun(admin, run, e.message);
+            return;
+          }
+          throw e;
+        }
         fireSelfTick();
         return;
       }
@@ -974,10 +1003,19 @@ async function afterStepComplete(admin: any, runIn: any) {
     }
 
     // Stage 1: the draft just landed — send it to review.
-    await queueBatchesReview(admin, run, draft.response_json);
+    try {
+      await queueBatchesReview(admin, run, draft.response_json);
+    } catch (e) {
+      if (e instanceof RepoContractUnavailable) {
+        await failRun(admin, run, e.message);
+        return;
+      }
+      throw e;
+    }
     fireSelfTick();
     return;
   }
+
 
 
   if (run.kind !== "plan" && run.kind !== "design") {
