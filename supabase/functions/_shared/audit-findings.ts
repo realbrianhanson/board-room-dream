@@ -278,18 +278,29 @@ export function isMigrationPath(fp: string | null): boolean {
   return t.startsWith("supabase/migrations/");
 }
 
-const MISSING_OBJECT_RX =
+const MISSING_OBJECT_RX_A =
   /\b(does\s+not\s+exist|no\s+such|missing|undefined|non[- ]?existent|unknown)\b[^.\n]{0,80}\b(table|column|function|policy|view|index|rpc)\b/i;
+const MISSING_OBJECT_RX_B =
+  /\b(table|column|function|policy|view|index|rpc)\b[^.\n]{0,80}\b(does\s+not\s+exist|is\s+missing|not\s+found|no\s+such)\b/i;
 export function looksLikeMissingObjectClaim(title: string, description: string): boolean {
   const t = `${title}\n${description}`;
-  return MISSING_OBJECT_RX.test(t);
+  return MISSING_OBJECT_RX_A.test(t) || MISSING_OBJECT_RX_B.test(t);
 }
 
 const UNIVERSAL_HELPER_RX =
-  /\b(all|every|universally|globally|always|each)\b[^.\n]{0,80}\b(seat|caller|call ?site|route|request|function|batch|module|component|invocation)s?\b/i;
+  /\b(all|every|universally|globally|always|each)\b[^.\n]{0,80}\b(seat|caller|call ?site|route|request|function|batch|module|component|invocation|human batch)s?\b/i;
 export function looksLikeUniversalHelperClaim(title: string, description: string): boolean {
   const t = `${title}\n${description}`;
   return UNIVERSAL_HELPER_RX.test(t);
+}
+
+// Speculation guard: WHY clauses that lean on hedges ("appears", "may",
+// "could", "likely", "seems") never rise past P2 for P0/P1 severity, even
+// with an IMPACT marker attached. Keeps deterministic downgrades resistant
+// to hallucinated concerns dressed up as concrete quotes.
+const SPECULATION_WHY_RX = /\bWHY:\s*[^|\n]{0,200}?\b(appears?|may|might|could|likely|seems?|probably|possibly|perhaps|suspected|potentially)\b/i;
+export function whyIsSpeculative(evidence: string): boolean {
+  return SPECULATION_WHY_RX.test(String(evidence ?? ""));
 }
 
 export function downgradeUnsupported(
