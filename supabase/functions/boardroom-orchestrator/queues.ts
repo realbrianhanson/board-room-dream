@@ -817,7 +817,7 @@ Return ONLY the same JSON shape as your verdict:
 
 Write the documents at FULL length — never compress them because they are inside JSON strings.`;
   const user = `YOUR VERDICT\n\n${JSON.stringify(verdictJson, null, 2)}\n\nINSPECTOR ISSUES\n\n${JSON.stringify(reviewJson, null, 2)}\n\nProduce the corrected JSON now.`;
-  await admin.from("run_steps").insert({
+  await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
     step_key: "cr_revise_chair",
