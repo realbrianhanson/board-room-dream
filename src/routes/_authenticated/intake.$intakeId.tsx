@@ -383,6 +383,44 @@ function IntakePage() {
   );
 }
 
+function MoneyDetail({
+  label,
+  hint,
+  value,
+  onChange,
+  onBlur,
+  required,
+  missing,
+}: {
+  label: string;
+  hint: string;
+  value: string;
+  onChange: (v: string) => void;
+  onBlur: () => void;
+  required?: boolean;
+  missing?: boolean;
+}) {
+  return (
+    <label className="block">
+      <span className="text-sm text-foreground">
+        {label}
+        {required && <span className="ml-1 text-primary">*</span>}
+      </span>
+      <span className="mt-1 block text-xs text-muted-foreground">{hint}</span>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
+        placeholder="Type here…"
+        className={`mt-2 w-full rounded-md border bg-surface-1 px-3 py-2 text-sm text-foreground outline-none focus:border-primary ${
+          missing ? "border-[hsl(8_60%_45%)]" : "border-border"
+        }`}
+      />
+    </label>
+  );
+}
+
 function scoreColor(s: number) {
   if (s >= 8) return "hsl(160 45% 48%)"; // jade
   if (s <= 4) return "hsl(8 60% 55%)"; // oxblood
