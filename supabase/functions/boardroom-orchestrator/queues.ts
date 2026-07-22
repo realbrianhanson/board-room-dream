@@ -75,6 +75,70 @@ export async function loadRepoSample(admin: any, project: any, maxFiles: number)
 }
 
 
+// The batch-generation trio (draft / review / revise) all need the same
+// LIVE REPO CONTRACT so reviewers judge the draft against real code — not
+// against names invented from the PRD. For imports this must succeed or the
+// run fails loudly; guessed prompts silently rewriting the wrong file paths
+// have been the top source of bad batches.
+export class RepoContractUnavailable extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = "RepoContractUnavailable";
+  }
+}
+
+
+// For fresh (non-import) projects the contract is empty — there IS no live
+// repo yet, so batches necessarily label everything CREATE/ADD. For imports
+// we require both file tree AND at least one readable key file; a bare tree
+// with no readable contents is not enough to ground UPDATE targets.
+export async function loadLiveRepoContract(admin: any, project: any): Promise<string> {
+  const isImport = !!project?.is_import;
+  if (!isImport) {
+    return `LIVE REPO CONTRACT\n(none — this is a fresh project; every path, table, and function must be labelled CREATE/ADD and sequenced so its dependencies come first.)`;
+  }
+  if (!project?.github_repo) {
+    throw new RepoContractUnavailable(
+      "This import project has no linked GitHub repo, so the board cannot ground batches in the real code. Link the repo in Settings and try again.",
+    );
+  }
+  const token = await ghToken(admin, project.user_id);
+  if (!token) {
+    throw new RepoContractUnavailable(
+      "GitHub is not connected for this owner, so the board cannot read the real repo. Reconnect GitHub in Settings and try again.",
+    );
+  }
+  let res: Awaited<ReturnType<typeof assembleFromGithub>>;
+  try {
+    res = await assembleFromGithub(token, project.github_repo, {
+      maxFiles: 25,
+      maxFileBytes: 100 * 1024,
+      maxTotalBytes: 400 * 1024,
+      preferKeyFiles: true,
+    });
+  } catch (e) {
+    throw new RepoContractUnavailable(
+      `The board could not read the linked repo ${project.github_repo}: ${(e as Error).message}. Fix repo access and retry.`,
+    );
+  }
+  if (!res.files.length || !res.fileTree.length) {
+    throw new RepoContractUnavailable(
+      `The board could not read any files from ${project.github_repo}. The repo may be empty, private without access, or renamed. Fix and retry.`,
+    );
+  }
+  const treeSlice = res.fileTree.slice(0, 200);
+  return `LIVE REPO CONTRACT — authoritative source for current paths, routes, functions, tables, and columns. The locked plan/PRD express intent; this repo is what actually ships. Any path or schema object NOT listed here must be labelled CREATE/ADD and its dependency ordered first. Any UPDATE target MUST appear here verbatim.
+
+REPO: ${project.github_repo}
+FILE TREE (top ${treeSlice.length})
+${treeSlice.join("\n")}
+
+KEY FILES (${res.files.length}, frontend + backend biased)
+${formatFiles(res.files)}`;
+}
+
+
+
 // Signed URLs for the founder's uploaded screenshots (newest first, max 4).
 // 24h expiry comfortably covers queue → execution, including budget pauses.
 export async function loadScreenshotParts(admin: any, userId: string, projectId: string): Promise<any[]> {
