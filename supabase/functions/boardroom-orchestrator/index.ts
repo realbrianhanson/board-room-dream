@@ -157,25 +157,27 @@ async function insertAlert(
 }
 
 
-async function claimOneStep(admin: any, runId: string) {
-  const { data: candidate } = await admin
-    .from("run_steps")
-    .select("id")
-    .eq("run_id", runId)
-    .eq("status", "queued")
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-  if (!candidate) return null;
-  const { data: claimed } = await admin
-    .from("run_steps")
-    .update({ status: "running", started_at: new Date().toISOString() })
-    .eq("id", candidate.id)
-    .eq("status", "queued")
-    .select("*")
-    .maybeSingle();
-  return claimed;
+// Claim a queued step for this run under an aggregate per-run capacity that
+// holds across overlapping cron / self-tick invocations. The database RPC
+// takes a transaction-scoped advisory lock keyed on run_id, counts currently
+// running steps, and only then claims the oldest queued row (FOR UPDATE SKIP
+// LOCKED). Enforcing the cap in-process is not enough — the platform runs
+// multiple invocations concurrently and each has its own MAX_STEP_CONCURRENCY
+// counter, so N invocations could otherwise claim N × capacity in parallel.
+async function claimOneStep(admin: any, runId: string, capacity: number) {
+  const { data, error } = await admin.rpc("claim_run_step_with_capacity", {
+    p_run_id: runId,
+    p_capacity: capacity,
+  });
+  if (error) {
+    // Surface loudly — silently returning null would falsely report "no work"
+    // and stall the run.
+    throw new Error(`claim_run_step_with_capacity failed: ${error.message ?? error}`);
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  return row ?? null;
 }
+
 
 
 // Hard ceiling on a single model call, enforced at the ORCHESTRATOR level so
