@@ -454,6 +454,10 @@ export function shouldQuickRetry(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const e = err as any;
   if (e.isTimeout || e.isHardTimeout) return false;
+  // Body-stream/transport failures on a 2xx response are handled by the
+  // orchestrator's fresh-invocation requeue path, NEVER by same-invocation
+  // quick-retry (another 100s+ model call inside a dying isolate).
+  if (e.isBodyTransport === true || isBodyTransportError(e)) return false;
   if (e.isPreResponse === true) return true;
   const s = Number(e.status);
   if (s === 429) return true;
