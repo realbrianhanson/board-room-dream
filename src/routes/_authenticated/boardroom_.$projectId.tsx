@@ -5,6 +5,7 @@ import { BoardroomSession, PLAN_RUBRIC } from "@/components/boardroom-session";
 import { ArrowRight } from "lucide-react";
 import { ProjectJourney } from "@/components/project-journey";
 import { useProjectJourney } from "@/hooks/use-project-journey";
+import { computeBoardroomGate, IMPORT_AUDIT_GATE_MESSAGE } from "@/lib/boardroom-gate";
 
 export const Route = createFileRoute("/_authenticated/boardroom_/$projectId")({
   component: BoardroomProjectPage,
@@ -14,10 +15,6 @@ const CONVENE_BLOCKED: Record<string, string> = {
   intake: "Finish the intake first — the board needs a validated idea.",
   killed: "This idea was killed. Revise it before reconvening.",
 };
-
-// Exact backend message used by boardroom-orchestrator's start_run gate.
-const IMPORT_AUDIT_GATE_MESSAGE =
-  "Complete a successful A–Z audit before convening the improvement board.";
 
 function BoardroomProjectPage() {
   const { projectId } = Route.useParams();
