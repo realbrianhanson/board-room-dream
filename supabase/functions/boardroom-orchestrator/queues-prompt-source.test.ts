@@ -79,7 +79,7 @@ Deno.test("queues.ts — no unaudited direct run_steps insert may introduce scop
 
   for (const key of found) {
     assert(
-      allowedDirectInsertStepKeys.has(key),
+      allowedDirectInsertStepKeys(key),
       `direct admin.from("run_steps").insert with step_key="${key}" is not allow-listed. ` +
       `Route it through queueSteps so OWNER_AUTHORITY_RULES + verified owner sources are injected, ` +
       `or add it to allowedDirectInsertStepKeys with a comment explaining why it cannot introduce scope.`,
