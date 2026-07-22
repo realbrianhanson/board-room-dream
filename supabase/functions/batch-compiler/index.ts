@@ -106,46 +106,59 @@ async function loadCurrentBatches(admin: any, projectId: string) {
   return data ?? [];
 }
 
-// Live DB inventory: table names + RPC names + migration files. Powers the
-// schema authority check (existing objects can never be told to CREATE).
-async function loadSchemaInventory(admin: any): Promise<{
-  tables: string[];
-  columnsByTable: Record<string, string[]>;
-  rpcs: string[];
+// Live DB inventory via SECURITY DEFINER RPC (service-role-only). Powers the
+// schema authority check: existing objects can never be told to CREATE. This
+// path MUST fail closed — an empty/malformed inventory blocks ready compiles.
+export type SchemaInventory = {
+  tables: { name: string; columns: { name: string; type: string; nullable: boolean; default: string | null }[] }[];
+  routines: { name: string; args: string; result: string }[];
   objectsLower: Set<string>;
-}> {
+  ok: boolean;
+  reason?: string;
+};
+
+async function loadSchemaInventory(admin: any): Promise<SchemaInventory> {
+  const empty: SchemaInventory = { tables: [], routines: [], objectsLower: new Set(), ok: false };
+  let data: any = null;
+  try {
+    const res = await admin.rpc("get_compiler_schema_inventory");
+    if (res.error) return { ...empty, reason: `RPC error: ${res.error.message}` };
+    data = res.data;
+  } catch (e) {
+    return { ...empty, reason: `RPC threw: ${(e as Error).message}` };
+  }
+  if (!data || typeof data !== "object" || !Array.isArray(data.tables) || !Array.isArray(data.routines)) {
+    return { ...empty, reason: "inventory RPC returned malformed payload" };
+  }
+  const tables = data.tables.filter((t: any) => t && typeof t.name === "string" && Array.isArray(t.columns)) as SchemaInventory["tables"];
+  const routines = data.routines.filter((r: any) => r && typeof r.name === "string") as SchemaInventory["routines"];
   const objectsLower = new Set<string>();
-  const tables: string[] = [];
-  const columnsByTable: Record<string, string[]> = {};
-  const rpcs: string[] = [];
-  try {
-    const { data: cols } = await admin
-      .schema("information_schema")
-      .from("columns")
-      .select("table_name, column_name")
-      .eq("table_schema", "public")
-      .limit(4000);
-    for (const c of (cols ?? []) as Array<{ table_name: string; column_name: string }>) {
-      const t = c.table_name;
-      if (!columnsByTable[t]) { columnsByTable[t] = []; tables.push(t); objectsLower.add(t.toLowerCase()); }
-      columnsByTable[t].push(c.column_name);
-    }
-  } catch { /* schema may be inaccessible in some envs; treat as empty */ }
-  try {
-    const { data: fns } = await admin
-      .schema("information_schema")
-      .from("routines")
-      .select("routine_name")
-      .eq("routine_schema", "public")
-      .eq("routine_type", "FUNCTION")
-      .limit(500);
-    for (const f of (fns ?? []) as Array<{ routine_name: string }>) {
-      rpcs.push(f.routine_name);
-      objectsLower.add(f.routine_name.toLowerCase());
-    }
-  } catch { /* ignore */ }
-  return { tables, columnsByTable, rpcs, objectsLower };
+  for (const t of tables) objectsLower.add(t.name.toLowerCase());
+  for (const r of routines) objectsLower.add(r.name.toLowerCase());
+  // Sanity floor: this app must at minimum have public.batches + public.audit_findings + ≥1 known public routine.
+  const has = (n: string) => objectsLower.has(n);
+  if (!has("batches") || !has("audit_findings") || routines.length < 1) {
+    return { ...empty, tables, routines, objectsLower, reason: `inventory too small (tables=${tables.length}, routines=${routines.length}, has_batches=${has("batches")}, has_audit_findings=${has("audit_findings")})` };
+  }
+  // Every table must have at least one column.
+  for (const t of tables) {
+    if (!t.columns.length) return { ...empty, tables, routines, objectsLower, reason: `table "${t.name}" reported zero columns` };
+  }
+  return { tables, routines, objectsLower, ok: true };
 }
+
+function renderInventory(inv: SchemaInventory): string {
+  if (!inv.ok) return "(unavailable)";
+  const tables = inv.tables.map((t) => {
+    const cols = t.columns.slice(0, 24).map((c) => `${c.name} ${c.type}${c.nullable ? "" : " NOT NULL"}${c.default ? ` DEFAULT ${String(c.default).slice(0, 40)}` : ""}`).join(", ");
+    const more = t.columns.length > 24 ? `, … (+${t.columns.length - 24} more)` : "";
+    return `- public.${t.name}(${cols}${more})`;
+  }).join("\n");
+  const rpcs = inv.routines.map((r) => `- public.${r.name}(${r.args}) → ${r.result}`).join("\n");
+  return `TABLES (${inv.tables.length}):\n${tables}\n\nRPCs (${inv.routines.length}):\n${rpcs}`;
+}
+
+
 
 const SHAPE = `Return ONLY valid JSON:
 {
