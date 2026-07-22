@@ -275,9 +275,29 @@ export function hasSchemaLedgerMarker(ev: string): boolean { return /\bSCHEMA_LE
 export function hasRuntimeFailureMarker(ev: string): boolean { return /\bRUNTIME_FAILURE:\s*\S/.test(String(ev ?? "")); }
 export function hasCallerMarker(ev: string): boolean { return /\bCALLER:\s*\S/.test(String(ev ?? "")); }
 
+// R3 — client-surface security claim corroboration marker.
+// A P0/P1 that alleges an auth/admin/RLS/privilege bypass from a frontend
+// (src/*) file MUST include a compact SERVER_AUTH quote of the current
+// vulnerable server-side boundary (RLS policy, RPC, edge function,
+// security-definer function). Without it the claim is a UI-only observation
+// and is deterministically downgraded to P2.
+export function hasServerAuthMarker(ev: string): boolean { return /\bSERVER_AUTH:\s*\S/.test(String(ev ?? "")); }
+
+// R3 — product-strategy / copy claim corroboration marker.
+// Copy, positioning, acquisition, pricing/monetization, onboarding activation,
+// or buyer-reach findings cannot be P0/P1 unless the evidence quotes a verbatim
+// OWNER_CONTRACT (owner intake / founder note / locked-PRD requirement) OR a
+// RUNTIME_FAILURE for a truly broken flow.
+export function hasOwnerContractMarker(ev: string): boolean { return /\bOWNER_CONTRACT:\s*\S/.test(String(ev ?? "")); }
+
 export function isMigrationPath(fp: string | null): boolean {
   const t = String(fp ?? "").trim().toLowerCase().replace(/^\.?\/+/, "");
   return t.startsWith("supabase/migrations/");
+}
+
+export function isFrontendPath(fp: string | null): boolean {
+  const t = String(fp ?? "").trim().toLowerCase().replace(/^\.?\/+/, "");
+  return t.startsWith("src/");
 }
 
 const MISSING_OBJECT_RX_A =
@@ -291,9 +311,45 @@ export function looksLikeMissingObjectClaim(title: string, description: string):
 
 const UNIVERSAL_HELPER_RX =
   /\b(all|every|universally|globally|always|each)\b[^.\n]{0,80}\b(seat|caller|call ?site|route|request|function|batch|module|component|invocation|human batch)s?\b/i;
+// R3 — extended universal-helper detection. Live regression: an audit finding
+// titled "Human channel batches incorrectly require typecheck footer" with
+// description "footer check is outside isCodeChannel, applying to human
+// batches" is universal-scope reasoning about every human batch reaching the
+// footer check. Match it without requiring an "all/every" quantifier so the
+// CALLER-marker gate applies deterministically.
+const UNIVERSAL_HELPER_RX_R3 =
+  /\b(human\s+(?:channel\s+)?batches|non[- ]code\s+batches|human\s+channel|isCodeChannel|footer\s+check|typecheck\s+footer)\b/i;
 export function looksLikeUniversalHelperClaim(title: string, description: string): boolean {
   const t = `${title}\n${description}`;
-  return UNIVERSAL_HELPER_RX.test(t);
+  return UNIVERSAL_HELPER_RX.test(t) || UNIVERSAL_HELPER_RX_R3.test(t);
+}
+
+// R3 — client-surface security claim detector. Fires only when the file_path
+// is a frontend src/* file AND the title/description describes an
+// authorization / privilege / direct-SELECT bypass concern. A concrete server
+// bypass proof (SERVER_AUTH marker) must accompany the finding to keep P0/P1.
+const CLIENT_SURFACE_CONCERN_RX =
+  /\b(auth\s+bypass|admin\s+bypass|rls\s+bypass|privilege\s+escalation|unauthori[sz]ed\s+(?:access|read|write|query|select)|direct\s+select|direct\s+query|bypass(?:es|ed)?\s+(?:rls|auth|policy|policies|security)|admin\s+(?:only\s+)?(?:page|route|debug|panel|dashboard))\b/i;
+export function looksLikeClientSurfaceSecurityClaim(
+  title: string,
+  description: string,
+  filePath: string | null,
+): boolean {
+  if (!isFrontendPath(filePath)) return false;
+  const t = `${title}\n${description}`;
+  return CLIENT_SURFACE_CONCERN_RX.test(t);
+}
+
+// R3 — product-strategy / copy claim detector. Covers copy, positioning,
+// acquisition, pricing/monetization, onboarding activation, and buyer-reach
+// concerns. These are legitimate product-quality findings but must not carry
+// P0/P1 severity without an OWNER_CONTRACT (verbatim owner/PRD requirement)
+// or a RUNTIME_FAILURE marker.
+const PRODUCT_STRATEGY_RX =
+  /\b(copy|wording|tone|positioning|value\s+prop(?:osition)?|acquisition|pricing|price\s+anchor|monetiz(?:e|ation|ing)|paid\s+offer|upgrade\s+trigger|onboarding|activation|first[- ]?90|wow\s+moment|buyer|hero\s+section|landing\s+(?:page|copy|hero)|CTA|call[- ]to[- ]action|cohort[- ]first|marketing)\b/i;
+export function looksLikeProductStrategyClaim(title: string, description: string): boolean {
+  const t = `${title}\n${description}`;
+  return PRODUCT_STRATEGY_RX.test(t);
 }
 
 // Speculation guard: WHY clauses that lean on hedges ("appears", "may",
