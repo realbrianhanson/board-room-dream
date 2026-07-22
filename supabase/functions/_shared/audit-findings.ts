@@ -285,7 +285,7 @@ export function buildMergeInput(
   if (block.length > CAPS.mergePayloadMax) {
     // Deterministic trim: drop lowest-severity items until under cap.
     const flat = seatReports
-      .flatMap((r) => preCapSeat(r.findings).map((f) => ({ seat: r.step_key, ...f })))
+      .flatMap((r) => preCapSeat(r.findings).map((f) => ({ ...f, seat: r.step_key })))
       .sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity]);
     while (flat.length && JSON.stringify(flat).length > CAPS.mergePayloadMax) {
       flat.pop();
