@@ -63,11 +63,13 @@ export const CAPS = {
   mapSerializedMax: 4_000,
   mapTitleMax: 120,
   mapDescriptionMax: 400,
-  mapEvidenceMax: 320,
+  // Bounded map/correction evidence caps unchanged — markers (QUOTE/WHY +
+  // IMPACT|CURRENT|SCHEMA_LEDGER|CALLER) are compact by design and fit.
+  mapEvidenceMax: 240,
   correctionFindingsMax: 3,
   correctionSerializedMax: 3_000,
   correctionDescriptionMax: 240,
-  correctionEvidenceMax: 220,
+  correctionEvidenceMax: 160,
 } as const;
 
 export const FINDING_SCHEMA_DOC = `Each finding MUST be an object with EXACTLY these keys:
