@@ -169,7 +169,7 @@ function RunwayPage() {
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "plan").limit(1),
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "design").limit(1),
       supabase.from("batches").select("*").eq("project_id", projectId).order("batch_no", { ascending: true }),
-      supabase.from("boardroom_runs").select("id, kind, status, error").eq("project_id", projectId).eq("kind", "batches").order("created_at", { ascending: false }).limit(1),
+      supabase.from("boardroom_runs").select("id, kind, status, error, spent_usd, budget_usd, created_at").eq("project_id", projectId).eq("kind", "batches").in("status", ["queued","running","paused","paused_budget","failed","completed"]).order("spent_usd", { ascending: false }).order("created_at", { ascending: false }).limit(10),
       supabase.from("audits").select("id, batch_id, kind, status, loop_no, source, head_sha, files_analyzed, summary, created_at").eq("project_id", projectId).order("created_at", { ascending: false }),
       supabase.from("audit_findings").select("id, audit_id, severity, file_path, title, status").order("severity", { ascending: true }),
     ]);
