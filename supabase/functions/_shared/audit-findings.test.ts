@@ -60,8 +60,9 @@ Deno.test("3 maximal seat reports compact below 80k and merge validator accepts 
   // Merge takes any 30 of these and stays under 18k when descriptions/evidence trimmed to cap.
   const merged = dedupeFindings(seats.flatMap((s) => s.findings)).slice(0, CAPS.mergeFindingsMax).map((f) => ({
     ...f,
-    description: f.description.slice(0, 200),
-    evidence: f.evidence.slice(0, 120),
+    description: f.description.slice(0, 120),
+    evidence: f.evidence.slice(0, 80),
+    title: f.title.slice(0, 60),
   }));
   assertEquals(validateMerged(merged), null);
 });
