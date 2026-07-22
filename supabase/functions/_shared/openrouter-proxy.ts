@@ -530,6 +530,7 @@ export async function callSeat(
     tokensOut: attempt.tokensOut,
     costUsd: attempt.costUsd,
     raw: attempt.raw,
+    finishReason: attempt.finishReason,
   };
 }
 
