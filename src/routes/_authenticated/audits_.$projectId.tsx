@@ -323,11 +323,11 @@ function AuditCenterPage() {
                 Eligible once every batch has passed or been skipped. Start it from the Runway.
               </p>
             )}
-            {isImport && (
+            {isImport && isOwner && (
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => startFinalAudit("github")}
-                  disabled={starting || !ghRepo}
+                  disabled={!startAllowed || !ghRepo}
                   className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
                 >
                   {starting ? "Opening the audit…" : ghRepo ? "Run the A–Z audit" : "Link a repo first"}
@@ -340,19 +340,19 @@ function AuditCenterPage() {
                 </button>
               </div>
             )}
-            {isImport && !ghRepo && (
+            {isImport && isOwner && !ghRepo && (
               <GitHubRepoCard
                 projectId={projectId}
                 isOwner={true}
                 onLinked={(fullName) => setGhRepo(fullName)}
               />
             )}
-            {isImport && showPaste && (
+            {isImport && isOwner && showPaste && (
               <div className="rounded-lg border border-border bg-surface-1 p-4">
                 <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={5_000_000} />
                 <button
                   onClick={() => startFinalAudit("paste")}
-                  disabled={starting || !pasted.trim()}
+                  disabled={!startAllowed || !pasted.trim()}
                   className="mt-3 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
                 >
                   {starting ? "Opening the audit…" : "Run the A–Z audit on this code"}
@@ -366,6 +366,7 @@ function AuditCenterPage() {
               <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${
                 finalAudit.status === "clean" ? "border-[hsl(160_45%_48%/0.4)] text-[hsl(160_45%_70%)] bg-[hsl(160_45%_28%/0.15)]"
                 : finalAudit.status === "findings" ? "border-[hsl(8_60%_55%/0.4)] text-[hsl(8_60%_75%)] bg-[hsl(8_60%_25%/0.15)]"
+                : finalAudit.status === "failed" ? "border-[hsl(8_60%_55%/0.55)] text-[hsl(8_60%_78%)] bg-[hsl(8_60%_25%/0.25)]"
                 : "border-border text-muted-foreground bg-surface-2"
               }`}>
                 {finalAudit.status}
@@ -373,7 +374,25 @@ function AuditCenterPage() {
               <span className="font-mono text-[11px] text-muted-foreground">
                 {finalAudit.source ?? "—"} · {finalAudit.files_analyzed ?? 0} files
               </span>
+              {finalAudit.completed_at && (
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {new Date(finalAudit.completed_at).toLocaleString()}
+                </span>
+              )}
             </div>
+            {finalAudit.status === "failed" && (
+              <div className="mt-3 rounded-md border border-[hsl(8_60%_55%/0.35)] bg-[hsl(8_60%_25%/0.15)] p-3">
+                <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-[hsl(8_60%_78%)]">Why it failed</p>
+                <p className="mt-1 font-mono text-[11px] text-foreground/85">
+                  {(finalAudit.run_id && runErrors[finalAudit.run_id]) || "The audit did not complete. Retry to open a fresh run."}
+                </p>
+              </div>
+            )}
+            {finalAudit.status === "running" && (
+              <p className="mt-3 font-mono text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
+                In progress — the board is reading your code.
+              </p>
+            )}
             {finalAudit.summary?.text && <p className="mt-3 text-sm text-foreground/85">{finalAudit.summary.text}</p>}
             {finalAudit.summary?.validation_downgrades && finalAudit.summary.validation_downgrades.length > 0 && (
               <div className="mt-4 rounded-md border border-border/60 bg-surface-2 p-3">
@@ -402,6 +421,67 @@ function AuditCenterPage() {
                 Clean read. Convene the improvement board to plan what to build next.
               </p>
             )}
+
+            {/* Retry / re-run controls. Owner-only. Never shown while running. */}
+            {isOwner && finalAudit.status !== "running" && (
+              <div className="mt-5 border-t border-border/60 pt-4">
+                {!showRetry ? (
+                  <button
+                    onClick={() => setShowRetry(true)}
+                    data-testid="final-retry-cta"
+                    className="inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-4 py-2 text-sm text-foreground hover:border-primary/60"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" /> {retryLabel}
+                  </button>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={() => startFinalAudit("github")}
+                        disabled={!startAllowed || !ghRepo}
+                        data-testid="final-retry-github"
+                        className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+                      >
+                        {starting ? "Opening the audit…" : ghRepo ? "Run from GitHub HEAD" : "Link a repo first"}
+                      </button>
+                      <button
+                        onClick={() => setShowPaste((v) => !v)}
+                        className="rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground hover:border-primary/40"
+                      >
+                        {showPaste ? "Cancel paste" : "Paste code instead"}
+                      </button>
+                      <button
+                        onClick={() => { setShowRetry(false); setShowPaste(false); setPasted(""); }}
+                        className="text-xs text-muted-foreground hover:text-foreground"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    {!ghRepo && (
+                      <GitHubRepoCard
+                        projectId={projectId}
+                        isOwner={true}
+                        onLinked={(fullName) => setGhRepo(fullName)}
+                      />
+                    )}
+                    {showPaste && (
+                      <div className="rounded-lg border border-border bg-surface-1 p-4">
+                        <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={5_000_000} />
+                        <button
+                          onClick={() => startFinalAudit("paste")}
+                          disabled={!startAllowed || !pasted.trim()}
+                          data-testid="final-retry-paste"
+                          className="mt-3 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+                        >
+                          {starting ? "Opening the audit…" : "Run on this code"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             <Link
               to={isImport ? "/boardroom/$projectId" : "/runway/$projectId"}
               params={{ projectId }}
@@ -409,6 +489,36 @@ function AuditCenterPage() {
             >
               {isImport ? "To the Boardroom" : "Back to the Runway"} <ArrowRight className="h-3.5 w-3.5" />
             </Link>
+          </div>
+        )}
+
+        {/* Previous final audits — history retained across retries. */}
+        {previousFinalAudits.length > 0 && (
+          <div className="mt-6">
+            <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Previous final audits</p>
+            <ul className="mt-2 space-y-1">
+              {previousFinalAudits.map((a) => (
+                <li key={a.id} className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-surface-2 px-3 py-2">
+                  <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${
+                    a.status === "clean" ? "border-[hsl(160_45%_48%/0.4)] text-[hsl(160_45%_70%)] bg-[hsl(160_45%_28%/0.15)]"
+                    : a.status === "findings" ? "border-[hsl(8_60%_55%/0.4)] text-[hsl(8_60%_75%)] bg-[hsl(8_60%_25%/0.15)]"
+                    : a.status === "failed" ? "border-[hsl(8_60%_55%/0.55)] text-[hsl(8_60%_78%)] bg-[hsl(8_60%_25%/0.25)]"
+                    : "border-border text-muted-foreground bg-surface-1"
+                  }`}>{a.status}</span>
+                  <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
+                    {a.source ?? "—"} · {a.files_analyzed ?? 0} files
+                  </span>
+                  <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+                    {new Date(a.created_at).toLocaleString()}
+                  </span>
+                  {a.status === "failed" && a.run_id && runErrors[a.run_id] && (
+                    <p className="basis-full font-mono text-[11px] text-muted-foreground/90">
+                      {runErrors[a.run_id]}
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
