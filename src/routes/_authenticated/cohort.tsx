@@ -114,6 +114,7 @@ function CohortPage() {
         .from("plan_versions")
         .select("project_id")
         .eq("kind", "plan")
+        .eq("is_build_safe", true)
         .in("project_id", projectIds);
       lockedByProject = new Set((data ?? []).map((r: any) => r.project_id));
     }

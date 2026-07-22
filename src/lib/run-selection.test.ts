@@ -41,4 +41,24 @@ describe("selectDisplayedRun", () => {
     ];
     expect(selectDisplayedRun(runs)?.id).toBe("newest-failed");
   });
+
+
+  it("newest terminal failure wins over older, more expensive terminal failure ($4.218 vs $0.923)", () => {
+    // Regression: Runway once selected by spend and would surface an
+    // ancient revise failure ($4.218) even though a fresh Inspector
+    // failure ($0.923) had just landed.
+    const runs: RunLite[] = [
+      { id: "newer-inspector-fail", status: "failed", created_at: t("2026-07-27T18:00:00Z"), spent_usd: 0.923 },
+      { id: "older-revise-fail", status: "failed", created_at: t("2026-07-20T09:00:00Z"), spent_usd: 4.218 },
+    ];
+    expect(selectDisplayedRun(runs)?.id).toBe("newer-inspector-fail");
+  });
+
+  it("active run still wins over any terminal — progress trumps recency", () => {
+    const runs: RunLite[] = [
+      { id: "newer-terminal", status: "failed", created_at: t("2026-07-27T18:00:00Z"), spent_usd: 5 },
+      { id: "active-in-progress", status: "running", created_at: t("2026-07-27T10:00:00Z"), spent_usd: 1.5 },
+    ];
+    expect(selectDisplayedRun(runs)?.id).toBe("active-in-progress");
+  });
 });

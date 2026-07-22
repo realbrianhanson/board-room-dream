@@ -474,6 +474,7 @@ async function beginAudit(params: {
         .select("content_md")
         .eq("project_id", project.id)
         .eq("kind", "design")
+        .eq("is_build_safe", true)
         .order("version", { ascending: false })
         .limit(1)
         .maybeSingle()
@@ -500,6 +501,7 @@ async function beginAudit(params: {
       .select("content_md")
       .eq("project_id", project.id)
       .eq("kind", "design")
+      .eq("is_build_safe", true)
       .order("version", { ascending: false })
       .limit(1)
       .maybeSingle();

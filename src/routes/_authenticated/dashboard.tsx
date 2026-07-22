@@ -562,7 +562,7 @@ async function resume(
   }
   if (status === "locked") {
     const [{ data: design }, { data: batch }] = await Promise.all([
-      supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "design").limit(1).maybeSingle(),
+      supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "design").eq("is_build_safe", true).limit(1).maybeSingle(),
       supabase.from("batches").select("id").eq("project_id", projectId).limit(1).maybeSingle(),
     ]);
     if (!design) {

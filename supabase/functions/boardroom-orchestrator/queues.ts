@@ -839,6 +839,7 @@ export async function queueBatchesStep(admin: any, run: any) {
     .select("content_md")
     .eq("project_id", run.project_id)
     .eq("kind", "design")
+    .eq("is_build_safe", true)
     .order("version", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -952,6 +953,7 @@ export async function queueBatchesReview(admin: any, run: any, draftJson: any) {
     .select("content_md")
     .eq("project_id", run.project_id)
     .eq("kind", "design")
+    .eq("is_build_safe", true)
     .order("version", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -1040,6 +1042,7 @@ export async function queueBatchesRevise(admin: any, run: any, draftJson: any, r
     .select("content_md")
     .eq("project_id", run.project_id)
     .eq("kind", "design")
+    .eq("is_build_safe", true)
     .order("version", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -1139,6 +1142,7 @@ export async function createInitialSteps(admin: any, run: any) {
       .select("content_md, prd_md")
       .eq("project_id", run.project_id)
       .eq("kind", "plan")
+      .eq("is_build_safe", true)
       .order("version", { ascending: false })
       .limit(1)
       .maybeSingle();

@@ -66,7 +66,8 @@ function DesignStudioPage() {
         .from("plan_versions")
         .select("id", { count: "exact", head: true })
         .eq("project_id", projectId)
-        .eq("kind", "plan");
+        .eq("kind", "plan")
+        .eq("is_build_safe", true);
       setHasPlan((count ?? 0) > 0);
 
       await loadLocked();
@@ -137,11 +138,15 @@ function DesignStudioPage() {
         )}
       </div>
 
-      {!hasPlan && !project.is_import ? (
+      {!hasPlan ? (
         <div className="rounded-xl border border-dashed border-border bg-surface-1/40 px-8 py-20 text-center">
           <Palette className="mx-auto h-6 w-6 text-muted-foreground" />
-          <p className="mt-4 font-display text-2xl text-foreground">The board locks the plan before it debates the look.</p>
-          <p className="mt-2 text-sm text-muted-foreground">Take this project through the Boardroom first.</p>
+          <p className="mt-4 font-display text-2xl text-foreground">The board locks a build-safe plan before it debates the look.</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {project.is_import
+              ? "Convene the improvement board and lock a plan under the current founder-authority rules first."
+              : "Take this project through the Boardroom first."}
+          </p>
           <Link
             to="/boardroom/$projectId"
             params={{ projectId }}
