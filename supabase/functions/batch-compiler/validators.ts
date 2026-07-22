@@ -173,6 +173,9 @@ export function batchAuthorityError(
     if (vp && vp.trim()) {
       return `human channel batches must not include a compiled_verification_prompt_md.`;
     }
+  }
+
+
 
 
   if (!titleSemanticallyMatches(p.compiled_prompt_md, batch.title)) {
