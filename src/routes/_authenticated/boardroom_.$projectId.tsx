@@ -67,12 +67,15 @@ function BoardroomProjectPage() {
     };
   }, [projectId, reloadKey]);
 
-  const extraConveneGate = () => {
-    if (!isImport) return null;
-    if (gateLoading || gateError) return null;
-    if (!hasSuccessfulAudit) return IMPORT_AUDIT_GATE_MESSAGE;
-    return null;
-  };
+  const gateState = computeBoardroomGate({
+    loading: gateLoading,
+    error: gateError,
+    isImport,
+    hasSuccessfulAudit,
+  });
+
+  const extraConveneGate = () =>
+    gateState.kind === "needs-import-audit" ? IMPORT_AUDIT_GATE_MESSAGE : null;
 
   if (gateError) {
     return (
