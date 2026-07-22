@@ -31,13 +31,13 @@ Deno.test("R3 CAPS — merge tightened to 12 findings / 9,000 chars with per-fie
   assertEquals(CAPS.mergeSummaryMax, 600);
   assertEquals(CAPS.mergeTitleMax, 120);
   assertEquals(CAPS.mergeDescriptionMax, 320);
-  assertEquals(CAPS.mergeEvidenceMax, 200);
+  assertEquals(CAPS.mergeEvidenceMax, 280);
   // Correction caps must never restore the failing 30/18000 shape.
   assertEquals(CAPS.mergeCorrectionFindingsMax, 8);
   assertEquals(CAPS.mergeCorrectionSerializedMax, 6_000);
   assertEquals(CAPS.mergeCorrectionSummaryMax, 360);
   assertEquals(CAPS.mergeCorrectionDescriptionMax, 240);
-  assertEquals(CAPS.mergeCorrectionEvidenceMax, 140);
+  assertEquals(CAPS.mergeCorrectionEvidenceMax, 200);
 });
 
 Deno.test("validateMerged — 12 clean findings + short summary passes", () => {
@@ -54,7 +54,7 @@ Deno.test("validateMerged — 13 findings fails with 'max' message", () => {
 Deno.test("validateMerged — one-over per-field caps fails cleanly", () => {
   assertStringIncludes(String(validateMerged([f({ title: "x".repeat(121) })])), "title over 120");
   assertStringIncludes(String(validateMerged([f({ description: "x".repeat(321) })])), "description over 320");
-  assertStringIncludes(String(validateMerged([f({ evidence: "x".repeat(201) })])), "evidence over 200");
+  assertStringIncludes(String(validateMerged([f({ evidence: "x".repeat(281) })])), "evidence over 280");
 });
 
 Deno.test("validateMerged — summary over 600 fails", () => {
@@ -63,12 +63,12 @@ Deno.test("validateMerged — summary over 600 fails", () => {
 });
 
 Deno.test("validateMerged — serialized payload over 9,000 fails", () => {
-  // Twelve maxed-out findings (title 120, desc 320, evidence 200) serialize
+  // Twelve maxed-out findings (title 120, desc 320, evidence 280) serialize
   // to well over 9,000 chars.
   const bulky = Array.from({ length: 12 }, () => f({
     title: "t".repeat(120),
     description: "d".repeat(320),
-    evidence: "e".repeat(200),
+    evidence: "e".repeat(280),
   }));
   const err = validateMerged(bulky);
   assertStringIncludes(String(err), "exceeds 9000");
