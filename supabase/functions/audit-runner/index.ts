@@ -166,9 +166,18 @@ export const AUDIT_MAP_MAX_TOKENS = 4000;
 export const FORMAT_STATIC_WRAPPER = 25;
 export const FORMAT_DIGIT_RESERVE = 6;
 export const FORMAT_JOIN_SEP = 1;
+// Extra bytes reserved per rendered file/fragment header to accommodate the
+// audit-specific " (fragment N of M)" marker emitted by renderAuditChunkGroup
+// when a source file spans multiple chunks. Worst-case marker is
+// " (fragment 20 of 20)" = 20 bytes; reserve 22 for a safety margin. The
+// reserve is folded into wrapperOverhead so the packer always leaves room —
+// the marker is only actually emitted for fragmented files, but reserving
+// unconditionally keeps the invariant math simple and cheap.
+export const AUDIT_FRAGMENT_HEADER_RESERVE = 22;
 
 function wrapperOverhead(pathBytes: number, digitsReserve: number, isFirst: boolean): number {
   return FORMAT_STATIC_WRAPPER + pathBytes + digitsReserve +
+    AUDIT_FRAGMENT_HEADER_RESERVE +
     (isFirst ? 0 : FORMAT_JOIN_SEP);
 }
 
