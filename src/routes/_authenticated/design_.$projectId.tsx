@@ -44,11 +44,13 @@ function DesignStudioPage() {
       .select("id, version, content_md, is_chair_ruled, locked_at, dissent_ledger")
       .eq("project_id", projectId)
       .eq("kind", "design")
+      .eq("is_build_safe", true)
       .order("version", { ascending: false })
       .limit(1)
       .maybeSingle();
     setLocked((data as PlanVersion) ?? null);
   }, [projectId]);
+
 
   useEffect(() => {
     (async () => {
