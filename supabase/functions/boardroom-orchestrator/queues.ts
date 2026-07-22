@@ -1205,10 +1205,13 @@ Return ONLY valid JSON:
   "test_script": ["step 1", "step 2", "..."]` : ""}
 }
 
-Hard output limits (enforced by validator):
-- MAX ${AF_CAPS.mergeFindingsMax} deduplicated findings.
+Hard output limits (enforced by validator — over-emission FAILS the merge):
+- MAX ${AF_CAPS.mergeFindingsMax} deduplicated findings. If more than ${AF_CAPS.mergeFindingsMax} unique serious findings exist, keep the ${AF_CAPS.mergeFindingsMax} strongest-evidence / highest-confidence items (prioritise concrete high-confidence P0/P1, then strongest P2/P3; merge duplicate root causes across seats and chunks). Never invent evidence to promote a finding. Reflect omitted items in the summary and counts metadata rather than exceeding the cap.
 - Total serialized findings JSON <= ${AF_CAPS.mergeSerializedMax} characters — compress evidence, never drop supported P0/P1.
-- title <= ${AF_CAPS.titleMax}, description <= ${AF_CAPS.descriptionMax}, evidence <= ${AF_CAPS.evidenceMax}.
+- summary <= ${AF_CAPS.mergeSummaryMax} characters.
+- title <= ${AF_CAPS.mergeTitleMax}, description <= ${AF_CAPS.mergeDescriptionMax}, evidence <= ${AF_CAPS.mergeEvidenceMax}.
+
+Output discipline: emit ONE valid JSON object on ONE line — no prose, no code fences, no leading/trailing whitespace, no explanations.
 
 If verdict is "clean", findings is [] and fix_prompt_md is "".
 
@@ -1223,7 +1226,7 @@ Coverage honesty: the summary must state how much of the app was actually read (
     status: "queued",
     request: {
       json_output: true,
-      reasoning_effort: "medium",
+      reasoning_effort: "low",
       max_tokens: 6500,
       messages: [
         { role: "system", content: system },

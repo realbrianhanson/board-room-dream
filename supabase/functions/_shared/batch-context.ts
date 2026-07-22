@@ -303,13 +303,23 @@ export function isBatchGenerationStep(stepKey: string | null | undefined): boole
   return k === "batches_chair" || k === "batches_revise_chair" || k.startsWith("batches_review_");
 }
 
-// Audit map/extraction steps (per-chunk per-seat). Echoing the truncated
-// prior response back to the model was letting it re-emit the same
-// near-cap output and truncate identically. For these steps we always
-// drop the echo and rely on the tightened correction copy alone.
+// Audit map/extraction steps (per-chunk per-seat) AND the Chair merge step.
+// Echoing the truncated prior response back to the model was letting it
+// re-emit the same near-cap output and truncate identically. For these
+// steps we always drop the echo and rely on the tightened correction copy
+// alone. AUDIT-MERGE-BOUNDED-R3 extends this to audit_chair_merge — the
+// live truncation at 6485/6500 tokens repeated when the echo was included.
 export function isAuditMapStep(stepKey: string | null | undefined): boolean {
   const k = String(stepKey ?? "");
   return /^audit_(chair|strategist|contrarian|inspector|reserve)(_c\d+)?$/.test(k) && k !== "audit_chair_merge";
+}
+
+export function isAuditMergeStep(stepKey: string | null | undefined): boolean {
+  return String(stepKey ?? "") === "audit_chair_merge";
+}
+
+export function isAuditNoEchoStep(stepKey: string | null | undefined): boolean {
+  return isAuditMapStep(stepKey) || isAuditMergeStep(stepKey);
 }
 
 // ============================== Validation retry builder ==============================
@@ -346,10 +356,10 @@ export function buildValidationRetryRequest(input: ValidationRetryInput): Valida
   // truncated near-cap output was letting the model re-emit and re-truncate
   // in the same shape. The correction copy alone (see correctionForStep)
   // asks for a materially smaller schema, so no echo is needed.
-  if (isAuditMapStep(stepKey)) {
+  if (isAuditNoEchoStep(stepKey)) {
     const noEchoText = truncated
-      ? `${correctionText}\n\n(Retry note: your prior response was truncated at ${assistantContent.length} chars — do NOT reconstruct it verbatim. Emit only complete finding objects and close the schema properly.)`
-      : `${correctionText}\n\n(Retry note: your prior response failed validation at ${assistantContent.length} chars — do NOT reconstruct it verbatim. Emit only complete finding objects and close the schema properly.)`;
+      ? `${correctionText}\n\n(Retry note: your prior response was truncated at ${assistantContent.length} chars — do NOT reconstruct it verbatim. Emit only complete objects and close the schema properly.)`
+      : `${correctionText}\n\n(Retry note: your prior response failed validation at ${assistantContent.length} chars — do NOT reconstruct it verbatim. Emit only complete objects and close the schema properly.)`;
     const req = {
       ...baseRequest,
       messages: [...baseMessages, { role: "user", content: noEchoText }],

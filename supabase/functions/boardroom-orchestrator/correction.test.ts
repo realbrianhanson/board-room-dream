@@ -36,11 +36,16 @@ Deno.test("correctionForStep — audit seat report routes to tightened audit-map
   }
 });
 
-Deno.test("correctionForStep — audit merge routes to merge copy", () => {
+Deno.test("correctionForStep — audit merge routes to bounded R3 merge copy (never 30/18,000)", () => {
   const c = correctionForStep("audit_chair_merge");
   assertStringIncludes(c, "audit merge");
-  assertStringIncludes(c, "max 30 deduplicated findings");
-  assertStringIncludes(c, "<=18,000 characters");
+  assertStringIncludes(c, "HARD MAX 8");
+  assertStringIncludes(c, "<=6,000 characters");
+  assertStringIncludes(c, "summary <=360");
+  assertStringIncludes(c, "description <=240");
+  assertStringIncludes(c, "evidence <=140");
+  assert(!/\b30\s+deduplicated\s+findings\b/i.test(c), "must not restate 30-findings shape");
+  assert(!/<=?\s*18[, ]?000\s*characters/i.test(c), "must not restate 18,000-char shape");
 });
 
 Deno.test("correctionForStep — unknown steps route to generic copy", () => {

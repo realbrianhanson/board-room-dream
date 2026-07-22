@@ -100,7 +100,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-27.import-trust.l2";
+const BUILD_VERSION = "2026-07-28.audit-merge-bounded-r3.p1";
 
 import {
   failRun,
@@ -433,7 +433,7 @@ async function executeStep(admin: any, run: any, step: any) {
         // helper appends ONLY the missing "}"/"]" needed to balance and re-
         // parses; refuses on unterminated strings, dangling commas, or any
         // other ambiguity. Rescued output must still pass validateStepJson.
-        const rescued = tryCloseJsonTail(content);
+        const rescued = tryCloseJsonTail(content, { shape: step.step_key === "audit_chair_merge" ? "merge" : "map" });
         if (rescued.ok) {
           candidate = rescued.value;
           tailClosed = rescued.closed;
@@ -969,7 +969,7 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
   // Hard validator gate. If model produced structurally impossible data
   // (too many, oversize, bad lines) after normalization, treat as merge
   // failure — audit ends failed, no partial findings, no fix batch.
-  const vErr = validateMerged(findings);
+  const vErr = validateMerged(findings, String(parsed?.summary ?? ""));
   if (vErr) {
     await admin
       .from("audits")
