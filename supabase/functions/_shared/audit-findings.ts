@@ -312,3 +312,97 @@ export function buildMergeInput(
   const totalFindings = seatReports.reduce((s, r) => s + preCapSeat(r.findings).length, 0);
   return { block, totalFindings };
 }
+
+
+// ============================== Map-seat schema doc ==============================
+// Narrower than FINDING_SCHEMA_DOC — every per-chunk map/extract call uses
+// this to stay well inside the 4000-token map budget.
+export const MAP_FINDING_SCHEMA_DOC = `Each finding MUST be an object with EXACTLY these keys:
+{
+  "severity": "P0"|"P1"|"P2"|"P3",
+  "file_path": "repo-relative path (never a fragment label like 'fragment 3 of 5')",
+  "title": "<=${CAPS.mapTitleMax} chars, one short line",
+  "description": "<=${CAPS.mapDescriptionMax} chars, one to two sentences: what is broken and why",
+  "evidence": "<=${CAPS.mapEvidenceMax} chars, concrete: exact vulnerable construct, verbatim short quote, or precise data-flow. A filename alone or a speculative risk is NOT evidence.",
+  "confidence": "high"|"medium"|"low",
+  "line_start": integer > 0 or null,
+  "line_end": integer > 0 (>= line_start) or null
+}
+
+Serious findings (P0/P1) require:
+- a concrete repo-relative file_path,
+- specific evidence explaining the exact vulnerable/broken construct,
+- confidence "high" or "medium".
+
+Fragment-boundary rule (hard):
+- The CODE section may show one or more files split across labelled fragments ("fragment N of M"). A non-first fragment MAY begin mid-token, mid-statement, or mid-comment; a non-final fragment MAY end mid-token. Never report a file as truncated, malformed, or syntactically broken based ONLY on a fragment boundary. Report syntax truncation only when the FULL file boundary is present or you have concrete full-file evidence.
+- Always cite the original repo-relative file_path in "file_path" — never the fragment label.
+
+Do NOT label a Supabase anon/publishable key as a leaked secret. Only flag a secret when the code embeds an actual unredacted private credential, service-role key, or high-entropy secret.`;
+
+
+// ============================== JSON tail closure ==============================
+
+// Conservative, deterministic JSON tail-closure. Given a possibly-truncated
+// JSON string, append ONLY the missing "}" and "]" closers required to
+// balance open structures, and return the parsed value if JSON.parse
+// accepts the result. Refuses on ANY of:
+//   - unterminated string (open double-quote at end),
+//   - mismatched delimiter (e.g. "{" popped by "]"),
+//   - dangling structural token at the tail (",", ":", "{", "[")
+//     — trailing commas / bare braces are NOT auto-fixed,
+//   - the resulting string still fails JSON.parse.
+// Never rewrites, deletes, guesses, or synthesizes content.
+export function tryCloseJsonTail(
+  text: string,
+): { ok: true; value: unknown; closed: string } | { ok: false; reason: string } {
+  const s = String(text ?? "");
+  if (!s.trim()) return { ok: false, reason: "empty" };
+  const stack: Array<"{" | "["> = [];
+  let inString = false;
+  let escape = false;
+  let lastMeaningful: string | null = null;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inString) {
+      if (escape) { escape = false; continue; }
+      if (c === "\\") { escape = true; continue; }
+      if (c === '"') { inString = false; lastMeaningful = '"'; }
+      continue;
+    }
+    if (c === '"') { inString = true; lastMeaningful = '"'; continue; }
+    if (c === " " || c === "\t" || c === "\n" || c === "\r") continue;
+    if (c === "{" || c === "[") { stack.push(c as "{" | "["); lastMeaningful = c; continue; }
+    if (c === "}" || c === "]") {
+      const open = stack.pop();
+      if (!open || (open === "{" && c !== "}") || (open === "[" && c !== "]")) {
+        return { ok: false, reason: "mismatched delimiter" };
+      }
+      lastMeaningful = c;
+      continue;
+    }
+    // Any other token (bare word, number, comma, colon). Track for tail check.
+    lastMeaningful = c;
+  }
+  if (inString) return { ok: false, reason: "unterminated string" };
+  if (stack.length === 0) {
+    // Already balanced — try to parse as is; if this fails the caller falls
+    // through to correction.
+    try { return { ok: true, value: JSON.parse(s), closed: "" }; }
+    catch (e) { return { ok: false, reason: `parse failed after balanced scan: ${(e as Error).message}` }; }
+  }
+  // Require the last non-whitespace token to be a value terminator. Explicit
+  // reject list: ",", ":", "{", "[" — those all imply a missing value or key
+  // that we refuse to synthesize.
+  if (lastMeaningful === "," || lastMeaningful === ":" || lastMeaningful === "{" || lastMeaningful === "[") {
+    return { ok: false, reason: `dangling structural token '${lastMeaningful}' — refuse to synthesize` };
+  }
+  let closers = "";
+  for (let i = stack.length - 1; i >= 0; i--) closers += stack[i] === "{" ? "}" : "]";
+  const attempt = s + closers;
+  try {
+    return { ok: true, value: JSON.parse(attempt), closed: closers };
+  } catch (e) {
+    return { ok: false, reason: `parse failed after appending ${JSON.stringify(closers)}: ${(e as Error).message}` };
+  }
+}
