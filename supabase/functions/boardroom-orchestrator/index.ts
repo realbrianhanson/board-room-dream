@@ -969,7 +969,7 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
   // Hard validator gate. If model produced structurally impossible data
   // (too many, oversize, bad lines) after normalization, treat as merge
   // failure — audit ends failed, no partial findings, no fix batch.
-  const vErr = validateMerged(findings);
+  const vErr = validateMerged(findings, String(parsed?.summary ?? ""));
   if (vErr) {
     await admin
       .from("audits")
