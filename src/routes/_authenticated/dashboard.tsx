@@ -131,6 +131,13 @@ function DashboardPage() {
   const [impDescription, setImpDescription] = useState("");
   const [impUrl, setImpUrl] = useState("");
   const [impGoals, setImpGoals] = useState<string[]>(["code_audit"]);
+  const [impBuyer, setImpBuyer] = useState("");
+  const [impPaidOffer, setImpPaidOffer] = useState("");
+  const [impPriceAnchor, setImpPriceAnchor] = useState("");
+  const [impUpgradeTrigger, setImpUpgradeTrigger] = useState("");
+  const [impActivation, setImpActivation] = useState("");
+  const [impWow, setImpWow] = useState("");
+  const [impPositioning, setImpPositioning] = useState("");
 
   function resetForms() {
     setMode(null);
@@ -139,6 +146,13 @@ function DashboardPage() {
     setImpDescription("");
     setImpUrl("");
     setImpGoals(["code_audit"]);
+    setImpBuyer("");
+    setImpPaidOffer("");
+    setImpPriceAnchor("");
+    setImpUpgradeTrigger("");
+    setImpActivation("");
+    setImpWow("");
+    setImpPositioning("");
   }
 
   async function load() {
@@ -232,9 +246,25 @@ function DashboardPage() {
     }
   }
 
+  const importStrategyReady =
+    impBuyer.trim().length > 1 &&
+    impPaidOffer.trim().length > 1 &&
+    impPriceAnchor.trim().length > 0 &&
+    impUpgradeTrigger.trim().length > 1 &&
+    impActivation.trim().length > 1 &&
+    impWow.trim().length > 1 &&
+    impPositioning.trim().length > 1;
+
   async function createImport(e: React.FormEvent) {
     e.preventDefault();
-    if (!impName.trim() || !impDescription.trim() || impGoals.length === 0) return;
+    if (
+      !impName.trim() ||
+      !impDescription.trim() ||
+      impGoals.length === 0 ||
+      !importStrategyReady
+    ) {
+      return;
+    }
     setCreating(true);
     try {
       const { data: userData } = await supabase.auth.getUser();
@@ -260,12 +290,23 @@ function DashboardPage() {
           description: impDescription.trim(),
           lovable_project_url: impUrl.trim() || null,
           goals: impGoals,
+          buyer: impBuyer.trim(),
+          paid_offer: impPaidOffer.trim(),
+          price_anchor: impPriceAnchor.trim(),
+          upgrade_trigger: impUpgradeTrigger.trim(),
+          activation_moment: impActivation.trim(),
+          wow_moment: impWow.trim(),
+          positioning: impPositioning.trim(),
         },
       });
       if (iErr) throw iErr;
-      toast.success("Project imported. The board is ready when you are.");
+      toast.success(
+        "Project imported. Link GitHub and run the required A–Z audit next.",
+      );
+      const newProjectId = proj.id;
       resetForms();
       await load();
+      navigate({ to: "/audits/$projectId", params: { projectId: newProjectId } });
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
