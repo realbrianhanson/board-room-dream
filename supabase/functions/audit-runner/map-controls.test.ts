@@ -59,23 +59,24 @@ Deno.test("buildMapStepRequest carries temperature 0.2, reasoning low, max_token
   }
 });
 
-// The Chair merge request is queued in boardroom-orchestrator/queues.ts and
-// is intentionally NOT constrained by the map caps. Any change to the Chair
-// merge shape must fail this test loudly.
-Deno.test("chair merge request contract does NOT inherit map caps", async () => {
+// AUDIT-MERGE-BOUNDED-R3: Chair merge now uses reasoning_effort "low"
+// (same as map) but keeps max_tokens=6500 and does NOT inherit the map
+// temperature cap or the map per-field limits. Any regression here must
+// fail loudly.
+Deno.test("chair merge request contract — low reasoning, 6500 tokens, no map temperature", async () => {
   const src = await Deno.readTextFile(
     new URL("../boardroom-orchestrator/queues.ts", import.meta.url),
   );
   const start = src.indexOf('step_key: "audit_chair_merge"');
   assert(start >= 0, "expected audit_chair_merge insert in queues.ts");
-  const window = src.slice(start, start + 1200);
+  const window = src.slice(start - 800, start + 1200);
   assert(
-    window.includes('reasoning_effort: "medium"'),
-    "chair merge should stay at 'medium' reasoning, not map's 'low'",
+    /reasoning_effort:\s*"low"/.test(window),
+    "chair merge must be reasoning_effort: 'low' after R3",
   );
   assert(
     /max_tokens:\s*6500/.test(window),
-    "chair merge should stay at 6500 tokens, not map's 4000",
+    "chair merge must stay at 6500 tokens (do not raise)",
   );
   assert(
     !/\btemperature\s*:\s*0\.2\b/.test(window),
