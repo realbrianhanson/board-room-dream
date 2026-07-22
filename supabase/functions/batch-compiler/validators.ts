@@ -257,19 +257,21 @@ export function skeletonError(
   if (!titleSemanticallyMatches(m[1], batch.title)) {
     return `First-line title "${m[1]}" does not semantically match current batch title "${batch.title}".`;
   }
-  // Acceptance count.
-  const acceptIdx = text.search(/^\s*(?:#+\s*)?acceptance\b[:\s]*$/im);
-  if (acceptIdx < 0) return `Missing "Acceptance" section.`;
-  const afterAccept = text.slice(acceptIdx).split(/\n/).slice(1);
-  const acceptLines: string[] = [];
-  for (const l of afterAccept) {
-    const t = l.trim();
-    if (!t) { if (acceptLines.length) break; else continue; }
-    if (/^(#+\s|Keep everything else identical\.)/i.test(t)) break;
-    acceptLines.push(t);
-  }
-  if (acceptLines.length < 2 || acceptLines.length > 4) {
-    return `Acceptance section must have 2–4 checks (found ${acceptLines.length}).`;
+  // Acceptance section required for code batches only.
+  if (batch.channel === "code") {
+    const acceptIdx = text.search(/^\s*(?:#+\s*)?acceptance\b[:\s]*$/im);
+    if (acceptIdx < 0) return `Missing "Acceptance" section.`;
+    const afterAccept = text.slice(acceptIdx).split(/\n/).slice(1);
+    const acceptLines: string[] = [];
+    for (const l of afterAccept) {
+      const t = l.trim();
+      if (!t) { if (acceptLines.length) break; else continue; }
+      if (/^(#+\s|Keep everything else identical\.)/i.test(t)) break;
+      acceptLines.push(t);
+    }
+    if (acceptLines.length < 2 || acceptLines.length > 4) {
+      return `Acceptance section must have 2–4 checks (found ${acceptLines.length}).`;
+    }
   }
   const trimmedEnd = text.trimEnd();
   if (!/Keep everything else identical\.\s*\n\s*Typecheck when done\.$/.test(trimmedEnd)) {
