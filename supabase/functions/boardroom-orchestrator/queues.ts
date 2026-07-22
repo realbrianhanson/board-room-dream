@@ -483,7 +483,7 @@ Return ONLY valid JSON matching this shape:
   "dissent_ledger": [ { "seat": "...", "objection": "...", "chair_response": "..." } ]
 }`;
   const user = `${intakeBlock(intake)}\n\nLAST CANDIDATE\n${lastCandidate}\n\n${failure}\n\nProduce your JSON now.`;
-  await admin.from("run_steps").insert({
+  await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
     step_key: `r_final_ruling_chair`,
