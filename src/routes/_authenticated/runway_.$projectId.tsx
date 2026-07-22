@@ -375,15 +375,21 @@ function RunwayPage() {
   }
 
 
-  async function resumeRun(runId: string) {
+  async function resumeRun(runId: string, extraBudget?: number) {
     setGenerating(true);
     try {
-      const { data, error } = await supabase.functions.invoke("boardroom-orchestrator", {
-        body: { action: "resume", run_id: runId },
-      });
+      const body: any = { action: "resume", run_id: runId };
+      if (extraBudget !== undefined && extraBudget > 0) {
+        body.extra_budget_usd = extraBudget;
+      }
+      const { data, error } = await supabase.functions.invoke("boardroom-orchestrator", { body });
       if (error) throw error;
       if ((data as any)?.error) throw new Error((data as any).error);
-      toast.success("Resuming the run…");
+      if (extraBudget !== undefined && extraBudget > 0) {
+        toast.success(`Added $${extraBudget.toFixed(2)} extra budget and resuming…`);
+      } else {
+        toast.success("Resuming the run…");
+      }
       await loadAll();
     } catch (err: any) {
       toast.error(err?.message ?? "Failed to resume");
