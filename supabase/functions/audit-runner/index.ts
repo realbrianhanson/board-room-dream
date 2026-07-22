@@ -554,7 +554,7 @@ async function beginAudit(params: {
     if (!pastedCode || !pastedCode.trim()) return { error: "Empty pasted code" as const };
     // Batch/paste audits also fan out into map chunks so a single request
     // can never exceed CHUNK_BYTES. fitPasted() already truncates at
-    // MAX_PASTE_BYTES (200 KiB), well inside the 1.28 MiB total ceiling.
+    // MAX_PASTE_BYTES (200 KiB), well inside the 1.5 MiB total source ceiling.
     const trimmed = fitPasted(pastedCode);
     const encoded = new TextEncoder().encode(trimmed);
     chunks = chunkFiles([{ path: "pasted-code", content: trimmed, bytes: encoded.length }]);
