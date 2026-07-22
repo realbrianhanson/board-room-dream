@@ -1,5 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
+import {
+  initialSettingsLoadState,
+  isSaveEnabled,
+  settingsLoadReducer,
+} from "@/lib/settings-load";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { SpendPanel } from "@/components/spend-panel";
