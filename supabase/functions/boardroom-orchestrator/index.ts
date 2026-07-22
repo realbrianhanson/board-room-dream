@@ -496,7 +496,8 @@ async function executeStep(admin: any, run: any, step: any) {
           cost_usd: usage.costUsd,
           completed_at: new Date().toISOString(),
         })
-        .eq("id", step.id);
+        .eq("id", step.id)
+        .eq("status", "running");
       return;
     }
 
