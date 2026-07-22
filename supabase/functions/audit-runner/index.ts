@@ -310,6 +310,12 @@ Produce your JSON now.`;
         status: "queued",
         request: {
           json_output: true,
+          // Map/extraction controls — see AUDIT_MAP_* constants. Applied to
+          // every per-chunk seat review; the Chair merge step queues its own
+          // request without these caps.
+          temperature: AUDIT_MAP_TEMPERATURE,
+          reasoning_effort: AUDIT_MAP_REASONING_EFFORT,
+          max_tokens: AUDIT_MAP_MAX_TOKENS,
           messages: [
             { role: "system", content: seatPrompt(seat, isFinal) },
             { role: "user", content: user },
