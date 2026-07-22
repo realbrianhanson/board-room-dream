@@ -457,7 +457,7 @@ async function executeStep(admin: any, run: any, step: any) {
           await failRun(admin, run, vmsg);
           return;
         }
-        const vOutcome = await requeueForValidation(admin, step, baseMessages, content, err, truncated);
+        const vOutcome = await requeueForValidation(admin, run, step, baseMessages, content, err, truncated);
         if (vOutcome === "cancelled_parent_terminal") {
           console.log(`[exec] VALIDATION step=${step.step_key} parent already terminal — step cancelled`);
         }
