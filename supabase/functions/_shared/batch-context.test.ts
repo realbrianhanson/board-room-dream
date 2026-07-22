@@ -265,13 +265,6 @@ Deno.test("buildValidationRetryRequest — near-cap base + oversized echo drops 
   const baseRequest = { model: "chair", messages: baseMessages };
   // 30K assistant echo pushes with_echo past MAX (100K).
   const assistant = "y".repeat(30_000);
-  const baseMessages = [
-    { role: "system", content: bigOwner },
-    { role: "user", content: `FEATURES\n\n- [mvp] Auth\n- [mvp] Dashboard\n\n${draft}` },
-  ];
-  const baseRequest = { model: "chair", messages: baseMessages };
-  // 25K assistant echo pushes with_echo well past MAX (100K).
-  const assistant = "y".repeat(25_000);
   const out = buildValidationRetryRequest({
     stepKey: "batches_chair",
     baseRequest,
