@@ -21,7 +21,11 @@ type Audit = {
   source: "github" | "paste" | null;
   head_sha: string | null;
   files_analyzed: number | null;
-  summary: { counts?: Record<string, number>; text?: string } | null;
+  summary: {
+    counts?: Record<string, number>;
+    text?: string;
+    validation_downgrades?: Array<{ title: string; file_path: string | null; from: string; to: string; reason: string }>;
+  } | null;
   created_at: string;
   completed_at: string | null;
 };
