@@ -73,6 +73,9 @@ type Run = {
   kind: string;
   status: string;
   error: string | null;
+  spent_usd: number | null;
+  budget_usd: number | null;
+  created_at: string;
 };
 
 const ROLLBACK_PROMPT = `The last change broke the app. Do not add features. Diagnose and repair only. Identify what changed in the last step and what errors appear in build/preview/logs. Fix the regression and nothing else. Return a summary of the root cause and the repair.`;
@@ -166,7 +169,7 @@ function RunwayPage() {
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "plan").limit(1),
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "design").limit(1),
       supabase.from("batches").select("*").eq("project_id", projectId).order("batch_no", { ascending: true }),
-      supabase.from("boardroom_runs").select("id, kind, status, error").eq("project_id", projectId).eq("kind", "batches").order("created_at", { ascending: false }).limit(1),
+      supabase.from("boardroom_runs").select("id, kind, status, error, spent_usd, budget_usd, created_at").eq("project_id", projectId).eq("kind", "batches").in("status", ["queued","running","paused","paused_budget","failed","completed"]).order("spent_usd", { ascending: false }).order("created_at", { ascending: false }).limit(10),
       supabase.from("audits").select("id, batch_id, kind, status, loop_no, source, head_sha, files_analyzed, summary, created_at").eq("project_id", projectId).order("created_at", { ascending: false }),
       supabase.from("audit_findings").select("id, audit_id, severity, file_path, title, status").order("severity", { ascending: true }),
     ]);
@@ -175,7 +178,19 @@ function RunwayPage() {
     setHasPlan(((pv ?? []).length ?? 0) > 0);
     setHasDesign(((dv ?? []).length ?? 0) > 0);
     setBatches((bs ?? []) as Batch[]);
-    setRun(((rs ?? [])[0] as Run) ?? null);
+    {
+      const runList = (rs ?? []) as Run[];
+      const active = runList.filter((r) => ["queued","running","paused","paused_budget"].includes(r.status));
+      // Ordering already: spent_usd DESC, created_at DESC. For active tie-break
+      // we want older created_at first (most progress) — flip that here.
+      active.sort((a, b) => {
+        const sa = Number(a.spent_usd ?? 0), sb = Number(b.spent_usd ?? 0);
+        if (sb !== sa) return sb - sa;
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
+      const latestTerminal = runList.find((r) => !["queued","running","paused","paused_budget"].includes(r.status)) ?? null;
+      setRun(active[0] ?? latestTerminal);
+    }
     setAudits((au ?? []) as AuditRow[]);
     setFindings((fi ?? []) as FindingRow[]);
     if (p && !urlEdit) setUrlEdit((p as Project).lovable_project_url ?? "");
@@ -200,7 +215,8 @@ function RunwayPage() {
   }, [projectId, loadAll]);
 
   const isOwner = !!project && !!uid && project.user_id === uid;
-  const runInFlight = run && ["queued", "running"].includes(run.status);
+  const runInFlight = run && ["queued", "running", "paused", "paused_budget"].includes(run.status);
+  const runPaused = run && ["paused", "paused_budget"].includes(run.status);
 
   const passedCount = useMemo(() => (batches ?? []).filter((b) => b.status === "passed").length, [batches]);
   const total = (batches ?? []).length;
@@ -308,10 +324,31 @@ function RunwayPage() {
         toast.error("Seat the board first — add your OpenRouter key in Settings.");
         return;
       }
-      toast.success("The Chair is sequencing your build…");
+      if ((data as any)?.existing) {
+        toast.success("The board is already sequencing — resuming that run.");
+      } else {
+        toast.success("The Chair is sequencing your build…");
+      }
       await loadAll();
     } catch (err: any) {
       toast.error(err?.message ?? "Failed to start");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function resumeRun(runId: string) {
+    setGenerating(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("boardroom-orchestrator", {
+        body: { action: "resume", run_id: runId },
+      });
+      if (error) throw error;
+      if ((data as any)?.error) throw new Error((data as any).error);
+      toast.success("Resuming the run…");
+      await loadAll();
+    } catch (err: any) {
+      toast.error(err?.message ?? "Failed to resume");
     } finally {
       setGenerating(false);
     }
@@ -463,14 +500,47 @@ function RunwayPage() {
         </div>
       )}
 
-      {/* State C: generation in flight */}
-      {hasPlan && total === 0 && runInFlight && (
+      {/* State C: generation in flight (queued/running) */}
+      {hasPlan && total === 0 && runInFlight && !runPaused && (
         <div className="rounded-xl border border-border bg-surface-1 p-8 text-center">
           <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
           <p className="font-display text-2xl text-foreground">The Chair is sequencing your build…</p>
           <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
             Status · {run?.status}
           </p>
+        </div>
+      )}
+
+      {/* State C: generation paused (paused / paused_budget) */}
+      {hasPlan && total === 0 && runPaused && run && (
+        <div className="mt-4 rounded-xl border border-[hsl(38_65%_55%/0.4)] bg-[hsl(38_65%_25%/0.12)] p-6">
+          <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(38_65%_72%)]">
+            <AlertTriangle className="h-4 w-4" /> The run is paused · {run.status}
+          </p>
+          <p className="mt-3 whitespace-pre-line text-sm text-foreground/85">
+            {run.error ?? (run.status === "paused_budget"
+              ? "This run hit its spend cap."
+              : "This run was paused.")}
+          </p>
+          {run.status === "paused_budget" && (
+            <div className="mt-3">
+              <Link
+                to="/settings"
+                className="inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.24em] text-[hsl(38_65%_72%)] hover:brightness-125"
+              >
+                Open Settings <ArrowRight className="h-3 w-3" />
+              </Link>
+            </div>
+          )}
+          {isOwner && (
+            <button
+              onClick={() => resumeRun(run.id)}
+              disabled={generating}
+              className="mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+            >
+              <Rocket className="h-4 w-4" /> {generating ? "Resuming…" : "Resume the run"}
+            </button>
+          )}
         </div>
       )}
 
