@@ -1087,7 +1087,7 @@ function CompileModal({
 function BatchCard({
   batch, active, locked, activeBatchNo, isOwner, lovableUrl,
   latestAudit, auditFindings, fixBatch, ghRepo,
-  onCopyPrompt, onAdvance, onOpenRollback, onRequestSkip, onOpenAudit, onSaveOutcome, onCompile,
+  onCopyPrompt, onCopyVerification, onAdvance, onOpenRollback, onRequestSkip, onOpenAudit, onSaveOutcome, onCompile,
 }: {
   batch: Batch;
   active: boolean;
