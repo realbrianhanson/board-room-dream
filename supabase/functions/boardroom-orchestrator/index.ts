@@ -354,6 +354,31 @@ async function executeStep(admin: any, run: any, step: any) {
         await requeueForTimeout(admin, step);
         return;
       }
+      // Response-body transport failure on a 2xx response (e.g.
+      // "error reading a body from connection"). No usable response was ever
+      // read, so the proxy did NOT record cost/tokens. Do NOT quick-retry in
+      // the same invocation (that just spawns another 100s+ model call inside
+      // a dying isolate) and do NOT switch to the fallback model (transport
+      // is not a model-quality signal). Requeue fresh on the SAME model,
+      // capped at one retry; second occurrence is terminal.
+      if (isBodyTransportError(e)) {
+        const decision = decideTransportRequeue(step);
+        console.log(`[exec] BODY_TRANSPORT step=${step.step_key} run=${run.id} decision=${decision.action} attempts=${decision.attempts}`);
+        if (decision.action === "requeue") {
+          await requeueForBodyTransport(admin, step, decision.attempts);
+          return;
+        }
+        await admin
+          .from("run_steps")
+          .update({
+            status: "failed",
+            error: "transport_retry_exhausted",
+            completed_at: new Date().toISOString(),
+          })
+          .eq("id", step.id);
+        await failRun(admin, run, decision.message);
+        return;
+      }
       // Strictly classified quick retry: ONLY pre-response network failures,
       // 429, or 5xx. Any other 4xx, validation, budget, or unexpected error
       // fails the step immediately — no blind same-invocation retry.
