@@ -177,17 +177,106 @@ export function batchAuthorityError(
       if (badPath(e.path)) return `evidence path "${e.path}" is not a repo-relative POSIX path.`;
       if (!fileTreeSet.has(e.path)) return `evidence path "${e.path}" does not exist in the live repo.`;
     }
-    // Schema inventory — a CREATE for an object that already exists must be UPDATE/VERIFY.
+    // Schema inventory — a CREATE for an object that already exists must be ALTER/VERIFY.
     if (opts.schemaObjects && opts.schemaObjects.size) {
-      const createRe = /\bCREATE\s+(TABLE|FUNCTION|POLICY|TRIGGER|INDEX)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?([a-zA-Z_][a-zA-Z0-9_]*)/gi;
-      let m: RegExpExecArray | null;
-      while ((m = createRe.exec(p.compiled_prompt_md))) {
-        const name = m[2].toLowerCase();
-        if (opts.schemaObjects.has(name)) {
-          return `Compiled prompt tells Lovable to CREATE ${m[1].toLowerCase()} "${name}" which already exists in the live database — must be ALTER/UPDATE/VERIFY, or moved to satisfied_items.`;
-        }
+      const hit = findExistingCreateCollision(p.compiled_prompt_md, opts.schemaObjects);
+      if (hit) {
+        return `Compiled prompt tells Lovable to CREATE ${hit.kind} "${hit.name}" which already exists in the live database — must be ALTER/VERIFY, or moved to satisfied_items with current-column evidence.`;
       }
     }
+  }
+  // Skeleton enforcement for code channel only ("supabase" and "human" are
+  // free-form; the code batches are what get pasted verbatim to Lovable).
+  if (batch.channel === "code") {
+    const sk = skeletonError(p.compiled_prompt_md, batch);
+    if (sk) return sk;
+  }
+  return null;
+}
+
+/**
+ * Strip identifier quoting (double-quotes, backticks) and an optional
+ * "public." schema prefix, and lowercase — so "public.audit_findings",
+ * `audit_findings`, "audit_findings", and audit_findings all normalize to
+ * the same key used by the inventory Set.
+ */
+export function normalizeSqlIdent(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^[`"](.*)[`"]$/, "$1")
+    .replace(/^public\./i, "")
+    .toLowerCase();
+}
+
+/**
+ * Detects CREATE statements against objects that already exist in the live
+ * DB, tolerant of identifier quoting, schema prefixes, IF NOT EXISTS, and
+ * the narrative phrasing "Create a Postgres RPC/table/function <name>(...)".
+ */
+export function findExistingCreateCollision(
+  text: string,
+  existing: Set<string>,
+): { kind: string; name: string } | null {
+  if (!text) return null;
+  // Canonical SQL: CREATE [OR REPLACE] TABLE|FUNCTION|POLICY|TRIGGER|INDEX [IF NOT EXISTS] [public.]name
+  const sqlRe = /\bCREATE\s+(?:OR\s+REPLACE\s+)?(TABLE|FUNCTION|POLICY|TRIGGER|INDEX|VIEW|MATERIALIZED\s+VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:public\.)?(?:"[^"]+"|`[^`]+`|[a-zA-Z_][a-zA-Z0-9_]*))/gi;
+  let m: RegExpExecArray | null;
+  while ((m = sqlRe.exec(text))) {
+    const kind = m[1].toLowerCase();
+    const name = normalizeSqlIdent(m[2]);
+    if (existing.has(name)) return { kind, name };
+  }
+  // Narrative: "Create a Postgres RPC/table/function/policy called <name>(...)".
+  const narrativeRe = /\bcreate\s+(?:a|an|the)?\s*(?:new\s+)?(?:postgres\s+|supabase\s+|database\s+|db\s+)?(rpc|table|function|policy|trigger|index|view)\s+(?:called|named|for)?\s*((?:public\.)?(?:"[^"]+"|`[^`]+`|[a-zA-Z_][a-zA-Z0-9_]*))\s*\(/gi;
+  while ((m = narrativeRe.exec(text))) {
+    const kind = m[1].toLowerCase();
+    const name = normalizeSqlIdent(m[2]);
+    if (existing.has(name)) return { kind, name };
+  }
+  return null;
+}
+
+/**
+ * Strict skeleton check for code-channel compiled prompts:
+ * - first line: `Batch {n} — <title semantically matching current title>. Numbered items only, no scope creep.`
+ * - 900–3200 chars total.
+ * - 2–4 lines under an "Acceptance" section (case-insensitive).
+ * - ends with the closing footer verbatim.
+ */
+export function skeletonError(
+  compiled: string,
+  batch: { title: string; batch_no: number; channel: string },
+): string | null {
+  const text = (compiled ?? "").replace(/\r\n/g, "\n");
+  if (text.length < 900) return `compiled_prompt_md too short (${text.length} chars, min 900).`;
+  if (text.length > 3200) return `compiled_prompt_md too long (${text.length} chars, max 3200).`;
+  const firstLine = text.split("\n", 1)[0]?.trim() ?? "";
+  const stripLead = firstLine.replace(/^[#>*\s]+/, "");
+  const headerRe = new RegExp(`^Batch\\s+${batch.batch_no}\\s*[—-]\\s+(.+?)\\.\\s*Numbered\\s+items\\s+only,\\s+no\\s+scope\\s+creep\\.$`, "i");
+  const m = stripLead.match(headerRe);
+  if (!m) {
+    return `First line must be "Batch ${batch.batch_no} — <title>. Numbered items only, no scope creep." (got: ${firstLine.slice(0, 140)})`;
+  }
+  if (!titleSemanticallyMatches(m[1], batch.title)) {
+    return `First-line title "${m[1]}" does not semantically match current batch title "${batch.title}".`;
+  }
+  // Acceptance count.
+  const acceptIdx = text.search(/^\s*(?:#+\s*)?acceptance\b[:\s]*$/im);
+  if (acceptIdx < 0) return `Missing "Acceptance" section.`;
+  const afterAccept = text.slice(acceptIdx).split(/\n/).slice(1);
+  const acceptLines: string[] = [];
+  for (const l of afterAccept) {
+    const t = l.trim();
+    if (!t) { if (acceptLines.length) break; else continue; }
+    if (/^(#+\s|Keep everything else identical\.)/i.test(t)) break;
+    acceptLines.push(t);
+  }
+  if (acceptLines.length < 2 || acceptLines.length > 4) {
+    return `Acceptance section must have 2–4 checks (found ${acceptLines.length}).`;
+  }
+  const trimmedEnd = text.trimEnd();
+  if (!/Keep everything else identical\.\s*\n\s*Typecheck when done\.$/.test(trimmedEnd)) {
+    return `compiled_prompt_md must end exactly with "Keep everything else identical.\\nTypecheck when done.".`;
   }
   return null;
 }
