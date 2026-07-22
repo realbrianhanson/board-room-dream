@@ -7,6 +7,7 @@ export type SatisfiedItem = { item: string; evidence: string };
 export type Parsed = {
   status: "ready" | "already_done" | "blocked";
   compiled_prompt_md: string;
+  compiled_verification_prompt_md?: string;
   rationale: string;
   drift_notes: string[];
   touched_paths: TouchedPath[];
@@ -16,6 +17,11 @@ export type Parsed = {
   added_prerequisites: { item: string; reason: string; evidence: string }[];
   primary_intent_summary: string;
 };
+
+// G1: lovable AND supabase are code channels; human is a console checklist.
+export function isCodeChannel(channel: string): boolean {
+  return channel === "lovable" || channel === "supabase";
+}
 
 const STOPWORDS = new Set([
   "the","a","an","and","or","of","for","to","in","on","with","by","from","at","as","is","are","be","this","that","it",
