@@ -464,7 +464,7 @@ Resolution discipline: an objection is "resolved" ONLY if you can quote the exac
 
     };
   });
-  await admin.from("run_steps").insert(rows);
+  await queueSteps(admin, run, rows);
 }
 
 
