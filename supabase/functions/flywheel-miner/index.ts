@@ -98,7 +98,7 @@ Produce your JSON now.`;
     const res = await callSeat(userId, "chair", [
       { role: "system", content: system },
       { role: "user", content: user },
-    ], { json: true, temperature: 0.3, reasoningEffort: "high" });
+    ], { json: true, temperature: 0.3, reasoningEffort: "high", maxTokens: 8000 });
 
     let parsed: any = null;
     try { parsed = JSON.parse(res.content); } catch { /* below */ }
