@@ -26,9 +26,38 @@ import {
 // queue function in the run's lifetime pays for a single DB round trip.
 async function ensureAuthority(admin: any, run: any): Promise<OwnerAuthority> {
   if (!(run as any).__authority__) {
+    // For change_request runs the CR is not yet 'approved', so the loader's
+    // approved-CR pass will not pick it up. Inject the exact submitted CR
+    // description scoped to THIS run under the SAME stable provenance
+    // identity the finalizer and the post-approval compiler will use:
+    // `approved_change_request:<crId>`. Never pull arbitrary/pending CRs
+    // from other runs.
+    const extraFounderNotes: Array<{ source: string; text: string | null | undefined }> = [];
+    if (run?.kind === "change_request") {
+      const crId = run?.consensus?.change_request_id;
+      if (crId) {
+        try {
+          const { data: crRow } = await admin
+            .from("change_requests")
+            .select("description")
+            .eq("id", crId)
+            .eq("project_id", run.project_id)
+            .eq("user_id", run.user_id)
+            .maybeSingle();
+          const desc = String(crRow?.description ?? "").trim();
+          if (desc) {
+            extraFounderNotes.push({
+              source: `approved_change_request:${crId}`,
+              text: desc,
+            });
+          }
+        } catch { /* empty CR description simply blocks any high-impact expansion */ }
+      }
+    }
     (run as any).__authority__ = await loadOwnerAuthority(admin, {
       projectId: run.project_id,
       founderNotes: run.founder_notes ?? null,
+      extraFounderNotes,
     });
   }
   return (run as any).__authority__;
