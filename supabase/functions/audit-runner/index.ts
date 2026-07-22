@@ -341,7 +341,7 @@ async function priorHeadSha(admin: any, projectId: string): Promise<string | nul
 async function beginAudit(params: {
   admin: any;
   userId: string;
-  project: { id: string; github_repo: string | null };
+  project: { id: string; github_repo: string | null; is_import: boolean };
   batchId: string | null;
   kind: "batch" | "final_az";
   loopNo: number;
@@ -371,18 +371,57 @@ async function beginAudit(params: {
     }
   }
 
-  // For imports without a locked plan, substitute the intake description + goals.
-  const plan = (await loadLockedPlan(admin, project.id)) ?? (await loadImportContract(admin, project.id));
+  // Contract resolution. Batch audits use the current locked plan + design
+  // (unchanged). Final audits resolve mode via resolveFinalAuditContract:
+  // imports with any non-passed batch (or no batches) run against the current
+  // milestone contract (intake + only implemented batches), not the future
+  // blueprint — this fixes false missing-feature findings on imports.
+  let finalContract: ResolvedContract | null = null;
+  let batchPlan: { content_md?: string | null; prd_md?: string | null } | null = null;
+  let batchDesignBrief: string | null = null;
+  let auditContractMode: "import_current_milestone" | "full_blueprint" | null = null;
+  let includedBatchIds: string[] = [];
 
-  const { data: design } = await admin
-    .from("plan_versions")
-    .select("content_md")
-    .eq("project_id", project.id)
-    .eq("kind", "design")
-    .order("version", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const designBrief: string | null = design?.content_md ?? null;
+  if (isFinal) {
+    const [lockedPlan, importIntake, designRow, batchRows] = await Promise.all([
+      loadLockedPlan(admin, project.id),
+      loadImportContract(admin, project.id),
+      admin
+        .from("plan_versions")
+        .select("content_md")
+        .eq("project_id", project.id)
+        .eq("kind", "design")
+        .order("version", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+        .then((r: any) => r?.data ?? null),
+      admin
+        .from("batches")
+        .select("id, batch_no, title, channel, status, prompt_md, compiled_prompt_md")
+        .eq("project_id", project.id)
+        .then((r: any) => (r?.data ?? []) as ContractBatch[]),
+    ]);
+    finalContract = resolveFinalAuditContract({
+      isImport: project.is_import,
+      batches: batchRows,
+      plan: lockedPlan,
+      designBrief: designRow?.content_md ?? null,
+      importIntake,
+    });
+    auditContractMode = finalContract.mode;
+    includedBatchIds = finalContract.includedBatchIds;
+  } else {
+    batchPlan = (await loadLockedPlan(admin, project.id)) ?? (await loadImportContract(admin, project.id));
+    const { data: design } = await admin
+      .from("plan_versions")
+      .select("content_md")
+      .eq("project_id", project.id)
+      .eq("kind", "design")
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    batchDesignBrief = design?.content_md ?? null;
+  }
 
   let batchPrompt: string | null = null;
   let batchOutcome: string | null = null;
@@ -404,9 +443,6 @@ async function beginAudit(params: {
     if (!token) return { error: "GitHub not connected" as const };
     baseSha = isFinal ? null : await priorHeadSha(admin, project.id);
     try {
-      // The A-Z audit reads the whole app, map-reduce style: up to
-      // MAX_CHUNKS × CHUNK_BYTES of code split across parallel seat steps.
-      // Per-batch audits stay diff-based and single-chunk.
       const res = await assembleFromGithub(
         token,
         project.github_repo,
@@ -446,6 +482,16 @@ async function beginAudit(params: {
     .single();
   if (auErr || !audit) return { error: auErr?.message ?? "Failed to create audit" };
 
+  const consensus: Record<string, unknown> = {
+    audit_id: audit.id,
+    audit_kind: kind,
+    files_analyzed: filesAnalyzed,
+  };
+  if (isFinal && auditContractMode) {
+    consensus.audit_contract_mode = auditContractMode;
+    consensus.included_batch_ids = includedBatchIds;
+  }
+
   const { data: run, error: rErr } = await admin
     .from("boardroom_runs")
     .insert({
@@ -456,7 +502,7 @@ async function beginAudit(params: {
       round_no: 1,
       loop_no: 0,
       budget_usd: budget,
-      consensus: { audit_id: audit.id, audit_kind: kind, files_analyzed: filesAnalyzed },
+      consensus,
     })
     .select("*")
     .single();
@@ -470,9 +516,25 @@ async function beginAudit(params: {
   if (batchId) await admin.from("batches").update({ status: "auditing" }).eq("id", batchId);
   if (isFinal) await admin.from("projects").update({ status: "auditing" }).eq("id", project.id);
 
-  await insertAuditSteps(admin, run, chunks, batchPrompt, plan, designBrief, isFinal, batchOutcome, fileTree);
+  await insertAuditSteps(
+    admin,
+    run,
+    chunks,
+    batchPrompt,
+    finalContract,
+    batchPlan,
+    batchDesignBrief,
+    isFinal,
+    batchOutcome,
+    fileTree,
+  );
   fireOrchestrator();
-  return { audit_id: audit.id, run_id: run.id };
+  return {
+    audit_id: audit.id,
+    run_id: run.id,
+    audit_contract_mode: auditContractMode ?? undefined,
+    included_batch_ids: isFinal ? includedBatchIds : undefined,
+  };
 }
 
 Deno.serve(async (req) => {
