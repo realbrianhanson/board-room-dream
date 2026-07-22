@@ -1113,7 +1113,7 @@ function BatchCard({
 
           <div className="mb-2 flex items-center justify-between gap-2">
             <p className={promptLabelClass}>{promptLabel}</p>
-            {compileReady && (
+            {isCode && compileReady && (
               <button
                 onClick={() => setShowOriginal((v) => !v)}
                 className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground underline underline-offset-4 hover:text-foreground"
@@ -1122,9 +1122,23 @@ function BatchCard({
               </button>
             )}
           </div>
-          <pre className="max-h-[420px] overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-[12px] leading-relaxed text-foreground/90 whitespace-pre-wrap">
+          {isCode && !compileReady ? (
+            <div className="mb-3 rounded-lg border border-dashed border-[hsl(8_60%_55%/0.4)] bg-[hsl(8_60%_25%/0.15)] p-3">
+              <details className="group">
+                <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground">
+                  View original roadmap (reference only)
+                </summary>
+                <pre className="mt-3 max-h-[420px] overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-[12px] leading-relaxed text-foreground/90 whitespace-pre-wrap">
+{batch.prompt_md}
+                </pre>
+              </details>
+            </div>
+          ) : (
+            <pre className="max-h-[420px] overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-[12px] leading-relaxed text-foreground/90 whitespace-pre-wrap">
 {bodyText}
-          </pre>
+            </pre>
+          )}
+
 
           {isOwner && (
             <div className="mt-4 flex flex-wrap gap-2">
@@ -1188,13 +1202,20 @@ function BatchCard({
               ) : (
                 <>
                   {batch.status === "pending" && (
-                    <button
-                      onClick={() => onAdvance("sent")}
-                      className="inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground transition-colors hover:border-primary/40"
-                    >
-                      Mark sent
-                    </button>
+                    isCode && !compileReady ? (
+                      <span className="inline-flex items-center gap-2 rounded-md border border-dashed border-border bg-surface-2 px-4 py-2 text-xs text-muted-foreground">
+                        Compile this batch before marking it sent.
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => onAdvance("sent")}
+                        className="inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground transition-colors hover:border-primary/40"
+                      >
+                        Mark sent
+                      </button>
+                    )
                   )}
+
                   {batch.status === "sent" && (
                     <button
                       onClick={() => onAdvance("built")}
