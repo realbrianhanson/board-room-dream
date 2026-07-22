@@ -84,12 +84,12 @@ function reassemble(
   }
 }
 
-Deno.test("shape constants: 64 KiB × 20 rendered budget UNCHANGED; SOURCE ceiling 1.5 MiB; fragment header reserve 22", () => {
+Deno.test("shape constants: 64 KiB × 25 rendered budget (R4); SOURCE ceiling 1.5 MiB; fragment header reserve 22", () => {
   assertEquals(CHUNK_BYTES, 64 * 1024);
-  assertEquals(MAX_CHUNKS, 20);
+  assertEquals(MAX_CHUNKS, 25);
   assertEquals(MAX_TOTAL_BYTES, 1_572_864);
   // Fragment marker reserve is new in AUDIT-JSON-FRAGMENT-R2. Worst-case
-  // " (fragment 20 of 20)" is 20 bytes; 22 gives a small safety margin.
+  // " (fragment 25 of 25)" is 20 bytes; 22 gives a small safety margin.
   assertEquals(AUDIT_FRAGMENT_HEADER_RESERVE, 22);
   if (MAX_TOTAL_BYTES === CHUNK_BYTES * MAX_CHUNKS) {
     throw new Error("MAX_TOTAL_BYTES must be decoupled from CHUNK_BYTES * MAX_CHUNKS");
