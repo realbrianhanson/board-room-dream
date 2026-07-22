@@ -356,10 +356,10 @@ export function buildValidationRetryRequest(input: ValidationRetryInput): Valida
   // truncated near-cap output was letting the model re-emit and re-truncate
   // in the same shape. The correction copy alone (see correctionForStep)
   // asks for a materially smaller schema, so no echo is needed.
-  if (isAuditMapStep(stepKey)) {
+  if (isAuditNoEchoStep(stepKey)) {
     const noEchoText = truncated
-      ? `${correctionText}\n\n(Retry note: your prior response was truncated at ${assistantContent.length} chars — do NOT reconstruct it verbatim. Emit only complete finding objects and close the schema properly.)`
-      : `${correctionText}\n\n(Retry note: your prior response failed validation at ${assistantContent.length} chars — do NOT reconstruct it verbatim. Emit only complete finding objects and close the schema properly.)`;
+      ? `${correctionText}\n\n(Retry note: your prior response was truncated at ${assistantContent.length} chars — do NOT reconstruct it verbatim. Emit only complete objects and close the schema properly.)`
+      : `${correctionText}\n\n(Retry note: your prior response failed validation at ${assistantContent.length} chars — do NOT reconstruct it verbatim. Emit only complete objects and close the schema properly.)`;
     const req = {
       ...baseRequest,
       messages: [...baseMessages, { role: "user", content: noEchoText }],
