@@ -503,7 +503,7 @@ function RunwayPage() {
           <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(38_65%_70%)]">The Chair, ready to sequence</p>
           <h2 className="mt-3 font-display text-3xl text-foreground">Turn the locked plan into a build sequence.</h2>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            The Chair drafts 6–14 numbered batches you paste into Lovable, one at a time. Each batch stays small enough to ship cleanly.
+            The Chair drafts 6–8 (usually 6) numbered batches you paste into Lovable, one at a time. Each batch stays small enough to ship cleanly.
           </p>
 
           {!hasDesign && (
