@@ -90,7 +90,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-22.batch-output-integrity.e1";
+const BUILD_VERSION = "2026-07-22.structured-correction-routing.e1b";
 
 // Terminal-fail a run and, when it drives an audit, fail the audit row in
 // lockstep so audits/runs never drift. Budget pauses and recoverable requeues
