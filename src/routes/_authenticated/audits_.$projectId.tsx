@@ -180,14 +180,31 @@ function AuditCenterPage() {
                   <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${SEV_STYLE[f.severity]}`}>
                     {f.severity}
                   </span>
+                  <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${
+                    f.confidence === "high" ? "border-[hsl(160_45%_48%/0.4)] text-[hsl(160_45%_72%)] bg-[hsl(160_45%_28%/0.15)]"
+                    : f.confidence === "low" ? "border-border text-muted-foreground bg-surface-2"
+                    : "border-primary/35 text-[hsl(38_65%_75%)] bg-primary/10"
+                  }`}>
+                    {f.confidence} confidence
+                  </span>
                   {f.seat && <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">{f.seat}</span>}
-                  {f.file_path && <span className="font-mono text-[11px] text-muted-foreground">{f.file_path}</span>}
+                  {f.file_path && (
+                    <span className="font-mono text-[11px] text-muted-foreground">
+                      {f.file_path}
+                      {f.line_start ? `:${f.line_start}${f.line_end && f.line_end !== f.line_start ? `-${f.line_end}` : ""}` : ""}
+                    </span>
+                  )}
                   {f.status === "fix_drafted" && (
                     <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[hsl(38_65%_72%)]">Fix batch drafted</span>
                   )}
                 </div>
                 <p className="mt-2 text-sm text-foreground">{f.title}</p>
                 {f.description && <p className="mt-1 text-xs text-muted-foreground">{f.description}</p>}
+                {f.evidence && (
+                  <p className="mt-2 border-l border-border pl-3 font-mono text-[11px] text-muted-foreground/90">
+                    Evidence — {f.evidence}
+                  </p>
+                )}
                 {(f.severity === "P2" || f.severity === "P3") && f.status === "open" && (
                   <button
                     onClick={() => dismiss(f)}
