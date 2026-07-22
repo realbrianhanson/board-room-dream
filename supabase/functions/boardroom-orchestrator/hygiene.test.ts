@@ -208,3 +208,66 @@ Deno.test("requeueLegacyNullStartOrphans: routes each row through parent-aware R
   assertEquals(state.steps.find((s) => s.id === "s_not_orphan")!.status, "running");
   assertEquals(summary.processed, state.rpcCalls.length);
 });
+
+// AUDIT-FINALIZATION-R2: audit-runner sets projects.status='auditing' when a
+// final audit starts. Without reconciliation in failRun the project stays
+// stuck at 'auditing'. These tests cover the four documented cases plus the
+// "do not clobber an advanced status" guard.
+
+Deno.test("failRun (audit): imported + no safe plan -> reconciles project to 'imported'", async () => {
+  const state = {
+    runs: [{ id: "r1", status: "running", error: null, kind: "audit", project_id: "p1", consensus: { audit_id: "a1" } }],
+    steps: [],
+    audits: [{ id: "a1", status: "running", completed_at: null }],
+    projects: [{ id: "p1", status: "auditing", is_import: true }],
+    plans: [],
+    rpcCalls: [],
+  };
+  const admin = makeFakeAdmin(state);
+  await failRun(admin, state.runs[0], "some_audit_error");
+  assertEquals(state.projects![0].status, "imported");
+});
+
+Deno.test("failRun (audit): build-safe plan present -> reconciles project to 'locked'", async () => {
+  const state = {
+    runs: [{ id: "r1", status: "running", error: null, kind: "audit", project_id: "p1", consensus: { audit_id: "a1" } }],
+    steps: [],
+    audits: [{ id: "a1", status: "running", completed_at: null }],
+    projects: [{ id: "p1", status: "auditing", is_import: true }],
+    plans: [{ id: "pl1", project_id: "p1", kind: "plan", is_build_safe: true }],
+    rpcCalls: [],
+  };
+  const admin = makeFakeAdmin(state);
+  await failRun(admin, state.runs[0], "some_audit_error");
+  assertEquals(state.projects![0].status, "locked");
+});
+
+Deno.test("failRun (audit): greenfield + no plan -> reconciles project to 'validated'", async () => {
+  const state = {
+    runs: [{ id: "r1", status: "running", error: null, kind: "audit", project_id: "p1", consensus: { audit_id: "a1" } }],
+    steps: [],
+    audits: [{ id: "a1", status: "running", completed_at: null }],
+    projects: [{ id: "p1", status: "auditing", is_import: false }],
+    plans: [],
+    rpcCalls: [],
+  };
+  const admin = makeFakeAdmin(state);
+  await failRun(admin, state.runs[0], "some_audit_error");
+  assertEquals(state.projects![0].status, "validated");
+});
+
+Deno.test("failRun (audit): does NOT clobber a project that already advanced past 'auditing'", async () => {
+  const state = {
+    runs: [{ id: "r1", status: "running", error: null, kind: "audit", project_id: "p1", consensus: { audit_id: "a1" } }],
+    steps: [],
+    audits: [{ id: "a1", status: "running", completed_at: null }],
+    // A concurrent path already moved this project to 'locked'; audit
+    // reconciliation must leave it alone.
+    projects: [{ id: "p1", status: "locked", is_import: true }],
+    plans: [],
+    rpcCalls: [],
+  };
+  const admin = makeFakeAdmin(state);
+  await failRun(admin, state.runs[0], "some_audit_error");
+  assertEquals(state.projects![0].status, "locked", "advanced status must survive audit reconciliation");
+});
