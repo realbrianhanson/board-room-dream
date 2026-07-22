@@ -391,9 +391,8 @@ Deno.test("current CR: legitimate high-impact directive with exact approved_chan
       "## Overview\nStripe checkout at $49. " +
       `[OWNER-AUTHORIZED: source="approved_change_request:cr-1" quote="Add Stripe checkout at $49 per project"]`,
     amended_features: [{
-      name: "Stripe checkout",
-      description:
-        `$49 per project. [OWNER-AUTHORIZED: source="approved_change_request:cr-1" quote="Add Stripe checkout at $49 per project"]`,
+      name: "Checkout flow",
+      description: "wire the hosted checkout link end-to-end",
       priority: "mvp",
     }],
   };
