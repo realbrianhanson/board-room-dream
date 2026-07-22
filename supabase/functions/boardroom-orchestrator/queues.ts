@@ -1030,7 +1030,7 @@ export async function queueBatchesRevise(admin: any, run: any, draftJson: any, r
   const manual = await loadFieldManual(admin);
   const plan = await loadLockedPlan(admin, run.project_id);
   const project = await loadProjectMeta(admin, run.project_id);
-  const repoContract = await loadLiveRepoContract(admin, project);
+  const repoContract = await loadCompactBatchRepoContract(admin, project);
   const { data: design } = await admin
     .from("plan_versions")
     .select("content_md")
