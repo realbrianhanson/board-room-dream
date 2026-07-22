@@ -43,7 +43,12 @@ import {
   queueRound4,
   RepoContractUnavailable,
 } from "./queues.ts";
-import { loadOwnerAuthority, preLockAuthorityError } from "../_shared/owner-authority.ts";
+import {
+  finalizeChangeRequestAuthorityError,
+  finalizePlanAuthorityError,
+  loadOwnerAuthority,
+  preLockAuthorityError,
+} from "../_shared/owner-authority.ts";
 
 
 
