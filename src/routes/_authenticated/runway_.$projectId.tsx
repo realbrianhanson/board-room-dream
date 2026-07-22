@@ -1111,65 +1111,46 @@ function BatchCard({
         <div className="border-t border-border/60 p-5">
           <CompileBanner batch={batch} />
 
-          {(() => {
-            const isCode = batch.channel !== "human";
-            const compileReady = batch.compile_meta?.status === "ready" && !!batch.compiled_prompt_md;
-            const compileBlocked = batch.compile_meta?.status === "blocked";
-            const compileAlreadyDone = batch.compile_meta?.status === "already_done";
-            const showCopy =
-              !isCode || compileReady; // human: always; code: only when compiled ready
-            const promptLabel = !isCode
-              ? "Checklist"
-              : compileReady
-                ? "Compiled prompt"
-                : "Uncompiled roadmap — not safe to paste";
-            const promptLabelClass = isCode && !compileReady
-              ? "font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(8_60%_75%)]"
-              : "font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground";
-            const bodyText = compileReady && !showOriginal
-              ? (batch.compiled_prompt_md ?? "")
-              : batch.prompt_md;
-            return (
-              <>
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <p className={promptLabelClass}>{promptLabel}</p>
-                  {compileReady && (
-                    <button
-                      onClick={() => setShowOriginal((v) => !v)}
-                      className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground underline underline-offset-4 hover:text-foreground"
-                    >
-                      {showOriginal ? "Show compiled" : "Show original plan"}
-                    </button>
-                  )}
-                </div>
-                <pre className="max-h-[420px] overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-[12px] leading-relaxed text-foreground/90 whitespace-pre-wrap">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className={promptLabelClass}>{promptLabel}</p>
+            {compileReady && (
+              <button
+                onClick={() => setShowOriginal((v) => !v)}
+                className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground underline underline-offset-4 hover:text-foreground"
+              >
+                {showOriginal ? "Show compiled" : "Show original plan"}
+              </button>
+            )}
+          </div>
+          <pre className="max-h-[420px] overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-[12px] leading-relaxed text-foreground/90 whitespace-pre-wrap">
 {bodyText}
-                </pre>
+          </pre>
 
-                {isOwner && (
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {showCopy && (
-                      <button
-                        onClick={onCopyPrompt}
-                        className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
-                      >
-                        <Copy className="h-4 w-4" /> Copy prompt
-                      </button>
-                    )}
-                    {isCode && !compileReady && !compileBlocked && !compileAlreadyDone && (
-                      <span className="inline-flex items-center gap-2 rounded-md border border-dashed border-[hsl(8_60%_55%/0.4)] bg-[hsl(8_60%_25%/0.15)] px-3 py-2 font-mono text-[10px] uppercase tracking-[0.22em] text-[hsl(8_60%_75%)]">
-                        Compile first — the roadmap prompt references code that may not exist
-                      </span>
-                    )}
-                    {isCode && (
-                      <button
-                        onClick={onCompile}
-                        title="Rewrite this prompt against the code Lovable has actually produced so far"
-                        className="inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-4 py-2 text-sm text-[hsl(38_65%_75%)] transition-colors hover:border-primary/60"
-                      >
-                        <Wand2 className="h-4 w-4" /> {batch.compiled_prompt_md ? "Recompile" : "Compile against live code"}
-                      </button>
-                    )}
+          {isOwner && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {showCopy && (
+                <button
+                  onClick={onCopyPrompt}
+                  className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
+                >
+                  <Copy className="h-4 w-4" /> Copy prompt
+                </button>
+              )}
+              {isCode && !compileReady && !compileBlocked && !compileAlreadyDone && (
+                <span className="inline-flex items-center gap-2 rounded-md border border-dashed border-[hsl(8_60%_55%/0.4)] bg-[hsl(8_60%_25%/0.15)] px-3 py-2 font-mono text-[10px] uppercase tracking-[0.22em] text-[hsl(8_60%_75%)]">
+                  Compile first — the roadmap prompt references code that may not exist
+                </span>
+              )}
+              {isCode && (
+                <button
+                  onClick={onCompile}
+                  title="Rewrite this prompt against the code Lovable has actually produced so far"
+                  className="inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-4 py-2 text-sm text-[hsl(38_65%_75%)] transition-colors hover:border-primary/60"
+                >
+                  <Wand2 className="h-4 w-4" /> {batch.compiled_prompt_md ? "Recompile" : "Compile against live code"}
+                </button>
+              )}
+
               {lovableUrl ? (
                 <a
                   href={lovableUrl}
