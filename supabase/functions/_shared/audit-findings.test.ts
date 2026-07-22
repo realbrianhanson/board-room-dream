@@ -113,6 +113,37 @@ Deno.test("publishable Supabase key is not treated as secret leak", () => {
   assertStringIncludes(downgrades[0].reason, "evidence");
 });
 
+// AUDIT-TRUTHFULNESS: serious findings without the QUOTE:/WHY: marker downgrade.
+Deno.test("downgradeUnsupported downgrades P0/P1 evidence missing QUOTE/WHY markers", () => {
+  const semantic = make({
+    severity: "P0",
+    evidence: "Anon can read every row of public.posts because the SELECT policy is unconditional.",
+  });
+  const { findings, downgrades } = downgradeUnsupported([semantic]);
+  assertEquals(findings[0].severity, "P2");
+  assertEquals(downgrades.length, 1);
+  assertStringIncludes(downgrades[0].reason, "QUOTE");
+});
+
+Deno.test("downgradeUnsupported keeps P0/P1 that include a verbatim QUOTE/WHY marker", () => {
+  const supported = make({
+    severity: "P0",
+    evidence: "QUOTE: CREATE POLICY \"read\" ON posts FOR SELECT USING (true) | WHY: unconditional USING clause exposes every row.",
+  });
+  const { findings, downgrades } = downgradeUnsupported([supported]);
+  assertEquals(downgrades.length, 0);
+  assertEquals(findings[0].severity, "P0");
+});
+
+Deno.test("QUOTE marker rule only applies to P0/P1 — P2/P3 unaffected", () => {
+  const p2 = make({ severity: "P2", evidence: "plain-language reason, no quote marker" });
+  const { findings, downgrades } = downgradeUnsupported([p2]);
+  assertEquals(downgrades.length, 0);
+  assertEquals(findings[0].severity, "P2");
+});
+
+
+
 Deno.test("validateSeatReport / validateMerged enforce caps and line invariants", () => {
   const good = [make()];
   assertEquals(validateSeatReport(good), null);
