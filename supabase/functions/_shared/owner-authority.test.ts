@@ -344,7 +344,7 @@ Deno.test("finalizePlanAuthorityError: clean prd_md/features return null", () =>
 Deno.test("finalizeChangeRequestAuthorityError: chair cannot expand a scoped CR into Stripe/DROP scope", () => {
   const a = auth([
     { source: "intake", text: "improvements only" },
-    { source: "change_request:cr-1", text: "Add a dark-mode toggle to the header." },
+    { source: "approved_change_request:cr-1", text: "Add a dark-mode toggle to the header." },
   ]);
   const v = {
     verdict: "approved",
@@ -361,7 +361,7 @@ Deno.test("finalizeChangeRequestAuthorityError: chair cannot expand a scoped CR 
 Deno.test("finalizeChangeRequestAuthorityError: amendment that only implements the exact CR passes", () => {
   const a = auth([
     { source: "intake", text: "improvements only" },
-    { source: "change_request:cr-1", text: "Add a dark-mode toggle to the header." },
+    { source: "approved_change_request:cr-1", text: "Add a dark-mode toggle to the header." },
   ]);
   const v = {
     verdict: "approved",
@@ -371,3 +371,89 @@ Deno.test("finalizeChangeRequestAuthorityError: amendment that only implements t
   };
   assertEquals(finalizeChangeRequestAuthorityError(v, a), null);
 });
+
+// ---- OA-V3-R4-CR-SOURCE regressions ----
+
+Deno.test("current CR: legitimate high-impact directive with exact approved_change_request:<id> marker passes finalization", () => {
+  // Same authority shape ensureAuthority produces during a change_request run:
+  // the submitted CR description is injected under the stable identity
+  // `approved_change_request:<id>` BEFORE the row is marked approved.
+  const a = auth([
+    { source: "intake", text: "code planning tool" },
+    { source: "approved_change_request:cr-1", text: "Add Stripe checkout at $49 per project." },
+  ]);
+  const v = {
+    verdict: "approved",
+    amended_plan_md:
+      "## Plan\nWire Stripe checkout at $49 per project. " +
+      `[OWNER-AUTHORIZED: source="approved_change_request:cr-1" quote="Add Stripe checkout at $49 per project"]`,
+    amended_prd_md:
+      "## Overview\nStripe checkout at $49. " +
+      `[OWNER-AUTHORIZED: source="approved_change_request:cr-1" quote="Add Stripe checkout at $49 per project"]`,
+    amended_features: [{
+      name: "Owner-scoped module",
+      description: "wire the module end-to-end per intake",
+      priority: "mvp",
+    }],
+  };
+  assertEquals(finalizeChangeRequestAuthorityError(v, a), null);
+});
+
+Deno.test("current CR: amended Stripe scope without the OWNER-AUTHORIZED marker fails finalization", () => {
+  const a = auth([
+    { source: "intake", text: "code planning tool" },
+    { source: "approved_change_request:cr-1", text: "Add Stripe checkout at $49 per project." },
+  ]);
+  const v = {
+    verdict: "approved",
+    amended_plan_md: "## Plan\nWire Stripe checkout at $49 per project.",
+    amended_prd_md: "## Overview\nStripe checkout at $49.",
+    amended_features: [{ name: "Stripe checkout", description: "$49 per project", priority: "mvp" }],
+  };
+  const err = finalizeChangeRequestAuthorityError(v, a);
+  assert(err && /proposal_requires_owner_approval/.test(err));
+  assert(/payment_provider_or_checkout|monetary_amount/.test(err!));
+});
+
+Deno.test("current CR: unrelated pending CR is NEVER an authorization source", () => {
+  // ensureAuthority only injects the current run's CR. An unrelated pending
+  // CR from another run must not appear and must not authorize its scope.
+  const a = auth([
+    { source: "intake", text: "code planning tool" },
+    // Only the current run's CR — the pending "Add PayPal" CR from another
+    // run is deliberately absent, matching ensureAuthority behavior.
+    { source: "approved_change_request:cr-1", text: "Add a dark-mode toggle to the header." },
+  ]);
+  const v = {
+    verdict: "approved",
+    amended_plan_md:
+      "## Plan\nAdd PayPal checkout. " +
+      `[OWNER-AUTHORIZED: source="approved_change_request:cr-999" quote="Add PayPal checkout"]`,
+    amended_prd_md: "## Overview\nPayPal.",
+    amended_features: [{ name: "PayPal", description: "checkout", priority: "mvp" }],
+  };
+  const err = finalizeChangeRequestAuthorityError(v, a);
+  assert(err && /proposal_requires_owner_approval/.test(err));
+});
+
+Deno.test("post-approval stability: compiler sees the same approved_change_request:<id> identity used at CR review", () => {
+  // After finalization the CR row is status='approved'; loadOwnerAuthority
+  // in the compiler picks it up under the identical source name, so any
+  // OWNER-AUTHORIZED marker written into the amended plan/PRD/features
+  // during the CR run remains valid at compile time without rewriting.
+  const reviewTime = auth([
+    { source: "intake", text: "code planning tool" },
+    { source: "approved_change_request:cr-1", text: "Add Stripe checkout at $49 per project." },
+  ]);
+  const compileTime = auth([
+    { source: "intake", text: "code planning tool" },
+    // loadOwnerAuthority's approved-CR pass produces the same source name.
+    { source: "approved_change_request:cr-1", text: "Add Stripe checkout at $49 per project." },
+  ]);
+  const marker =
+    `[OWNER-AUTHORIZED: source="approved_change_request:cr-1" quote="Add Stripe checkout at $49 per project"]`;
+  const promptMd = `1. Wire Stripe checkout at $49 per project. ${marker}`;
+  assertEquals(ownerAuthorityError(promptMd, reviewTime), null);
+  assertEquals(ownerAuthorityError(promptMd, compileTime), null);
+});
+

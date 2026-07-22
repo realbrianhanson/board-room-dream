@@ -98,7 +98,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-27.owner-authority-final.l1";
+const BUILD_VERSION = "2026-07-27.owner-authority-final.l2";
 
 import {
   failRun,
@@ -736,7 +736,7 @@ async function finalizeChangeRequest(admin: any, run: any, steps: any[]) {
         projectId: run.project_id,
         founderNotes: run.founder_notes ?? null,
         extraFounderNotes: crDescription
-          ? [{ source: `change_request:${crId}`, text: crDescription }]
+          ? [{ source: `approved_change_request:${crId}`, text: crDescription }]
           : [],
       });
       const preErr = finalizeChangeRequestAuthorityError(v, authority);
