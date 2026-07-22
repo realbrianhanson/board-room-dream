@@ -294,47 +294,101 @@ async function callOpenRouter(
   apiKey: string,
   body: any,
 ): Promise<{ content: string; finishReason: string | undefined; usage: any; raw: any }> {
+  // BUILD: 2026-07-22.streamed-body-timeout.1 — timer stays live through the
+  // ENTIRE response lifecycle (fetch + non-OK body read + r.json body read),
+  // and is cleared exactly once in the outer finally. The prior code cleared
+  // the timer after headers arrived, so a stalled body read could complete
+  // untimed and record cost against a step the orchestrator had already
+  // failed on hard-timeout (see run 2915de39 — $1.46687 leak).
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), OPENROUTER_TIMEOUT_MS);
-  let r: Response;
+  const model = String(body?.model ?? "unknown");
+  const throwTimeout = (): never => {
+    throw new ProxyTimeoutError(model, OPENROUTER_TIMEOUT_MS);
+  };
   try {
-    r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://boardroom.lovable.app",
-        "X-Title": "BOARDROOM",
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-  } catch (e) {
-    // A hung model that never responds gets aborted here — throw a distinct
-    // ProxyTimeoutError so callSeat's caller (the orchestrator) can requeue
-    // the step with force_fallback in a fresh invocation. NEVER start a
-    // fallback call inside this same invocation; the platform will kill it.
-    if ((e as Error)?.name === "AbortError") {
-      throw new ProxyTimeoutError(String(body?.model ?? "unknown"), OPENROUTER_TIMEOUT_MS);
+    let r: Response;
+    try {
+      r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://boardroom.lovable.app",
+          "X-Title": "BOARDROOM",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (e) {
+      if (controller.signal.aborted || (e as Error)?.name === "AbortError") throwTimeout();
+      // True pre-response network failure — safe to quick-retry once.
+      (e as any).isPreResponse = true;
+      throw e;
     }
-    throw e;
+    if (!r.ok) {
+      let text = "";
+      try {
+        text = await r.text();
+      } catch (e) {
+        if (controller.signal.aborted || (e as Error)?.name === "AbortError") throwTimeout();
+        throw e;
+      }
+      const err: any = new Error(`OpenRouter ${r.status}: ${text}`);
+      err.status = r.status;
+      err.isPreResponse = false;
+      throw err;
+    }
+    let json: any;
+    try {
+      json = await r.json();
+    } catch (e) {
+      // Headers arrived but the body never fully streamed in before the
+      // clamped timeout — classify as timeout so callSeat throws
+      // ProxyTimeoutError and recordCall NEVER runs.
+      if (controller.signal.aborted || (e as Error)?.name === "AbortError") throwTimeout();
+      throw e;
+    }
+    const choice = json?.choices?.[0];
+    return {
+      content: choice?.message?.content ?? "",
+      finishReason: choice?.finish_reason,
+      usage: json?.usage ?? {},
+      raw: json,
+    };
   } finally {
     clearTimeout(timer);
   }
-  if (!r.ok) {
-    const text = await r.text();
-    const err = new Error(`OpenRouter ${r.status}: ${text}`);
-    (err as any).status = r.status;
-    throw err;
-  }
-  const json = await r.json();
-  const choice = json?.choices?.[0];
-  return {
-    content: choice?.message?.content ?? "",
-    finishReason: choice?.finish_reason,
-    usage: json?.usage ?? {},
-    raw: json,
-  };
+}
+
+// Pure helpers used by executeStep and by the deterministic checks below.
+export function shouldQuickRetry(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as any;
+  if (e.isTimeout || e.isHardTimeout) return false;
+  if (e.isPreResponse === true) return true;
+  const s = Number(e.status);
+  if (s === 429) return true;
+  if (s >= 500 && s <= 599) return true;
+  return false;
+}
+
+// Deterministic in-module checks — run under `deno check` / manual invoke.
+if ((globalThis as any).__RUN_PROXY_CHECKS__) {
+  const preResp: any = new Error("socket hangup"); preResp.isPreResponse = true;
+  const s429: any = new Error("rate"); s429.status = 429; s429.isPreResponse = false;
+  const s503: any = new Error("bad gw"); s503.status = 503; s503.isPreResponse = false;
+  const s400: any = new Error("bad req"); s400.status = 400; s400.isPreResponse = false;
+  const timeout: any = new ProxyTimeoutError("x", 1000);
+  const asserts: [string, boolean][] = [
+    ["pre-response retries", shouldQuickRetry(preResp) === true],
+    ["429 retries", shouldQuickRetry(s429) === true],
+    ["503 retries", shouldQuickRetry(s503) === true],
+    ["400 does not retry", shouldQuickRetry(s400) === false],
+    ["timeout does not retry", shouldQuickRetry(timeout) === false],
+  ];
+  for (const [name, ok] of asserts) if (!ok) throw new Error(`proxy check failed: ${name}`);
+  console.log("[proxy-checks] all pass");
 }
 
 
