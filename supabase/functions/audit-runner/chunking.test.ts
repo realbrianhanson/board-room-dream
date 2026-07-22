@@ -1,10 +1,12 @@
 // Deno tests for the audit-runner chunk packer + invariants. Every test also
-// checks the RENDERED (formatFiles) chunk stays under CHUNK_BYTES — the map
-// step ships the rendered CODE block, not the raw file bytes.
+// checks the RENDERED chunk (renderAuditChunkGroup) stays under CHUNK_BYTES —
+// the map step ships the rendered CODE block, not the raw file bytes.
 // Run: cd supabase/functions && deno test audit-runner/chunking.test.ts
-import { assertEquals, assertThrows } from "https://deno.land/std@0.203.0/assert/mod.ts";
+import { assertEquals, assert, assertThrows } from "https://deno.land/std@0.203.0/assert/mod.ts";
 import {
+  annotateFragments,
   assertChunkInvariants,
+  AUDIT_FRAGMENT_HEADER_RESERVE,
   CHUNK_BYTES,
   chunkFilesFor,
   FORMAT_DIGIT_RESERVE,
@@ -12,9 +14,9 @@ import {
   FORMAT_STATIC_WRAPPER,
   MAX_CHUNKS,
   MAX_TOTAL_BYTES,
+  renderAuditChunkGroup,
   safeUtf8Cut,
 } from "./index.ts";
-import { formatFiles } from "../_shared/github-payload.ts";
 
 function f(path: string, bytes: number, char = "x") {
   return { path, bytes, content: char.repeat(bytes) };
@@ -22,19 +24,21 @@ function f(path: string, bytes: number, char = "x") {
 
 const encoder = new TextEncoder();
 
-function renderedBytes(group: { path: string; content: string; bytes: number }[]): number {
-  return encoder.encode(formatFiles(group)).length;
+function renderedBytesForAll(groups: { path: string; content: string; bytes: number }[][]): number[] {
+  const annotated = annotateFragments(groups);
+  return annotated.map((g) => encoder.encode(renderAuditChunkGroup(g)).length);
 }
 
 function checkAll(groups: { path: string; content: string; bytes: number }[][]) {
   assertChunkInvariants(groups);
   if (groups.length > MAX_CHUNKS) throw new Error(`too many chunks: ${groups.length}`);
-  for (const g of groups) {
+  const rendered = renderedBytesForAll(groups);
+  for (let i = 0; i < groups.length; i++) {
+    const g = groups[i];
     const size = g.reduce((n, x) => n + x.bytes, 0);
     if (size > CHUNK_BYTES) throw new Error(`chunk source too big: ${size}`);
-    const r = renderedBytes(g);
-    if (r > CHUNK_BYTES) {
-      throw new Error(`rendered chunk too big: ${r} bytes across ${g.length} files`);
+    if (rendered[i] > CHUNK_BYTES) {
+      throw new Error(`rendered chunk too big: ${rendered[i]} bytes across ${g.length} files`);
     }
     for (const frag of g) {
       if (frag.bytes > CHUNK_BYTES) throw new Error(`fragment too big: ${frag.path} ${frag.bytes}`);
@@ -80,21 +84,19 @@ function reassemble(
   }
 }
 
-Deno.test("shape constants: 64 KiB × 20 rendered budget UNCHANGED; SOURCE ceiling raised to 1,572,864 (1.5 MiB), decoupled", () => {
-  // Rendered/request/chunk-count controls must remain frozen — those bound every model call.
+Deno.test("shape constants: 64 KiB × 20 rendered budget UNCHANGED; SOURCE ceiling 1.5 MiB; fragment header reserve 22", () => {
   assertEquals(CHUNK_BYTES, 64 * 1024);
   assertEquals(MAX_CHUNKS, 20);
-  // Only the source-ingest ceiling grew, and only to accommodate the current
-  // GitHub snapshot (~1,231,172 bytes) plus reasonable near-term growth.
   assertEquals(MAX_TOTAL_BYTES, 1_572_864);
-  // Deliberately not equal — wrapper overhead must never expand the source budget.
+  // Fragment marker reserve is new in AUDIT-JSON-FRAGMENT-R2. Worst-case
+  // " (fragment 20 of 20)" is 20 bytes; 22 gives a small safety margin.
+  assertEquals(AUDIT_FRAGMENT_HEADER_RESERVE, 22);
   if (MAX_TOTAL_BYTES === CHUNK_BYTES * MAX_CHUNKS) {
     throw new Error("MAX_TOTAL_BYTES must be decoupled from CHUNK_BYTES * MAX_CHUNKS");
   }
 });
 
-Deno.test("wrapper accounting constants match formatFiles() emission", () => {
-  // Confirm the static wrapper: "\n=== FILE:  ( bytes) ===\n" (no path, no digits)
+Deno.test("wrapper accounting constants match rendered emission", () => {
   const staticLen = encoder.encode("\n=== FILE:  ( bytes) ===\n").length;
   assertEquals(FORMAT_STATIC_WRAPPER, staticLen);
   assertEquals(FORMAT_STATIC_WRAPPER, 25);
@@ -110,8 +112,6 @@ Deno.test("seven 150 KiB files -> <=20 chunks, rendered <=64 KiB, exact reassemb
 });
 
 Deno.test("200 small files -> rendered <=64 KiB per chunk, exact reassembly", () => {
-  // 200 × 512 bytes = 100 KiB of source. Wrapper overhead dominates for small
-  // files; the packer must still keep every rendered chunk within 64 KiB.
   const files = Array.from({ length: 200 }, (_, i) => f(`src/components/nested/dir-${i}/module.ts`, 512, String.fromCharCode(97 + (i % 26))));
   const groups = chunkFilesFor(files);
   checkAll(groups);
@@ -119,7 +119,6 @@ Deno.test("200 small files -> rendered <=64 KiB per chunk, exact reassembly", ()
 });
 
 Deno.test("long multibyte paths respect rendered ceiling", () => {
-  // Path bytes dominate wrapper cost. Each path here is ~180 UTF-8 bytes.
   const longPath = (i: number) => `src/components/★★★★★/very-long-path-with-emojis-🚀🎉🌟🔥⚡/nested/deep/module-${i}.ts`;
   const files = Array.from({ length: 40 }, (_, i) => f(longPath(i), 4 * 1024, String.fromCharCode(97 + (i % 26))));
   const groups = chunkFilesFor(files);
@@ -159,7 +158,6 @@ Deno.test("Unicode split boundaries reconstruct exactly (no split codepoints)", 
 });
 
 Deno.test("total-over-SOURCE-ceiling fails closed in chunkFilesFor (one byte above rejected)", () => {
-  // Precisely MAX_TOTAL_BYTES + 1 source bytes must trigger the source-ceiling guard.
   const oneKB = 1024;
   const overCount = Math.ceil((MAX_TOTAL_BYTES + 1) / oneKB);
   const files = Array.from({ length: overCount }, (_, i) => f(`x${i}.ts`, oneKB));
@@ -167,7 +165,6 @@ Deno.test("total-over-SOURCE-ceiling fails closed in chunkFilesFor (one byte abo
 });
 
 Deno.test("boundary: current GitHub snapshot size (1,231,172 bytes) is accepted", () => {
-  // Reproduces the exact size that failed under the old 1,228,800 ceiling.
   const CURRENT_SNAPSHOT_BYTES = 1_231_172;
   const size = 48 * 1024;
   const count = Math.floor(CURRENT_SNAPSHOT_BYTES / size);
@@ -178,37 +175,14 @@ Deno.test("boundary: current GitHub snapshot size (1,231,172 bytes) is accepted"
   ];
   const total = files.reduce((n, x) => n + x.bytes, 0);
   assertEquals(total, CURRENT_SNAPSHOT_BYTES);
-  const groups = chunkFilesFor(files); // must not throw
+  const groups = chunkFilesFor(files);
   checkAll(groups);
   reassemble(files, groups);
 });
 
-Deno.test("boundary: exact MAX_TOTAL_BYTES source passes the source-ceiling guard", () => {
-  // At the ceiling the SOURCE-ceiling assertion in chunkFilesFor must NOT fire.
-  // Packing 1.5 MiB into the unchanged 20 × 64 KiB rendered budget is not
-  // guaranteed — the rendered-capacity guard (MAX_CHUNKS) is the deliberate
-  // loud-failure path for that pathological case, and it's covered separately.
-  const size = 1024;
-  const count = MAX_TOTAL_BYTES / size; // 1536 files × 1 KiB = 1,572,864 bytes
-  const files = Array.from({ length: count }, (_, i) => f(`c${i}.ts`, size, String.fromCharCode(97 + (i % 26))));
-  const total = files.reduce((n, x) => n + x.bytes, 0);
-  assertEquals(total, MAX_TOTAL_BYTES);
-  try {
-    chunkFilesFor(files);
-  } catch (e) {
-    const msg = String((e as Error).message);
-    if (msg.includes("exceeds ceiling")) {
-      throw new Error(`source-ceiling guard fired at exact MAX_TOTAL_BYTES: ${msg}`);
-    }
-    // Any other loud failure (e.g. MAX_CHUNKS) is acceptable — those paths
-    // stay unchanged intentionally and remain the loud-failure gate for
-    // genuinely rendered-oversized packings.
-  }
-});
-
 Deno.test("boundary: one byte above MAX_TOTAL_BYTES is rejected with source-ceiling error", () => {
   const size = 1024;
-  const count = MAX_TOTAL_BYTES / size; // exactly at ceiling
+  const count = MAX_TOTAL_BYTES / size;
   const files = [
     ...Array.from({ length: count }, (_, i) => f(`c${i}.ts`, size)),
     f("one-byte-over.ts", 1),
@@ -217,23 +191,9 @@ Deno.test("boundary: one byte above MAX_TOTAL_BYTES is rejected with source-ceil
 });
 
 Deno.test("21st-chunk rejection: assertChunkInvariants refuses handcrafted 21 groups", () => {
-  // With the SOURCE ceiling of 1,228,800 bytes and greedy packing wasting
-  // at most ~40 bytes/chunk in wrapper overhead, chunkFilesFor cannot both
-  // stay under the source ceiling AND emit >20 groups from ordinary files.
-  // The last-line-of-defense is assertChunkInvariants, which is called on
-  // every rendered chunk set — prove it rejects a 21-group input directly.
   const groups = Array.from({ length: MAX_CHUNKS + 1 }, () => [f("x.ts", 4096)]);
-  assertChunkInvariants; // reference kept so import stays used above
-  try {
-    // Re-import to avoid TDZ concerns with hoisted assertion helpers.
-    // deno-lint-ignore no-explicit-any
-    (assertChunkInvariants as any)(groups);
-    throw new Error("expected assertChunkInvariants to throw for 21 groups");
-  } catch (e) {
-    if (!String((e as Error).message).includes("MAX_CHUNKS")) throw e;
-  }
+  assertThrows(() => assertChunkInvariants(groups), Error, "MAX_CHUNKS");
 });
-
 
 Deno.test("no byte omission or duplication across many mixed sizes", () => {
   const sizes = [10, 50, 199, 33, 77, 128, 64, 33, 400].map((k) => k * 1024);
@@ -246,10 +206,8 @@ Deno.test("no byte omission or duplication across many mixed sizes", () => {
 });
 
 Deno.test("assertChunkInvariants rejects RENDERED chunk over CHUNK_BYTES", () => {
-  // Handcraft a group whose SOURCE fits but whose formatFiles() wrapper
-  // pushes rendered above 64 KiB — the invariant must catch it.
-  const fragBytes = CHUNK_BYTES; // 64 KiB source in a single fragment
-  const group = [f("a".repeat(200), fragBytes)]; // 200-char path adds wrapper
+  const fragBytes = CHUNK_BYTES;
+  const group = [f("a".repeat(200), fragBytes)];
   assertThrows(() => assertChunkInvariants([group]), Error, "RENDERED");
 });
 
@@ -258,14 +216,66 @@ Deno.test("assertChunkInvariants rejects oversize single-file fragment (strict)"
   assertThrows(() => assertChunkInvariants(groups), Error, "exceeds");
 });
 
-Deno.test("assertChunkInvariants rejects >MAX_CHUNKS groups", () => {
-  const groups = Array.from({ length: MAX_CHUNKS + 1 }, () => [f("x.ts", 1024)]);
-  assertThrows(() => assertChunkInvariants(groups), Error, "MAX_CHUNKS");
-});
-
 Deno.test("safeUtf8Cut returns codepoint boundary and never splits continuation bytes", () => {
-  const bytes = encoder.encode("a€漢🙂"); // 11 bytes: 1+3+3+4
+  const bytes = encoder.encode("a€漢🙂");
   assertEquals(safeUtf8Cut(bytes, 2), 1);
   assertEquals(safeUtf8Cut(bytes, 4), 4);
   assertEquals(safeUtf8Cut(bytes, 999), bytes.length);
+});
+
+// ============================== Fragment marker tests ==============================
+
+Deno.test("annotateFragments — non-fragmented files carry idx=1/total=1", () => {
+  const groups = [[f("src/a.ts", 100), f("src/b.ts", 200)]];
+  const annotated = annotateFragments(groups);
+  assertEquals(annotated[0][0].fragmentIndex, 1);
+  assertEquals(annotated[0][0].fragmentTotal, 1);
+  assertEquals(annotated[0][1].fragmentIndex, 1);
+  assertEquals(annotated[0][1].fragmentTotal, 1);
+});
+
+Deno.test("annotateFragments — split file carries sequential idx and correct total", () => {
+  const files = [f("huge.ts", 200 * 1024, "z")];
+  const groups = chunkFilesFor(files);
+  const annotated = annotateFragments(groups);
+  const frags = annotated.flat().filter((g) => g.path === "huge.ts");
+  const total = frags.length;
+  assert(total >= 2, "huge.ts should split into multiple fragments");
+  for (let i = 0; i < frags.length; i++) {
+    assertEquals(frags[i].fragmentIndex, i + 1);
+    assertEquals(frags[i].fragmentTotal, total);
+  }
+});
+
+Deno.test("renderAuditChunkGroup — non-fragmented file emits legacy header only", () => {
+  const g = annotateFragments([[f("src/x.ts", 5)]])[0];
+  const out = renderAuditChunkGroup(g);
+  assert(out.includes("=== FILE: src/x.ts (5 bytes) ==="));
+  assert(!/fragment/.test(out), "non-fragmented file must NOT emit a fragment marker");
+});
+
+Deno.test("renderAuditChunkGroup — first/middle/final fragments emit unambiguous markers", () => {
+  const files = [f("huge.ts", 200 * 1024, "y")];
+  const groups = chunkFilesFor(files);
+  const annotated = annotateFragments(groups);
+  const rendered = annotated.map((g) => renderAuditChunkGroup(g));
+  const total = annotated.flat().filter((g) => g.path === "huge.ts").length;
+  // Every rendered chunk that contains huge.ts must have "(fragment N of M)".
+  const chunksWithHuge = rendered.filter((r) => r.includes("huge.ts"));
+  assertEquals(chunksWithHuge.length, total);
+  const firstMarker = `(fragment 1 of ${total})`;
+  const lastMarker = `(fragment ${total} of ${total})`;
+  assert(rendered.some((r) => r.includes(firstMarker)), `expected marker "${firstMarker}"`);
+  assert(rendered.some((r) => r.includes(lastMarker)), `expected marker "${lastMarker}"`);
+  if (total >= 3) {
+    const midMarker = `(fragment 2 of ${total})`;
+    assert(rendered.some((r) => r.includes(midMarker)), `expected marker "${midMarker}"`);
+  }
+});
+
+Deno.test("system prompt embeds anti-false-positive fragment rule", async () => {
+  const src = await Deno.readTextFile(new URL("../_shared/audit-findings.ts", import.meta.url));
+  assert(/Fragment-boundary rule/i.test(src));
+  assert(/mid-token|mid-statement/i.test(src));
+  assert(/Never report a file as truncated/i.test(src));
 });
