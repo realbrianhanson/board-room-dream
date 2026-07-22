@@ -86,7 +86,7 @@ export const FINDING_SCHEMA_DOC = `Each finding MUST be an object with EXACTLY t
   "file_path": "repo-relative path or empty string",
   "title": "<=160 chars, one short line",
   "description": "<=900 chars, one to two sentences: what is broken and why",
-  "evidence": "<=500 chars, concrete: exact vulnerable construct, verbatim quote/snippet, or precise data-flow. A filename alone or a speculative risk is NOT evidence.",
+  "evidence": "<=500 chars. For P0/P1 the evidence string MUST include a verbatim short code/SQL/HTML quote from the cited file, in the exact marker form: 'QUOTE: <exact excerpt> | WHY: <one-sentence reason it proves the issue>'. A speculative risk, a filename alone, or a semantic paraphrase without a quote will be downgraded to P2.",
   "confidence": "high"|"medium"|"low",
   "line_start": integer > 0 or null,
   "line_end": integer > 0 (>= line_start) or null
@@ -94,10 +94,19 @@ export const FINDING_SCHEMA_DOC = `Each finding MUST be an object with EXACTLY t
 
 Serious findings (P0/P1) require:
 - a concrete repo-relative file_path (never empty, never a directory alone),
-- specific evidence explaining the exact vulnerable/broken construct (not the mere presence of a file, dependency, or category of risk),
+- a verbatim QUOTE: <excerpt> | WHY: <reason> pair in the evidence string,
 - confidence "high" or "medium".
 
-Include lines when the source provides reliable line numbers. When the corpus formatting has no stable lines (chunked concatenations, paste), leave line_start / line_end null instead of guessing.
+Cumulative-ledger rule (Postgres migrations, config, feature flags):
+- SQL migrations are a cumulative ledger. An older migration is NOT proof of the current effective state. A P0/P1 based on a historical migration MUST be corroborated against later migrations, current grants, RLS policies, triggers, or current code — the QUOTE must come from the CURRENT effective definition, not a superseded one. Without that corroboration, downgrade to P2 or drop.
+
+Client-side vs server-side authorization:
+- A client-side route/UI role check is navigation UX, not the authorization boundary. Do NOT call it an exploit unless the underlying server (RLS policy, RPC, edge function, security-definer function) is concretely bypassable and you can QUOTE the vulnerable server-side construct.
+
+Do NOT invent a security-contract requirement. In particular, storing a role column on profiles is not automatically unsafe when database triggers/policies prevent self-mutation; a separate user_roles table is one architecture, not a universal requirement.
+
+Cross-file composition is real evidence:
+- Prompts, wrappers, and providers commonly compose across files. Before claiming "seats receive the identical prompt" or "no constitution is prepended", verify with a QUOTE from the actual wrapper (for example callSeat in supabase/functions/_shared/openrouter-proxy.ts prepends the constitution and each model_registry.role_prompt). Contradictory current source wins over any model claim of absence.
 
 Do NOT label a Supabase anon/publishable key as a leaked secret. Only flag a secret when the code embeds or exports an actual unredacted private credential, service-role key, or high-entropy secret.`;
 
