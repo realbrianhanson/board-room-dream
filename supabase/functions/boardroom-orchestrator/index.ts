@@ -375,11 +375,15 @@ async function executeStep(admin: any, run: any, step: any) {
           await admin
             .from("run_steps")
             .update({ status: "failed", error: "timeout_failover_exhausted", completed_at: new Date().toISOString() })
-            .eq("id", step.id);
+            .eq("id", step.id)
+            .eq("status", "running");
           await failRun(admin, run, tmsg);
           return;
         }
-        await requeueForTimeout(admin, step);
+        const outcome = await requeueForTimeout(admin, step);
+        if (outcome === "cancelled_parent_terminal") {
+          console.log(`[exec] TIMEOUT step=${step.step_key} run=${run.id} parent already terminal — step cancelled`);
+        }
         return;
       }
       // Response-body transport failure on a 2xx response (e.g.
