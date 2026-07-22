@@ -1,0 +1,87 @@
+// Pure prompt-policy + product-strategy contract regression.
+// Run: cd supabase/functions && deno test _shared/batch-count-policy.test.ts
+import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { batchPromptPolicy, productStrategyContract } from "./batch-count-policy.ts";
+import { correctionForStep, validateStepJson } from "../boardroom-orchestrator/protocol.ts";
+
+// -------- batchPromptPolicy --------
+
+Deno.test("batchPromptPolicy — greenfield asks for 6-8 (prefer 6)", () => {
+  const p = batchPromptPolicy(false);
+  assertEquals(p.minBatches, 6);
+  assertEquals(p.maxBatches, 8);
+  assertEquals(p.rangeText, "6-8");
+  assertStringIncludes(p.rangePrompt, "6-8 dependency-safe");
+  assertStringIncludes(p.rangePrompt, "STRONGLY PREFER 6");
+  assertStringIncludes(p.countRule, "Exactly 6 batches");
+});
+
+Deno.test("batchPromptPolicy — imports ask for 3-6, smallest-without-padding", () => {
+  const p = batchPromptPolicy(true);
+  assertEquals(p.minBatches, 3);
+  assertEquals(p.maxBatches, 6);
+  assertEquals(p.rangeText, "3-6");
+  assertStringIncludes(p.rangePrompt, "SMALLEST count");
+  assertStringIncludes(p.rangePrompt, "Do NOT invent extra batches");
+  assertStringIncludes(p.countRule, "Between 3 and 6 batches");
+  assert(!/Exactly 6 batches/i.test(p.rangePrompt + p.countRule), "imports must not demand exactly six");
+});
+
+// -------- productStrategyContract --------
+
+Deno.test("productStrategyContract — locks the five owner-authority decisions", () => {
+  const s = productStrategyContract();
+  assertStringIncludes(s, `"## Product strategy"`);
+  // Owner-authority language for imports must be present verbatim.
+  assertStringIncludes(s, "For imported apps the owner's supplied intake answers are AUTHORITY");
+  assertStringIncludes(s, "owner-unknown assumption");
+  // Five decisions.
+  assertStringIncludes(s, "Reachable buyer");
+  assertStringIncludes(s, "acquisition channel");
+  assertStringIncludes(s, "Paid offer, price anchor, and upgrade trigger");
+  assertStringIncludes(s, "First-90-second activation moment");
+  assertStringIncludes(s, "Screenshot-worthy wow moment");
+  assertStringIncludes(s, `Positioning line completing "Unlike`);
+});
+
+// -------- validateStepJson batch-count coverage --------
+
+function makeBatches(n: number) {
+  const filler = "x".repeat(320);
+  return Array.from({ length: n }, (_, i) => ({
+    batch_no: i + 1,
+    title: `Batch ${i + 1}`,
+    channel: "human",
+    prompt_md: `Batch ${i + 1} — human step.\n\n1. Step one is a plain-language action the student takes in an external console. ${filler}`,
+  }));
+}
+
+Deno.test("validateStepJson — batches_chair accepts a valid 3-batch payload (imports)", () => {
+  assertEquals(validateStepJson("batches_chair", { batches: makeBatches(3) }), null);
+});
+
+Deno.test("validateStepJson — batches_chair accepts a valid 8-batch payload (greenfield upper bound)", () => {
+  assertEquals(validateStepJson("batches_chair", { batches: makeBatches(8) }), null);
+});
+
+Deno.test("validateStepJson — batches_chair rejects 2 batches (below floor)", () => {
+  const err = validateStepJson("batches_chair", { batches: makeBatches(2) });
+  assert(err && /3-8/.test(err), `expected 3-8 range error, got: ${err}`);
+});
+
+Deno.test("validateStepJson — batches_chair rejects 9 batches (above ceiling)", () => {
+  const err = validateStepJson("batches_chair", { batches: makeBatches(9) });
+  assert(err && /3-8/.test(err), `expected 3-8 range error, got: ${err}`);
+});
+
+// -------- correctionForStep no longer forces six --------
+
+Deno.test("correctionForStep — batch generation copy no longer forces exactly six", () => {
+  for (const k of ["batches_chair", "batches_revise_chair"]) {
+    const c = correctionForStep(k);
+    assertStringIncludes(c, "3-8 batches");
+    assertStringIncludes(c, "smallest count");
+    assert(!/exactly\s+6\s+batches/i.test(c), `must not require exactly six batches (got: ${c})`);
+    assert(!/exactly\s+six\s+batches/i.test(c), `must not require exactly six batches (got: ${c})`);
+  }
+});

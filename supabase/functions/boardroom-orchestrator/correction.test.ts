@@ -3,11 +3,13 @@
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { correctionForStep, validateStepJson } from "./protocol.ts";
 
-Deno.test("correctionForStep — batch generation routes to batches copy", () => {
+Deno.test("correctionForStep — batch generation routes to batches copy (3-8, no exactly-six mandate)", () => {
   for (const k of ["batches_chair", "batches_revise_chair"]) {
     const c = correctionForStep(k);
-    assertStringIncludes(c, "exactly 6 batches");
+    assertStringIncludes(c, "3-8 batches");
+    assertStringIncludes(c, "smallest count");
     assertStringIncludes(c, "<=24,000 characters");
+    assert(!/exactly\s+6\s+batches/i.test(c), `must not force exactly six (got: ${c})`);
   }
 });
 

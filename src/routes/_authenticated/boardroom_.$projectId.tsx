@@ -5,6 +5,7 @@ import { BoardroomSession, PLAN_RUBRIC } from "@/components/boardroom-session";
 import { ArrowRight } from "lucide-react";
 import { ProjectJourney } from "@/components/project-journey";
 import { useProjectJourney } from "@/hooks/use-project-journey";
+import { computeBoardroomGate, IMPORT_AUDIT_GATE_MESSAGE } from "@/lib/boardroom-gate";
 
 export const Route = createFileRoute("/_authenticated/boardroom_/$projectId")({
   component: BoardroomProjectPage,
@@ -14,10 +15,6 @@ const CONVENE_BLOCKED: Record<string, string> = {
   intake: "Finish the intake first — the board needs a validated idea.",
   killed: "This idea was killed. Revise it before reconvening.",
 };
-
-// Exact backend message used by boardroom-orchestrator's start_run gate.
-const IMPORT_AUDIT_GATE_MESSAGE =
-  "Complete a successful A–Z audit before convening the improvement board.";
 
 function BoardroomProjectPage() {
   const { projectId } = Route.useParams();
@@ -70,14 +67,17 @@ function BoardroomProjectPage() {
     };
   }, [projectId, reloadKey]);
 
-  const extraConveneGate = () => {
-    if (!isImport) return null;
-    if (gateLoading || gateError) return null;
-    if (!hasSuccessfulAudit) return IMPORT_AUDIT_GATE_MESSAGE;
-    return null;
-  };
+  const gateState = computeBoardroomGate({
+    loading: gateLoading,
+    error: gateError,
+    isImport,
+    hasSuccessfulAudit,
+  });
 
-  if (gateError) {
+  const extraConveneGate = () =>
+    gateState.kind === "needs-import-audit" ? IMPORT_AUDIT_GATE_MESSAGE : null;
+
+  if (gateState.kind === "error") {
     return (
       <div className="mx-auto max-w-6xl px-6 py-14">
         <Link to="/dashboard" className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground hover:text-foreground">
@@ -85,7 +85,7 @@ function BoardroomProjectPage() {
         </Link>
         <div className="mt-8 rounded-xl border border-[hsl(8_60%_45%/0.4)] bg-[hsl(8_60%_25%/0.15)] p-6">
           <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(8_60%_70%)]">Couldn't load the Boardroom gate</p>
-          <p className="mt-2 text-sm text-foreground">{gateError}</p>
+          <p className="mt-2 text-sm text-foreground">{gateState.message}</p>
           <button
             onClick={() => setReloadKey((k) => k + 1)}
             className="mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"

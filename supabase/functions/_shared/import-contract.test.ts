@@ -26,7 +26,11 @@ Deno.test("renderImportContract serializes every owner-supplied field for a full
   assertStringIncludes(out, "Wow moment: generating a signable weekly invoice");
   assertStringIncludes(out, "Positioning (Unlike ___, this app ___): Unlike HubSpot");
   assertStringIncludes(out, "Stated goals for the board: code_audit, improvements");
-  assert(!out.includes("(not supplied by owner"));
+  // Every owner-supplied field must render as "Label: value", not the
+  // "(not supplied by owner — …)" placeholder used for missing fields.
+  // The renderer's header text also mentions the placeholder, so match on
+  // the placeholder used at the start of a field line instead.
+  assert(!/:\s\(not supplied by owner/.test(out));
 });
 
 Deno.test("renderImportContract marks legacy import missing fields as not supplied", () => {
