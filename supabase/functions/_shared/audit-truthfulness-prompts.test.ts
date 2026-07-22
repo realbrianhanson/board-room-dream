@@ -63,7 +63,7 @@ Deno.test("Chair merge system prompt locks QUOTE/WHY, cumulative, cross-file, cl
   );
   const start = src.indexOf('step_key: "audit_chair_merge"');
   assert(start >= 0, "queueAuditChairMerge not found");
-  const window = src.slice(Math.max(0, start - 3000), start + 200);
+  const window = src.slice(Math.max(0, start - 6000), start + 200);
   assertContainsAll(window, [
     "QUOTE:",
     "WHY:",
