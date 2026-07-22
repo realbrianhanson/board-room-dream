@@ -863,7 +863,7 @@ ${shape}`,
     request: {
       json_output: true,
       temperature: 0.2,
-      max_tokens: 3500,
+      max_tokens: 2500,
 
       messages: [
         { role: "system", content: prompts[seat] },
