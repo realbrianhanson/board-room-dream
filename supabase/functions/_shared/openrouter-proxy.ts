@@ -106,6 +106,7 @@ export type ProxyResult = {
   tokensOut: number;
   costUsd: number;
   raw: any;
+  finishReason?: string;
   fallback?: FallbackMeta;
 };
 
