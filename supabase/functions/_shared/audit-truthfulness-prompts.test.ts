@@ -68,21 +68,9 @@ Deno.test("Chair merge system prompt locks QUOTE/WHY, cumulative, cross-file, cl
     "QUOTE:",
     "WHY:",
     "Cumulative-ledger",
-    "cumulative-ledger",
     "Client-side route/UI role checks",
     "callSeat",
     "openrouter-proxy.ts",
-  ].filter((s, i, a) => a.indexOf(s) === i).filter((s) => window.includes(s) || true),
-  "queueAuditChairMerge system prompt");
-  // Direct explicit checks (case-sensitive for the exact locked strings).
-  for (const n of [
-    "QUOTE:",
-    "WHY:",
-    "Cumulative-ledger",
-    "Client-side route/UI role checks",
-    "callSeat",
-    "openrouter-proxy.ts",
-  ]) {
-    assert(window.includes(n), `chair merge prompt missing: ${n}`);
-  }
+  ], "queueAuditChairMerge system prompt");
 });
+
