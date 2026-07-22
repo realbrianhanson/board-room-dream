@@ -488,15 +488,66 @@ function DashboardPage() {
               })}
             </div>
           </div>
+          <div className="space-y-4 rounded-lg border border-border bg-surface-2/40 p-4">
+            <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+              Product strategy — the board treats these answers as authority
+            </p>
+            <ImportStrategyField
+              label="Buyer — who uses and pays"
+              value={impBuyer}
+              onChange={setImpBuyer}
+              placeholder="Independent finance advisers running solo practices"
+            />
+            <ImportStrategyField
+              label="Paid offer — what is paid for"
+              value={impPaidOffer}
+              onChange={setImpPaidOffer}
+              placeholder="Weekly compliance briefing PDF · or 'internal/free'"
+            />
+            <ImportStrategyField
+              label="Price anchor"
+              value={impPriceAnchor}
+              onChange={setImpPriceAnchor}
+              placeholder='$29/mo · or "not set — recommend one"'
+            />
+            <ImportStrategyField
+              label="Upgrade trigger — buy, renew, or move up"
+              value={impUpgradeTrigger}
+              onChange={setImpUpgradeTrigger}
+              placeholder="Monthly regulator update lands"
+            />
+            <ImportStrategyField
+              label="Activation moment — first 90 seconds"
+              value={impActivation}
+              onChange={setImpActivation}
+              placeholder="They paste one client scenario and see the flagged risks"
+            />
+            <ImportStrategyField
+              label="Wow moment — the screenshot-worthy one"
+              value={impWow}
+              onChange={setImpWow}
+              placeholder="The one-page risk summary they show a client"
+            />
+            <ImportStrategyField
+              label='Positioning — "Unlike ___, this app ___"'
+              value={impPositioning}
+              onChange={setImpPositioning}
+              placeholder="Unlike compliance PDFs, this app flags the client-specific risk in one glance."
+            />
+          </div>
           <div className="flex gap-2">
             <button
               type="submit"
               disabled={
-                creating || !impName.trim() || !impDescription.trim() || impGoals.length === 0
+                creating ||
+                !impName.trim() ||
+                !impDescription.trim() ||
+                impGoals.length === 0 ||
+                !importStrategyReady
               }
               className="rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
             >
-              {creating ? "Importing…" : "Bring it to the board"}
+              {creating ? "Importing…" : "Import and open the Audit Center"}
             </button>
             <button
               type="button"
