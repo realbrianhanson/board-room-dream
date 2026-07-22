@@ -242,4 +242,3 @@ export async function fetchTargetMigrations(
     return { ok: false, code: "SCHEMA_LEDGER_FETCH_FAILED", message: (e as Error).message };
   }
 }
-}
