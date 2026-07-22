@@ -7,7 +7,7 @@
 //
 // Reviewed against official Lovable documentation.
 
-export const LOVABLE_CONTRACT_REVIEWED_AT = "2026-07-22";
+export const LOVABLE_CONTRACT_REVIEWED_AT = "2026-07-27";
 // Curated, versioned, static — NOT fetched at runtime. Update this file when
 // docs change; the reviewed_at above is the single source of truth on
 // currency. Cohort-approved addenda land through app_settings, not here.
@@ -57,6 +57,23 @@ VERIFICATION (per features/testing + features/browser-testing docs):
 
 DESIGN TOKENS:
 - Install semantic CSS variables + Tailwind config in the earliest batch. Later batches reference tokens by name; never restate raw HSL values in feature prompts.
+
+DEBUGGING (per prompting-debugging doc):
+- If Lovable's first fix doesn't work, do NOT paste the same prompt again with more emphasis — that produces the same failure. Instead: (1) reproduce the exact failure (URL, click path, console line, network response), (2) name the file(s) Lovable last edited, (3) ask for the specific root cause before any code change, (4) apply the narrowest possible fix in a new prompt that names both the file and the guardrail.
+- Prefer reverting to the last known-good version and re-attempting the batch with a smaller scope over stacking fixes on a broken state.
+- Ask Lovable to add or run a targeted test (browser workflow or backend RPC) that proves the reported symptom is gone — not just that "the code compiles".
+- Never ship a debugging prompt that also introduces new features; every unrelated change adds regression surface.
+
+SECURITY (per features/security doc + our owner-authority contract):
+- Every user-data table has owner lineage (user_id UUID → auth.users) and owner-scoped RLS (auth.uid() = user_id). Instructor/admin reads are role-gated through a security-definer helper (has_role), never a blanket policy.
+- Roles live in a separate user_roles table checked via a SECURITY DEFINER function — never a boolean column on profiles (privilege-escalation risk).
+- SUPABASE_SERVICE_ROLE_KEY is server-only. It never appears in the browser bundle, in a Lovable prompt, or in a compiled batch prompt.
+- Public/anon SELECT is only for tables that are intentionally public reads. Broadening auth (GRANT … TO anon/public, DISABLE RLS, enable anonymous sign-ups) is an owner-authority high-impact directive.
+- Fail-closed: if a check can't be evaluated (e.g. missing env, missing role), deny. Never silently proceed under a permissive fallback.
+
+CHANGELOG DISCIPLINE (per official changelog):
+- Lovable's platform defaults change (routing, SSR, edge runtime, AI Gateway, cloud integrations). Treat this file's reviewed_at as the freshness stamp — if it is older than a few weeks OR audits start finding "this API no longer works" patterns, re-review the docs and bump the date.
+- Never encode a version-specific default (e.g. "React + Vite is the fixed stack") that will silently rot. State the detected stack from the LIVE REPO CONTRACT instead.
 
 SHAPE OF EVERY BATCH:
 - Start with: \`Batch N — <one-line name>. Numbered items only, no scope creep.\`
