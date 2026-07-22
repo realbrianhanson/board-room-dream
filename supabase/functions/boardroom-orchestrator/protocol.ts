@@ -267,6 +267,30 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
 }
 
 
+// ============================== Structured correction routing ==============================
+
+// Pure — pick the correction copy that matches the step's schema. Never send
+// batch-schema instructions to a reviewer / vote / audit / other step.
+export function correctionForStep(stepKey: string): string {
+  const key = String(stepKey ?? "");
+  if (key === "batches_chair" || key === "batches_revise_chair") {
+    return "Your JSON was truncated. Return exactly 6 batches; each prompt_md <=2,800 characters; total JSON <=28,000 characters. Preserve required coverage but remove repeated context.";
+  }
+  if (key === "batches_review_inspector" || key === "batches_review_contrarian") {
+    return "Your review JSON was truncated. Return ONLY {verdict, issues}; max 10 issues; each issue.text <=350 characters; total JSON <=6,000 characters. Preserve every blocking issue, merge duplicates, no prose.";
+  }
+  if (key === "audit_chair_merge") {
+    return "Your audit merge JSON was truncated. Preserve the required merge schema; max 30 deduplicated findings; keep every P0/P1; compress evidence; total JSON <=18,000 characters.";
+  }
+  if (/^audit_(chair|strategist|contrarian|inspector|reserve)(_c\d+)?$/.test(key)) {
+    return "Your audit report JSON was truncated. Preserve the required audit report schema; max 12 findings; keep concise evidence (one short quote or path each); total JSON <=8,000 characters.";
+  }
+  return "Return only the required JSON schema from the system prompt; keep every required field; compress prose and arrays to fit.";
+}
+
+
+
+
 // ============================== Consensus / locking ==============================
 
 // Consensus gate: per-cohort override → workspace default → 8. The prompts
