@@ -186,9 +186,9 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
     if (!["approve", "revise"].includes(parsed.verdict)) return "Missing/invalid verdict.";
     if (!Array.isArray(parsed.issues)) return "Missing issues array.";
     const issues = parsed.issues;
-    if (issues.length > 10) return `issues has ${issues.length} entries — max 10. Merge duplicates and keep only the highest-severity items.`;
+    if (issues.length > 8) return `issues has ${issues.length} entries — max 8. Merge duplicates and keep only the highest-severity items.`;
     const payloadLen = JSON.stringify(parsed).length;
-    if (payloadLen > 6000) return `Total serialized review JSON is ${payloadLen} characters — exceeds 6,000. Trim wording without dropping blocking issues.`;
+    if (payloadLen > 4500) return `Total serialized review JSON is ${payloadLen} characters — exceeds 4,500. Trim wording without dropping blocking issues.`;
     for (let i = 0; i < issues.length; i++) {
       const iss = issues[i];
       if (!iss || typeof iss !== "object") return `issues[${i}] must be an object.`;
@@ -198,7 +198,7 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
       }
       if (typeof iss.text !== "string") return `issues[${i}].text must be a string.`;
       const t = iss.text.trim();
-      if (t.length < 10 || t.length > 350) return `issues[${i}].text is ${t.length} chars — must be 10-350.`;
+      if (t.length < 10 || t.length > 280) return `issues[${i}].text is ${t.length} chars — must be 10-280.`;
     }
     return null;
   }
