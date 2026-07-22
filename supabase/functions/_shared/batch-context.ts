@@ -303,6 +303,15 @@ export function isBatchGenerationStep(stepKey: string | null | undefined): boole
   return k === "batches_chair" || k === "batches_revise_chair" || k.startsWith("batches_review_");
 }
 
+// Audit map/extraction steps (per-chunk per-seat). Echoing the truncated
+// prior response back to the model was letting it re-emit the same
+// near-cap output and truncate identically. For these steps we always
+// drop the echo and rely on the tightened correction copy alone.
+export function isAuditMapStep(stepKey: string | null | undefined): boolean {
+  const k = String(stepKey ?? "");
+  return /^audit_(chair|strategist|contrarian|inspector|reserve)(_c\d+)?$/.test(k) && k !== "audit_chair_merge";
+}
+
 // ============================== Validation retry builder ==============================
 
 // Pure, testable retry builder. The correction pass echoes the invalid
@@ -332,6 +341,21 @@ export function buildValidationRetryRequest(input: ValidationRetryInput): Valida
   const correctionText = truncated
     ? correction
     : `Your previous response failed validation: ${validationError}\nReturn ONLY the required JSON object, no prose, no code fences.`;
+
+  // Audit-map steps: never echo the prior response back. Echoing the
+  // truncated near-cap output was letting the model re-emit and re-truncate
+  // in the same shape. The correction copy alone (see correctionForStep)
+  // asks for a materially smaller schema, so no echo is needed.
+  if (isAuditMapStep(stepKey)) {
+    const noEchoText = truncated
+      ? `${correctionText}\n\n(Retry note: your prior response was truncated at ${assistantContent.length} chars — do NOT reconstruct it verbatim. Emit only complete finding objects and close the schema properly.)`
+      : `${correctionText}\n\n(Retry note: your prior response failed validation at ${assistantContent.length} chars — do NOT reconstruct it verbatim. Emit only complete finding objects and close the schema properly.)`;
+    const req = {
+      ...baseRequest,
+      messages: [...baseMessages, { role: "user", content: noEchoText }],
+    };
+    return { request: req, mode: "without_echo", chars: JSON.stringify(req).length };
+  }
 
   const withEcho = {
     ...baseRequest,

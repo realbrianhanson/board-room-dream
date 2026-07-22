@@ -44,6 +44,7 @@ import {
   RepoContractUnavailable,
 } from "./queues.ts";
 import { BatchContextTooLarge, MarkdownCompactionImpossible, buildValidationRetryRequest } from "../_shared/batch-context.ts";
+import { tryCloseJsonTail } from "../_shared/audit-findings.ts";
 import {
   finalizeChangeRequestAuthorityError,
   finalizePlanAuthorityError,
@@ -424,7 +425,20 @@ async function executeStep(admin: any, run: any, step: any) {
 
     if (jsonMode) {
       let candidate: any = null;
+      let tailClosed: string | null = null;
       try { candidate = JSON.parse(content); } catch { candidate = null; }
+      if (!candidate) {
+        // Conservative tail-closure rescue: the audit-map path repeatedly
+        // truncates one token short of the outer "]}" (run e2c5faf3). The
+        // helper appends ONLY the missing "}"/"]" needed to balance and re-
+        // parses; refuses on unterminated strings, dangling commas, or any
+        // other ambiguity. Rescued output must still pass validateStepJson.
+        const rescued = tryCloseJsonTail(content);
+        if (rescued.ok) {
+          candidate = rescued.value;
+          tailClosed = rescued.closed;
+        }
+      }
       const err = candidate ? validateStepJson(step.step_key, candidate, run.kind) : "Response was not parseable JSON.";
       if (err) {
         // Detect truncation: provider finish_reason of length/max_tokens, OR
@@ -464,9 +478,13 @@ async function executeStep(admin: any, run: any, step: any) {
         return;
       }
       let parsed: any = candidate;
-      if (fallbackMeta) {
+      if (fallbackMeta || tailClosed) {
         if (!parsed || typeof parsed !== "object") parsed = {};
-        parsed._meta = { ...(parsed._meta ?? {}), fallback: fallbackMeta };
+        parsed._meta = {
+          ...(parsed._meta ?? {}),
+          ...(fallbackMeta ? { fallback: fallbackMeta } : {}),
+          ...(tailClosed ? { tail_closed: tailClosed } : {}),
+        };
       }
       await admin
         .from("run_steps")

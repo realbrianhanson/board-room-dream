@@ -2,7 +2,7 @@
 // Assembles the code payload, creates the audit + boardroom_run + parallel steps,
 // then kicks the orchestrator. Chair merge + finalization happen in the orchestrator.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-import { assembleFromGithub, formatFiles, ghToken, redactSecrets } from "../_shared/github-payload.ts";
+import { assembleFromGithub, ghToken, redactSecrets } from "../_shared/github-payload.ts";
 import { loadFieldManual } from "../_shared/lovable-field-manual.ts";
 import { checkFinalAuditEligibility } from "../_shared/audit-eligibility.ts";
 import {
@@ -27,7 +27,7 @@ const ORCH_URL = `${SUPABASE_URL}/functions/v1/boardroom-orchestrator`;
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every audit-runner change.
-export const BUILD_VERSION = "2026-07-28.source-ceiling-1p5mib.n1";
+export const BUILD_VERSION = "2026-07-28.audit-json-fragment-r2.o1";
 
 function j(status: number, body: any) {
   return new Response(JSON.stringify(body), {
@@ -83,21 +83,20 @@ const SECURITY_CHECKLIST = `SECURITY CHECKLIST (verbatim, must be applied to cod
 - Storage buckets private, user-scoped paths, signed URLs only.
 - Missing optional config never crashes — graceful designed state.`;
 
-import { FINDING_SCHEMA_DOC, CAPS } from "../_shared/audit-findings.ts";
+import { CAPS, MAP_FINDING_SCHEMA_DOC } from "../_shared/audit-findings.ts";
 
 function seatPrompt(seat: "inspector" | "contrarian" | "strategist", isFinal: boolean): string {
   const jsonShape = `Return ONLY valid JSON:
-{
-  "findings": [ ...max ${CAPS.seatFindingsMax} objects... ]
-}
+{ "findings": [ ...max ${CAPS.mapFindingsMax} objects... ] }
 No findings = { "findings": [] }.
 
-${FINDING_SCHEMA_DOC}
+${MAP_FINDING_SCHEMA_DOC}
 
-Output discipline (the merge step rejects violators):
-- MAX ${CAPS.seatFindingsMax} findings. If you have more, keep the highest-severity ones and merge duplicates.
-- Total serialized JSON must be <= ${CAPS.seatSerializedMax} characters.
-- Keep description and evidence tight — the Chair will read every one of yours plus two other seats'.`;
+Output discipline (hard-enforced, the merge step rejects violators):
+- MAX ${CAPS.mapFindingsMax} findings per chunk. If more, keep the highest-severity items with the strongest evidence and merge duplicates.
+- Total serialized JSON MUST be <= ${CAPS.mapSerializedMax} characters.
+- Prefer compact one-line JSON. No prose, no code fences, no trailing partial object — every finding must be a complete JSON object.
+- Cite the original repo-relative file_path (never a "fragment N of M" label).`;
   if (seat === "inspector") {
     return `You are the Inspector. Read the code against the batch contract and PRD. Flag: contract misses (batch prompt says X, code does Y or is missing), broken imports, unreferenced code, incoherent naming, dead flows. ${isFinal ? "This is a full A-Z audit — check that the whole app coheres, not just one batch." : ""}
 ${jsonShape}`;
@@ -148,7 +147,14 @@ export const MAX_TOTAL_BYTES = 1_572_864;
 // profile and is intentionally NOT constrained here.
 export const AUDIT_MAP_TEMPERATURE = 0.2;
 export const AUDIT_MAP_REASONING_EFFORT: "low" | "medium" | "high" = "low";
-export const AUDIT_MAP_MAX_TOKENS = 2400;
+// Increased from 2400 → 4000. Live run e2c5faf3 (audit_inspector_c20) shows the
+// prior 2400 budget was too tight for the schema + model reasoning tokens: the
+// response was structurally complete through three finding objects but ended
+// one token short of the outer "]}". 4000 tokens + the narrower map-schema
+// caps in CAPS.map* give the low-reasoning map call actual headroom. Every
+// other bounded control (temperature, reasoning effort, chunk size, chunk
+// count, timeouts) stays locked.
+export const AUDIT_MAP_MAX_TOKENS = 4000;
 
 // formatFiles() emits, per file:
 //   "\n=== FILE: <path> (<bytes> bytes) ===\n<content>"
@@ -160,9 +166,18 @@ export const AUDIT_MAP_MAX_TOKENS = 2400;
 export const FORMAT_STATIC_WRAPPER = 25;
 export const FORMAT_DIGIT_RESERVE = 6;
 export const FORMAT_JOIN_SEP = 1;
+// Extra bytes reserved per rendered file/fragment header to accommodate the
+// audit-specific " (fragment N of M)" marker emitted by renderAuditChunkGroup
+// when a source file spans multiple chunks. Worst-case marker is
+// " (fragment 20 of 20)" = 20 bytes; reserve 22 for a safety margin. The
+// reserve is folded into wrapperOverhead so the packer always leaves room —
+// the marker is only actually emitted for fragmented files, but reserving
+// unconditionally keeps the invariant math simple and cheap.
+export const AUDIT_FRAGMENT_HEADER_RESERVE = 22;
 
 function wrapperOverhead(pathBytes: number, digitsReserve: number, isFirst: boolean): number {
   return FORMAT_STATIC_WRAPPER + pathBytes + digitsReserve +
+    AUDIT_FRAGMENT_HEADER_RESERVE +
     (isFirst ? 0 : FORMAT_JOIN_SEP);
 }
 
@@ -267,6 +282,51 @@ export function chunkFilesFor(
   return chunks;
 }
 
+// A rendered chunk fragment. `fragmentIndex` and `fragmentTotal` are the
+// per-path fragment number and total across the WHOLE audit's chunk set
+// (annotateFragments assigns them after packing).
+export type ChunkFragment = {
+  path: string;
+  content: string;
+  bytes: number;
+  fragmentIndex?: number;
+  fragmentTotal?: number;
+};
+
+// Post-pack annotation: walk every group, count how many fragments each
+// original path was split into, and assign 1-based fragmentIndex/total.
+// Preserves the input groups' order and content — only enriches metadata.
+export function annotateFragments(
+  groups: { path: string; content: string; bytes: number }[][],
+): ChunkFragment[][] {
+  const totals = new Map<string, number>();
+  for (const g of groups) for (const f of g) totals.set(f.path, (totals.get(f.path) ?? 0) + 1);
+  const seen = new Map<string, number>();
+  return groups.map((g) =>
+    g.map((f) => {
+      const total = totals.get(f.path) ?? 1;
+      const idx = (seen.get(f.path) ?? 0) + 1;
+      seen.set(f.path, idx);
+      return { ...f, fragmentIndex: idx, fragmentTotal: total };
+    })
+  );
+}
+
+// Audit-specific renderer. Emits an unambiguous fragment marker whenever
+// a source file was split across chunks so the seat can distinguish a real
+// file boundary from a mid-token/mid-statement fragment boundary. Non-
+// fragmented files render identically to formatFiles() to keep single-file
+// audits byte-for-byte stable.
+export function renderAuditChunkGroup(group: ChunkFragment[]): string {
+  if (!group.length) return "(no code files were readable)";
+  return group.map((f) => {
+    const total = f.fragmentTotal ?? 1;
+    const idx = f.fragmentIndex ?? 1;
+    const marker = total > 1 ? ` (fragment ${idx} of ${total})` : "";
+    return `\n=== FILE: ${f.path}${marker} (${f.bytes} bytes) ===\n${f.content}`;
+  }).join("\n");
+}
+
 export function assertChunkInvariants(
   chunkGroups: { path: string; content: string; bytes: number }[][],
 ): void {
@@ -276,8 +336,10 @@ export function assertChunkInvariants(
     );
   }
   const encoder = new TextEncoder();
+  const annotated = annotateFragments(chunkGroups);
   let totalSource = 0;
-  for (const group of chunkGroups) {
+  for (let gi = 0; gi < annotated.length; gi++) {
+    const group = annotated[gi];
     let groupSource = 0;
     for (const f of group) {
       if (f.bytes > CHUNK_BYTES) {
@@ -288,7 +350,7 @@ export function assertChunkInvariants(
       groupSource += f.bytes;
     }
     totalSource += groupSource;
-    const renderedBytes = encoder.encode(formatFiles(group)).length;
+    const renderedBytes = encoder.encode(renderAuditChunkGroup(group)).length;
     if (renderedBytes > CHUNK_BYTES) {
       throw new Error(
         `audit RENDERED chunk exceeds ${CHUNK_BYTES} bytes (${renderedBytes}) with ${group.length} files`,
@@ -305,8 +367,9 @@ export function assertChunkInvariants(
 function chunkFiles(files: { path: string; content: string; bytes: number }[]): string[] {
   const groups = chunkFilesFor(files);
   assertChunkInvariants(groups);
-  const rendered = groups.map((g) => formatFiles(g));
-  return rendered.length ? rendered : [formatFiles([])];
+  const annotated = annotateFragments(groups);
+  const rendered = annotated.map((g) => renderAuditChunkGroup(g));
+  return rendered.length ? rendered : [renderAuditChunkGroup([])];
 }
 
 
@@ -349,7 +412,7 @@ async function insertAuditSteps(
   const rows: any[] = [];
   chunks.forEach((code, idx) => {
     const chunkNote = multi
-      ? `\n\nCHUNK ${idx + 1} OF ${chunks.length} — the app is split across parallel review steps. The full file tree (for orientation only):\n${fileTree.join("\n")}\n\nFlag only issues you can verify in THIS chunk's code; do not report files you cannot see as missing.`
+      ? `\n\nCHUNK ${idx + 1} OF ${chunks.length} — the app is split across parallel review steps. The full file tree (for orientation only):\n${fileTree.join("\n")}\n\nFlag only issues you can verify in THIS chunk's code; do not report files you cannot see as missing.\n\nFRAGMENT BOUNDARY RULE (hard): individual files in the CODE section may be split across chunks and shown as "=== FILE: <path> (fragment N of M) (<bytes> bytes) ===". A non-first fragment MAY start mid-token/mid-statement/mid-comment and a non-final fragment MAY end mid-token — that is packaging, not source truncation. Never report a file as truncated, malformed, or syntactically broken solely because a fragment starts or ends mid-token. Cite the original repo-relative path in file_path, never the fragment label.`
       : "";
     const user = `${contract}${outcomeBlock}${chunkNote}
 

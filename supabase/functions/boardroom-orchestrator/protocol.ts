@@ -297,7 +297,9 @@ export function correctionForStep(stepKey: string): string {
     return "Your audit merge JSON was truncated. Preserve the required merge schema; max 30 deduplicated findings; keep every P0/P1; compress evidence; total JSON <=18,000 characters.";
   }
   if (/^audit_(chair|strategist|contrarian|inspector|reserve)(_c\d+)?$/.test(key)) {
-    return "Your audit report JSON was truncated. Preserve the required audit report schema; max 12 findings; keep concise evidence (one short quote or path each); total JSON <=8,000 characters.";
+    // Materially smaller correction than the base map schema. Never asks
+    // for the 12/8000 shape that caused the original truncation.
+    return "Your prior audit-map JSON was invalid or truncated. Emit ONLY compact one-line valid JSON of the form {\"findings\":[...]}. MAX 3 highest-severity findings; each finding must be a complete object with severity, file_path, title (<=120 chars), description (<=240 chars), evidence (<=160 chars — a concrete short quote or exact construct), confidence, line_start, line_end. Every finding object must be COMPLETE — do NOT leave a trailing partial object. Total JSON <=3,000 characters. Do NOT return 12 findings or 8,000-character schema — that limit caused the original truncation. Reconstruct only complete findings from your prior reasoning; if in doubt, drop the finding rather than emit a partial one. Fragment boundaries in the source (\"fragment N of M\") are packaging, NOT truncated files.";
   }
   return "Return only the required JSON schema from the system prompt; keep every required field; compress prose and arrays to fit.";
 }

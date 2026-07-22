@@ -21,12 +21,16 @@ Deno.test("correctionForStep — batch review routes to review copy (never batch
   }
 });
 
-Deno.test("correctionForStep — audit seat report routes to audit report copy", () => {
+Deno.test("correctionForStep — audit seat report routes to tightened audit-map copy (AUDIT-JSON-FRAGMENT-R2)", () => {
   for (const k of ["audit_chair", "audit_inspector", "audit_strategist_c2", "audit_contrarian_c11"]) {
     const c = correctionForStep(k);
-    assertStringIncludes(c, "audit report");
-    assertStringIncludes(c, "max 12 findings");
-    assertStringIncludes(c, "<=8,000 characters");
+    // Explicitly tightened after run e2c5faf3: MAX 3 findings, <=3,000 chars.
+    assertStringIncludes(c, "audit-map JSON");
+    assertStringIncludes(c, "MAX 3 highest-severity findings");
+    assertStringIncludes(c, "<=3,000 characters");
+    // Must NOT reintroduce the shape that caused the original truncation.
+    assert(!/Total JSON\s*<=?\s*8[, ]?000/i.test(c), `audit correction must not request an 8,000-char limit`);
+    assert(!/MAX\s*12\s/i.test(c), `audit correction must not request 12 findings`);
     assert(!c.includes("6 batches"), `audit must not receive batch-schema copy`);
     assert(!c.includes("{verdict, issues}"), `audit must not receive review-schema copy`);
   }
