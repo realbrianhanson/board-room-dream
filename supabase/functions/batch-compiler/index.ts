@@ -19,7 +19,7 @@ import { assembleFromGithub, formatFiles, ghToken, redactSecrets } from "../_sha
 import { loadFieldManual } from "../_shared/lovable-field-manual.ts";
 import { batchAuthorityError, shapeError, type Parsed } from "./validators.ts";
 
-const BUILD_VERSION = "2026-07-22.compile-authority.f1";
+const BUILD_VERSION = "2026-07-22.compile-authority.f1b";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -263,7 +263,7 @@ Deno.serve(async (req) => {
     loadOpenFindings(admin, batch.project_id),
     loadFieldManual(admin),
     loadCurrentBatches(admin, batch.project_id),
-    source === "github" ? loadSchemaInventory(admin) : Promise.resolve({ tables: [] as string[], columnsByTable: {} as Record<string, string[]>, rpcs: [] as string[], objectsLower: new Set<string>() }),
+    source === "github" ? loadSchemaInventory(admin) : Promise.resolve({ tables: [], routines: [], objectsLower: new Set<string>(), ok: false, reason: "paste source: schema inventory not loaded" } as SchemaInventory),
     admin.from("batches").select("id", { count: "exact", head: true }).eq("project_id", batch.project_id),
   ]);
 
@@ -282,10 +282,34 @@ Deno.serve(async (req) => {
   const currentBatchesBlock = currentBatches.length
     ? currentBatches.map((b: any) => `${b.batch_no === batch.batch_no ? "→" : " "} Batch ${b.batch_no} "${b.title}" · channel ${b.channel} · ${b.status}`).join("\n")
     : "(no batches yet)";
+  // Fail closed: GitHub compiles REQUIRE a healthy inventory. Never let a
+  // zero/malformed inventory silently degrade to a ready compile.
+  if (source === "github" && !schemaInv.ok) {
+    const meta = {
+      status: "blocked",
+      head_sha: headSha,
+      files_analyzed: filesAnalyzed,
+      source,
+      original_batch_no: Number(batch.batch_no),
+      original_title: batch.title,
+      original_channel: batch.channel,
+      reason: "Live database schema inventory unavailable",
+      inventory_reason: schemaInv.reason ?? "unknown",
+      build_version: BUILD_VERSION,
+    };
+    await admin
+      .from("batches")
+      .update({ compiled_prompt_md: null, compiled_at: null, compile_meta: meta })
+      .eq("id", batch.id);
+    return j(503, {
+      status: "blocked",
+      error: "Live database schema inventory unavailable — the compiler will not emit a prompt without it. Please retry in a moment; the batch has been reset for recompile.",
+      inventory_reason: schemaInv.reason ?? "unknown",
+      retryable: true,
+    });
+  }
   const schemaBlock = source === "github"
-    ? (schemaInv.tables.length || schemaInv.rpcs.length
-        ? `TABLES:\n${schemaInv.tables.map((t) => `- ${t}(${(schemaInv.columnsByTable[t] ?? []).slice(0, 12).join(", ")}${(schemaInv.columnsByTable[t] ?? []).length > 12 ? ", …" : ""})`).join("\n")}\nRPCs:\n${schemaInv.rpcs.map((r) => `- ${r}()`).join("\n")}`
-        : "(schema inventory unavailable)")
+    ? renderInventory(schemaInv)
     : "(schema inventory not shown for paste source — assume any database object may already exist and BLOCK on uncertainty rather than emitting a CREATE)";
 
   const system = `You are the Chair, compiling the NEXT build prompt for a non-technical founder's Lovable project. You do not write a plan from scratch — you take THIS ONE Runway batch (the arrow-marked row in CURRENT RUNWAY SEQUENCE) and re-express it against the code that now actually exists.
