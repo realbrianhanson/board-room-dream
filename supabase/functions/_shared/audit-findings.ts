@@ -401,6 +401,28 @@ export function downgradeUnsupported(
       return { ...f, severity: "P2" as Severity };
     }
 
+    // Rule 4b (R3): client-surface security claim (frontend src/* alleging
+    // auth/admin/RLS/privilege/unauthorized/direct-SELECT bypass) requires a
+    // SERVER_AUTH marker quoting the current vulnerable server construct.
+    if ((sev === "P0" || sev === "P1")
+        && looksLikeClientSurfaceSecurityClaim(f.title, f.description, f.file_path)
+        && !hasServerAuthMarker(f.evidence)) {
+      push(sev, "P2", "client-surface security claim lacks SERVER_AUTH: quote of the current vulnerable server construct");
+      return { ...f, severity: "P2" as Severity };
+    }
+
+    // Rule 4c (R3): product-strategy / copy / positioning / pricing /
+    // onboarding / buyer-reach claims cannot be P0/P1 without OWNER_CONTRACT
+    // (verbatim owner or locked-PRD requirement) OR a RUNTIME_FAILURE marker.
+    // They remain visible as P2 product-quality findings.
+    if ((sev === "P0" || sev === "P1")
+        && looksLikeProductStrategyClaim(f.title, f.description)
+        && !hasOwnerContractMarker(f.evidence)
+        && !hasRuntimeFailureMarker(f.evidence)) {
+      push(sev, "P2", "product-strategy/copy claim lacks OWNER_CONTRACT: or RUNTIME_FAILURE: corroboration");
+      return { ...f, severity: "P2" as Severity };
+    }
+
     // Rule 5: speculative WHY ("appears", "may", "could", "likely", "seems")
     // cannot support P0/P1 no matter how well-formed the QUOTE looks.
     if ((sev === "P0" || sev === "P1") && whyIsSpeculative(f.evidence)) {
