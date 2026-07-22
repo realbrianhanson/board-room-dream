@@ -400,9 +400,23 @@ export function tryCloseJsonTail(
   let closers = "";
   for (let i = stack.length - 1; i >= 0; i--) closers += stack[i] === "{" ? "}" : "]";
   const attempt = s + closers;
-  try {
-    return { ok: true, value: JSON.parse(attempt), closed: closers };
-  } catch (e) {
-    return { ok: false, reason: `parse failed after appending ${JSON.stringify(closers)}: ${(e as Error).message}` };
-  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(attempt); }
+  catch (e) { return { ok: false, reason: `parse failed after appending ${JSON.stringify(closers)}: ${(e as Error).message}` }; }
+  const shapeErr = validateRescuedShape(parsed);
+  if (shapeErr) return { ok: false, reason: shapeErr };
+  return { ok: true, value: parsed, closed: closers };
+}
+
+// Rescued JSON must at minimum look like a map-step response: an object with
+// a `findings` array whose entries survive normalizeFindings. This keeps the
+// rescue helper from ever handing the orchestrator a payload the seat/merge
+// validators would reject a step later.
+function validateRescuedShape(v: unknown): string | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return "rescued JSON is not an object";
+  const findings = (v as { findings?: unknown }).findings;
+  if (!Array.isArray(findings)) return "rescued JSON missing findings array";
+  const cleaned = normalizeFindings(findings);
+  if (cleaned.length === 0 && findings.length > 0) return "no findings survived normalization";
+  return validateSeatReport(cleaned);
 }
