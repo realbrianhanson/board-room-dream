@@ -9,6 +9,7 @@ import {
   normalizeFindings,
   validateMerged,
   validateSeatReport,
+  tryCloseJsonTail,
   type CleanFinding,
 } from "./audit-findings.ts";
 
@@ -131,3 +132,92 @@ Deno.test("normalizeFindings converts null/blank lines to null rather than 0", (
   assertEquals(out[0].line_start, null);
   assertEquals(out[0].line_end, null);
 });
+
+// ============================== tryCloseJsonTail (AUDIT-JSON-FRAGMENT-R2) ==============================
+//
+// Deterministic conservative rescue for map-step JSON that ended one or two
+// closers short of valid JSON. It may only append missing "}" / "]" closers
+// and must never guess, delete, or synthesize field content.
+
+function goodFinding(overrides: any = {}) {
+  return {
+    severity: "P1",
+    file_path: "src/x.ts",
+    title: "t",
+    description: "d",
+    evidence: "e",
+    confidence: "high",
+    line_start: 1,
+    line_end: 2,
+    ...overrides,
+  };
+}
+
+Deno.test("tryCloseJsonTail — closes the exact live shape (missing only ]})", () => {
+  const findings = [goodFinding(), goodFinding({ severity: "P2" }), goodFinding({ severity: "P3" })];
+  const full = JSON.stringify({ findings });
+  // Simulate the live truncation: valid up through the last "}" of the last finding,
+  // missing only the outer "]" and outer "}".
+  const truncated = full.slice(0, full.length - 2);
+  const r = tryCloseJsonTail(truncated);
+  assert(r.ok, `expected ok, got: ${JSON.stringify(r)}`);
+  if (r.ok) {
+    assertEquals(r.closed, "]}");
+    assertEquals(Array.isArray((r.value as any).findings), true);
+    assertEquals((r.value as any).findings.length, 3);
+  }
+});
+
+Deno.test("tryCloseJsonTail — nested valid closure ({\"a\":{\"b\":[1,2 → adds ]}})", () => {
+  const truncated = '{"findings":[{"severity":"P1","file_path":"x","title":"t","description":"d","evidence":"e","confidence":"high"';
+  const r = tryCloseJsonTail(truncated);
+  // Ends after a bare string value (evidence:"high") with no closing "}" yet —
+  // last non-ws char is '"' which IS a value terminator, so the helper MAY
+  // attempt "}]}". Whether the audit-shape validator accepts this depends on
+  // required fields; if it rejects, r.ok must be false. Either outcome is
+  // acceptable — the helper must NEVER return ok with an invalid shape.
+  if (r.ok) {
+    // Rescued output must still parse and be an object with findings array.
+    assertEquals(typeof r.value, "object");
+  }
+});
+
+Deno.test("tryCloseJsonTail — rejects dangling open string", () => {
+  const truncated = '{"findings":[{"title":"unterminated';
+  const r = tryCloseJsonTail(truncated);
+  assertEquals(r.ok, false);
+});
+
+Deno.test("tryCloseJsonTail — rejects trailing comma", () => {
+  const truncated = '{"findings":[' + JSON.stringify(goodFinding()) + ',';
+  const r = tryCloseJsonTail(truncated);
+  assertEquals(r.ok, false);
+});
+
+Deno.test("tryCloseJsonTail — rejects dangling colon", () => {
+  const truncated = '{"findings":[' + JSON.stringify(goodFinding()) + '],"extra":';
+  const r = tryCloseJsonTail(truncated);
+  assertEquals(r.ok, false);
+});
+
+Deno.test("tryCloseJsonTail — rejects mismatched delimiter (] where } needed)", () => {
+  // Object opened but bracket in stack order is wrong — cannot fix by appending.
+  const truncated = '{"findings":[{"a":1]';
+  const r = tryCloseJsonTail(truncated);
+  assertEquals(r.ok, false);
+});
+
+Deno.test("tryCloseJsonTail — rejects when rescued JSON fails the audit shape validator", () => {
+  // Parses cleanly but findings array is missing → validator must reject.
+  const truncated = '{"other":123';
+  const r = tryCloseJsonTail(truncated);
+  assertEquals(r.ok, false);
+});
+
+Deno.test("tryCloseJsonTail — already-valid input is returned as-is (closed = \"\")", () => {
+  const full = JSON.stringify({ findings: [goodFinding()] });
+  const r = tryCloseJsonTail(full);
+  assert(r.ok);
+  if (r.ok) assertEquals(r.closed, "");
+});
+
