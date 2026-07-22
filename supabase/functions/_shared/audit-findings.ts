@@ -320,6 +320,34 @@ export function validateMerged(
   return null;
 }
 
+// Shared merge-candidate evaluator used by BOTH validateStepJson (before the
+// step is marked completed, so a merge-cap violation triggers the existing
+// single correction pass) and finalizeAudit (defense in depth). Runs the
+// full pipeline: normalize → dedupe → downgrade unsupported P0/P1 → strict
+// validateMerged. Never truncates or synthesizes; a cap violation surfaces
+// as an error string exactly like the seat-report path.
+export type ChairMergeEvaluation = {
+  error: string | null;
+  findings: CleanFinding[];
+  downgrades: DowngradeRecord[];
+  summary: string;
+  verdict: "clean" | "findings";
+};
+
+export function evaluateChairMergeCandidate(parsed: unknown): ChairMergeEvaluation {
+  const obj = (parsed && typeof parsed === "object") ? (parsed as any) : {};
+  const rawFindings = Array.isArray(obj.findings) ? obj.findings : [];
+  const summary = typeof obj.summary === "string" ? obj.summary : "";
+  const normalized = normalizeFindings(rawFindings);
+  const deduped = dedupeFindings(normalized);
+  const { findings, downgrades } = downgradeUnsupported(deduped);
+  const error = validateMerged(findings, summary);
+  const verdictClaim = obj.verdict === "clean" ? "clean" : "findings";
+  const verdict: "clean" | "findings" =
+    verdictClaim === "clean" || findings.length === 0 ? "clean" : "findings";
+  return { error, findings, downgrades, summary, verdict };
+}
+
 export function validateSeatReport(findings: CleanFinding[]): string | null {
   if (findings.length > CAPS.seatFindingsMax) {
     return `seat findings has ${findings.length} entries — max ${CAPS.seatFindingsMax}.`;
@@ -330,6 +358,7 @@ export function validateSeatReport(findings: CleanFinding[]): string | null {
   }
   return null;
 }
+
 
 // Build the compact merge input: seat reports collapsed to normalized
 // finding objects only, with a deterministic overall payload cap. Strips

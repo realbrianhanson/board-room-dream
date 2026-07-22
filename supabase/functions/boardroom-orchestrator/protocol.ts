@@ -3,10 +3,12 @@
 // and the pure helpers that read candidate documents out of step history.
 // No step queuing here; the only I/O is the consensus-threshold lookup.
 
+import { evaluateChairMergeCandidate } from "../_shared/audit-findings.ts";
 
 export const SEATS = ["chair", "strategist", "contrarian", "inspector"] as const;
 
 export type Seat = typeof SEATS[number];
+
 
 
 export const SEAT_LABEL: Record<Seat, string> = {
