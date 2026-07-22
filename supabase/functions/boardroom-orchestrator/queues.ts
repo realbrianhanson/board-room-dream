@@ -912,7 +912,7 @@ Constraints: 6-8 batches (prefer 6), unique ascending integer batch_no starting 
     ? `\n\nDEFERRED VALUE (board decision log + dissent ledger) — ideas debated and not adopted into the core plan. Harvest anything still valuable and consistent with the locked plan into the final Enhancement batches:\n${JSON.stringify(deferredRaw).slice(0, 4000)}`
     : "";
 
-  const user = `${repoContract}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}${deferredBlock}\n\nProduce the JSON now.`;
+  const user = `${repoContract}\n\nLOCKED PLAN (compact — full text is in the plan_versions table)\n\n${compactPlan || "(no plan)"}\n\nPRD (compact — full text is in plan_versions.prd_md)\n\n${compactPrd || "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}${deferredBlock}\n\nProduce the JSON now.`;
 
   await queueSteps(admin, run, {
     run_id: run.id,
