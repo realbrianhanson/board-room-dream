@@ -97,6 +97,8 @@ Client-side vs server-side authorization:
 
 Do NOT invent a security-contract requirement. In particular, storing a role column on profiles is not automatically unsafe when database triggers/policies prevent self-mutation; a separate user_roles table is one architecture, not a universal requirement.
 
+Preserve SERVER_AUTH and OWNER_CONTRACT markers verbatim from seat findings within the evidence character cap — the shared validator uses them to keep client-surface security and product-strategy findings at P0/P1 severity. Never strip them during merge.
+
 Cross-file composition is real evidence:
 - Prompts, wrappers, and providers commonly compose across files. Before claiming "seats receive the identical prompt" or "no constitution is prepended", verify with a QUOTE from the actual wrapper (for example callSeat in supabase/functions/_shared/openrouter-proxy.ts prepends the constitution and each model_registry.role_prompt). Contradictory current source wins over any model claim of absence.
 
