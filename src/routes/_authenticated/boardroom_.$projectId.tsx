@@ -27,11 +27,15 @@ function BoardroomProjectPage() {
   const [gateLoading, setGateLoading] = useState<boolean>(true);
   const [hasSuccessfulAudit, setHasSuccessfulAudit] = useState<boolean>(false);
   const [hasSafePlan, setHasSafePlan] = useState<boolean>(false);
+  const [gateError, setGateError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [{ data: proj }, { data: audits }, { data: plans }] = await Promise.all([
+      setGateLoading(true);
+      setGateError(null);
+      const [projRes, auditsRes, plansRes] = await Promise.all([
         supabase.from("projects").select("name, is_import").eq("id", projectId).maybeSingle(),
         supabase
           .from("audits")
@@ -49,23 +53,49 @@ function BoardroomProjectPage() {
           .limit(1),
       ]);
       if (cancelled) return;
-      if (proj?.name) setProjectName(proj.name);
-      setIsImport(!!proj?.is_import);
-      setHasSuccessfulAudit((audits ?? []).length > 0);
-      setHasSafePlan((plans ?? []).length > 0);
+      const firstErr = projRes.error?.message ?? auditsRes.error?.message ?? plansRes.error?.message ?? null;
+      if (firstErr) {
+        setGateError(firstErr);
+        setGateLoading(false);
+        return;
+      }
+      if (projRes.data?.name) setProjectName(projRes.data.name);
+      setIsImport(!!projRes.data?.is_import);
+      setHasSuccessfulAudit((auditsRes.data ?? []).length > 0);
+      setHasSafePlan((plansRes.data ?? []).length > 0);
       setGateLoading(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, reloadKey]);
 
   const extraConveneGate = () => {
     if (!isImport) return null;
-    if (gateLoading) return IMPORT_AUDIT_GATE_MESSAGE;
+    if (gateLoading || gateError) return null;
     if (!hasSuccessfulAudit) return IMPORT_AUDIT_GATE_MESSAGE;
     return null;
   };
+
+  if (gateError) {
+    return (
+      <div className="mx-auto max-w-6xl px-6 py-14">
+        <Link to="/dashboard" className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground hover:text-foreground">
+          ← Dashboard
+        </Link>
+        <div className="mt-8 rounded-xl border border-[hsl(8_60%_45%/0.4)] bg-[hsl(8_60%_25%/0.15)] p-6">
+          <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(8_60%_70%)]">Couldn't load the Boardroom gate</p>
+          <p className="mt-2 text-sm text-foreground">{gateError}</p>
+          <button
+            onClick={() => setReloadKey((k) => k + 1)}
+            className="mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-10 md:px-10 md:py-14">
