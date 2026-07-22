@@ -1095,6 +1095,7 @@ function BatchCard({
   fixBatch: Batch | null;
   ghRepo: string | null;
   onCopyPrompt: () => void;
+  onCopyVerification: () => void;
   onAdvance: (next: Batch["status"]) => void;
   onOpenRollback: () => void;
   onRequestSkip: () => void;
