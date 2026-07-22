@@ -68,9 +68,13 @@ Deno.test("queues.ts — no unaudited direct run_steps insert may introduce scop
     const idx = src.indexOf('admin.from("run_steps").insert(', cursor);
     if (idx === -1) break;
     cursor = idx + 1;
-    // Skip the helper wrapper definition itself.
+    // Skip the helper wrapper definition itself (line 104: `return admin...`).
     const before = src.slice(Math.max(0, idx - 80), idx);
     if (/return\s+$/.test(before)) continue;
+    // Skip prose mentions of the helper inside comments (line starts with `//`).
+    const lineStart = src.lastIndexOf("\n", idx) + 1;
+    const lineLead = src.slice(lineStart, idx);
+    if (/^\s*(\/\/|\*)/.test(lineLead)) continue;
     const window = src.slice(idx, idx + 800);
     const m = window.match(/step_key:\s*"([^"]+)"/);
     if (m) found.push(m[1]);
