@@ -318,12 +318,14 @@ export async function latestAuditSummary(admin: any, projectId: string) {
     .select("id, kind, status, summary, completed_at")
     .eq("project_id", projectId)
     .eq("kind", "final_az")
+    .in("status", ["clean", "findings"])
     .not("summary", "is", null)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   return data ?? null;
 }
+
 
 
 // ============================== Step queuing ==============================
