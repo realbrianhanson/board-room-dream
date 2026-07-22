@@ -55,13 +55,13 @@ type Row = Record<string, any>;
 function makeAdmin(seed: {
   audits: Row[]; findings: Row[]; batches: Row[]; archives: Row[];
 }) {
-  const state = {
+  const state: Record<string, Row[]> = {
     audits: [...seed.audits],
-    findings: [...seed.findings],
+    audit_findings: [...seed.findings],
     batches: [...seed.batches],
-    archives: [...seed.archives],
+    batch_generation_archives: [...seed.archives],
   };
-  function from(table: keyof typeof state) {
+  function from(table: string) {
     const filters: Array<(r: Row) => boolean> = [];
     const q: any = {
       _table: table,
