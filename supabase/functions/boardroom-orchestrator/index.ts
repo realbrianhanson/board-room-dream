@@ -327,8 +327,10 @@ async function executeStep(admin: any, run: any, step: any) {
         await requeueForTimeout(admin, step);
         return;
       }
-      // Pre-response 429/5xx/network blip: one quick same-invocation retry.
-      if (networkAttempt === 0) {
+      // Strictly classified quick retry: ONLY pre-response network failures,
+      // 429, or 5xx. Any other 4xx, validation, budget, or unexpected error
+      // fails the step immediately — no blind same-invocation retry.
+      if (networkAttempt === 0 && shouldQuickRetry(e)) {
         networkAttempt++;
         await new Promise((r) => setTimeout(r, 800));
         continue;
