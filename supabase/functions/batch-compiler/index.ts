@@ -323,12 +323,14 @@ Deno.serve(async (req) => {
   // Compiler INDEPENDENTLY reloads owner authority; it never trusts an
   // upstream "reviewed" flag from a locked plan or batch draft. Founder
   // notes come from BOTH the run that produced the locked plan
-  // (plan_versions.source_run_id) and the most recent batches-generation run
-  // for this project. Intake + approved change requests are always included.
+  // (plan_versions.source_run_id) and the latest terminal-successful
+  // batches-generation run created at or before THIS batch's created_at.
+  // Intake + approved change requests are always included.
   const extraFounderNotes = await loadRelevantFounderNotes(
     admin,
     batch.project_id,
     (plan as any)?.source_run_id ?? null,
+    (batch as any)?.created_at ?? null,
   );
   const authority = await loadOwnerAuthority(admin, {
     projectId: batch.project_id,
