@@ -131,6 +131,13 @@ function DashboardPage() {
   const [impDescription, setImpDescription] = useState("");
   const [impUrl, setImpUrl] = useState("");
   const [impGoals, setImpGoals] = useState<string[]>(["code_audit"]);
+  const [impBuyer, setImpBuyer] = useState("");
+  const [impPaidOffer, setImpPaidOffer] = useState("");
+  const [impPriceAnchor, setImpPriceAnchor] = useState("");
+  const [impUpgradeTrigger, setImpUpgradeTrigger] = useState("");
+  const [impActivation, setImpActivation] = useState("");
+  const [impWow, setImpWow] = useState("");
+  const [impPositioning, setImpPositioning] = useState("");
 
   function resetForms() {
     setMode(null);
@@ -139,6 +146,13 @@ function DashboardPage() {
     setImpDescription("");
     setImpUrl("");
     setImpGoals(["code_audit"]);
+    setImpBuyer("");
+    setImpPaidOffer("");
+    setImpPriceAnchor("");
+    setImpUpgradeTrigger("");
+    setImpActivation("");
+    setImpWow("");
+    setImpPositioning("");
   }
 
   async function load() {
@@ -232,9 +246,25 @@ function DashboardPage() {
     }
   }
 
+  const importStrategyReady =
+    impBuyer.trim().length > 1 &&
+    impPaidOffer.trim().length > 1 &&
+    impPriceAnchor.trim().length > 0 &&
+    impUpgradeTrigger.trim().length > 1 &&
+    impActivation.trim().length > 1 &&
+    impWow.trim().length > 1 &&
+    impPositioning.trim().length > 1;
+
   async function createImport(e: React.FormEvent) {
     e.preventDefault();
-    if (!impName.trim() || !impDescription.trim() || impGoals.length === 0) return;
+    if (
+      !impName.trim() ||
+      !impDescription.trim() ||
+      impGoals.length === 0 ||
+      !importStrategyReady
+    ) {
+      return;
+    }
     setCreating(true);
     try {
       const { data: userData } = await supabase.auth.getUser();
@@ -260,12 +290,23 @@ function DashboardPage() {
           description: impDescription.trim(),
           lovable_project_url: impUrl.trim() || null,
           goals: impGoals,
+          buyer: impBuyer.trim(),
+          paid_offer: impPaidOffer.trim(),
+          price_anchor: impPriceAnchor.trim(),
+          upgrade_trigger: impUpgradeTrigger.trim(),
+          activation_moment: impActivation.trim(),
+          wow_moment: impWow.trim(),
+          positioning: impPositioning.trim(),
         },
       });
       if (iErr) throw iErr;
-      toast.success("Project imported. The board is ready when you are.");
+      toast.success(
+        "Project imported. Link GitHub and run the required A–Z audit next.",
+      );
+      const newProjectId = proj.id;
       resetForms();
       await load();
+      navigate({ to: "/audits/$projectId", params: { projectId: newProjectId } });
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -447,15 +488,66 @@ function DashboardPage() {
               })}
             </div>
           </div>
+          <div className="space-y-4 rounded-lg border border-border bg-surface-2/40 p-4">
+            <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+              Product strategy — the board treats these answers as authority
+            </p>
+            <ImportStrategyField
+              label="Buyer — who uses and pays"
+              value={impBuyer}
+              onChange={setImpBuyer}
+              placeholder="Independent finance advisers running solo practices"
+            />
+            <ImportStrategyField
+              label="Paid offer — what is paid for"
+              value={impPaidOffer}
+              onChange={setImpPaidOffer}
+              placeholder="Weekly compliance briefing PDF · or 'internal/free'"
+            />
+            <ImportStrategyField
+              label="Price anchor"
+              value={impPriceAnchor}
+              onChange={setImpPriceAnchor}
+              placeholder='$29/mo · or "not set — recommend one"'
+            />
+            <ImportStrategyField
+              label="Upgrade trigger — buy, renew, or move up"
+              value={impUpgradeTrigger}
+              onChange={setImpUpgradeTrigger}
+              placeholder="Monthly regulator update lands"
+            />
+            <ImportStrategyField
+              label="Activation moment — first 90 seconds"
+              value={impActivation}
+              onChange={setImpActivation}
+              placeholder="They paste one client scenario and see the flagged risks"
+            />
+            <ImportStrategyField
+              label="Wow moment — the screenshot-worthy one"
+              value={impWow}
+              onChange={setImpWow}
+              placeholder="The one-page risk summary they show a client"
+            />
+            <ImportStrategyField
+              label='Positioning — "Unlike ___, this app ___"'
+              value={impPositioning}
+              onChange={setImpPositioning}
+              placeholder="Unlike compliance PDFs, this app flags the client-specific risk in one glance."
+            />
+          </div>
           <div className="flex gap-2">
             <button
               type="submit"
               disabled={
-                creating || !impName.trim() || !impDescription.trim() || impGoals.length === 0
+                creating ||
+                !impName.trim() ||
+                !impDescription.trim() ||
+                impGoals.length === 0 ||
+                !importStrategyReady
               }
               className="rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
             >
-              {creating ? "Importing…" : "Bring it to the board"}
+              {creating ? "Importing…" : "Import and open the Audit Center"}
             </button>
             <button
               type="button"
@@ -646,5 +738,30 @@ function ProjectCard({
         <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
       </span>
     </div>
+  );
+}
+
+function ImportStrategyField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <label className="block">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="mt-1 w-full rounded-md border border-border bg-surface-1 px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
+      />
+    </label>
   );
 }

@@ -237,7 +237,7 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
   if (stepKey === "batches_chair" || stepKey === "batches_revise_chair") {
     if (!parsed || !Array.isArray(parsed.batches)) return "Missing batches array.";
     const b = parsed.batches;
-    if (b.length < 6 || b.length > 8) return "batches must contain 6-8 items (strongly prefer 6). Merge overlapping concerns rather than adding another batch.";
+    if (b.length < 3 || b.length > 8) return "batches must contain 3-8 items. Merge overlapping concerns rather than adding another batch; do not pad small improvement plans.";
     // Payload size ceiling — total serialized batches must fit under 24,000 chars.
     const payloadLen = JSON.stringify(b).length;
     if (payloadLen > 24000) return `Total serialized batches payload is ${payloadLen} characters — exceeds 24,000. Trim repeated context and prose without cutting scope.`;
@@ -301,7 +301,7 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
 export function correctionForStep(stepKey: string): string {
   const key = String(stepKey ?? "");
   if (key === "batches_chair" || key === "batches_revise_chair") {
-    return "Your JSON was truncated. Return exactly 6 batches unless a 7th/8th is strictly required; each prompt_md 900-2,600 characters; total JSON <=24,000 characters. Preserve required coverage but remove repeated context.";
+    return "Your JSON was truncated. Return 3-8 batches — pick the smallest count that fully covers the locked plan without padding (greenfield builds usually want 6; small improvement plans for imports usually want 3-5). Each prompt_md 900-2,600 characters; total JSON <=24,000 characters. Preserve required coverage but remove repeated context. Do not silently pad to 6 to satisfy an old default.";
   }
   if (key === "batches_review_inspector" || key === "batches_review_contrarian") {
     return "Your review JSON was truncated. Return ONLY {verdict, issues}; max 8 issues; each issue.text 10-280 characters; total JSON <=4,500 characters. Preserve every blocking issue, merge duplicates, no prose.";

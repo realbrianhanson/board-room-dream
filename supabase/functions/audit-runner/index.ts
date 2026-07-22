@@ -5,6 +5,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { assembleFromGithub, ghToken, redactSecrets } from "../_shared/github-payload.ts";
 import { loadFieldManual } from "../_shared/lovable-field-manual.ts";
 import { checkFinalAuditEligibility } from "../_shared/audit-eligibility.ts";
+import { renderImportContract } from "../_shared/import-contract.ts";
 import {
   type ContractBatch,
   renderContractSection,
@@ -27,7 +28,7 @@ const ORCH_URL = `${SUPABASE_URL}/functions/v1/boardroom-orchestrator`;
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every audit-runner change.
-export const BUILD_VERSION = "2026-07-28.audit-finalization-r2";
+export const BUILD_VERSION = "2026-07-28.product-strategy.r1";
 
 function j(status: number, body: any) {
   return new Response(JSON.stringify(body), {
@@ -67,8 +68,7 @@ async function loadImportContract(admin: any, projectId: string): Promise<{ cont
     .maybeSingle();
   const a = data?.answers ?? {};
   if (!a?.imported) return null;
-  const goals = Array.isArray(a.goals) ? a.goals.join(", ") : "";
-  const contract = `IMPORTED APP — the owner already built this and brought it to the board.\n\nDescription: ${a.description ?? ""}\n\nStated goals for the board: ${goals || "(none stated)"}`;
+  const contract = renderImportContract(a);
   return { content_md: contract, prd_md: contract };
 }
 

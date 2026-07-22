@@ -61,4 +61,24 @@ describe("audit-retry selectors", () => {
     expect(latestFinal([older, newer])?.id).toBe("new");
     expect(previousFinals([older, newer]).map((x) => x.id)).toEqual(["old"]);
   });
+
+  it("older running + newer failed still blocks a new start (duplicate guard)", () => {
+    const olderRunning = mk({ id: "old", status: "running", created_at: "2026-07-20T00:00:00Z" });
+    const newerFailed = mk({ id: "new", status: "failed", created_at: "2026-07-25T00:00:00Z" });
+    expect(hasActiveFinal([olderRunning, newerFailed])).toBe(true);
+    expect(canStartFinal({ isOwner: true, audits: [olderRunning, newerFailed], starting: false })).toBe(false);
+  });
+
+  it("older running + newer findings still blocks a new start", () => {
+    const olderRunning = mk({ id: "old", status: "running", created_at: "2026-07-20T00:00:00Z" });
+    const newerFindings = mk({ id: "new", status: "findings", created_at: "2026-07-25T00:00:00Z" });
+    expect(hasActiveFinal([olderRunning, newerFindings])).toBe(true);
+    expect(canStartFinal({ isOwner: true, audits: [olderRunning, newerFindings], starting: false })).toBe(false);
+  });
+
+  it("no running history permits start; empty history permits start", () => {
+    expect(hasActiveFinal([mk({ status: "failed" }), mk({ status: "clean" })])).toBe(false);
+    expect(hasActiveFinal([])).toBe(false);
+    expect(canStartFinal({ isOwner: true, audits: [], starting: false })).toBe(true);
+  });
 });

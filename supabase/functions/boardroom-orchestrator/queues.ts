@@ -451,7 +451,7 @@ Every H2 header must appear exactly as written. Be specific: exact HSL values, r
 
 Write ${docSpec}
 
-${loop > 0 ? `Revise ONLY the contested parts from the previous vote. Preserve agreed parts verbatim. Your Decision log MUST address EVERY blocking objection listed in the failure report: quote it, then either "Resolved by: <the specific change you made>" or "Rejected because: <reason>". An unaddressed blocking objection means the next vote fails again.\n\n` : ""}End the document with two final H2 sections:
+${loop > 0 ? `Revise ONLY the contested parts from the previous vote. Preserve agreed parts verbatim. Your Decision log MUST address EVERY blocking objection listed in the failure report: quote it, then either "Resolved by: <the specific change you made>" or "Rejected because: <reason>". An unaddressed blocking objection means the next vote fails again.\n\n` : ""}${!isDesign ? `The document MUST contain a "## Product strategy" H2 section (place it after the concept/user sections, before Data model) with these concrete decisions in bullet form — one bullet per point. For imported apps the owner's supplied intake answers are AUTHORITY: use them verbatim and NEVER silently replace them; label any missing item "owner-unknown assumption: <what you assume and why>":\n- Reachable buyer + concrete acquisition channel (name the channel; do not say "growth marketing").\n- Paid offer, price anchor, and upgrade trigger (or a clearly labeled owner-unknown assumption for each).\n- First-90-second activation moment — what the new user sees and does in the first ninety seconds.\n- Screenshot-worthy wow moment — the one moment worth posting a picture of.\n- Positioning line completing "Unlike <named alternative>, this app <one clear differentiator>" (do not invent competitors).\n\n` : ""}End the document with two final H2 sections:
 ## Decision log
 One bullet per objection you weighed: [seat] "objection" — accepted/rejected — reason.
 ## Steals adopted
@@ -857,12 +857,27 @@ export async function queueBatchesStep(admin: any, run: any) {
   const compactPlan = compactMarkdown(plan?.content_md ?? "", COMPACT_ARTIFACT_CAP);
   const compactPrd = compactMarkdown(plan?.prd_md ?? "", COMPACT_ARTIFACT_CAP);
 
-  const system = `You are the Chair, sequencing this student's build for their Lovable project. Produce 6-8 dependency-safe, single-concern build batches (STRONGLY PREFER 6) that turn the locked plan + PRD into a shippable app — core batches first, then clearly-labeled Enhancement batches so lower-priority value is never silently dropped.
+  // Import projects run a small improvement plan against real code, not a
+  // greenfield build. Padding to six batches has produced duplicated /
+  // hand-waved batches. Cap the range at 3-6 for imports (dependency-safe,
+  // minimum needed to cover the locked improvement plan). Greenfield stays
+  // 6-8 (prefer 6). The validator globally accepts 3-8 so this prompt-side
+  // range simply constrains the model within the allowed window.
+  const isImport = !!project?.is_import;
+  const batchRangeText = isImport ? "3-6" : "6-8";
+  const batchRangePrompt = isImport
+    ? "Produce 3-6 dependency-safe, single-concern build batches — the SMALLEST count that fully covers the locked improvement plan without padding. Do NOT invent extra batches (or Enhancement batches) to reach six."
+    : "Produce 6-8 dependency-safe, single-concern build batches (STRONGLY PREFER 6) that turn the locked plan + PRD into a shippable app — core batches first, then clearly-labeled Enhancement batches so lower-priority value is never silently dropped.";
+  const batchCountRule = isImport
+    ? "Between 3 and 6 batches, chosen to be the smallest count that covers the locked improvement plan. Merge overlapping concerns aggressively; do NOT pad to reach six."
+    : "Exactly 6 batches unless a 7th or 8th is strictly required to keep any single batch below its size limit. Prefer merging overlapping concerns.";
+
+  const system = `You are the Chair, sequencing this student's build for their Lovable project. ${batchRangePrompt}
 
 ${manual}
 
 OUTPUT DISCIPLINE (hard limits — the run FAILS if you exceed them):
-- Exactly 6 batches unless a 7th or 8th is strictly required to keep any single batch below its size limit. Prefer merging overlapping concerns.
+- ${batchCountRule}
 - Each prompt_md: 900-2,600 characters, MAX 8 numbered implementation items.
 - Code batches: 2-4 acceptance checks (not 5).
 - Do NOT restate plan/PRD prose, feature lists, or design tokens verbatim in prompts. Reference them by name.
@@ -903,7 +918,7 @@ Return ONLY valid JSON:
   ]
 }
 
-Constraints: 6-8 batches (prefer 6), unique ascending integer batch_no starting at 1, every prompt_md within character limits, following the skeleton exactly.`;
+Constraints: ${batchRangeText} batches, unique ascending integer batch_no starting at 1, every prompt_md within character limits, following the skeleton exactly.`;
 
   const featuresBlock = Array.isArray(plan?.features) && plan!.features.length
     ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
@@ -1052,12 +1067,17 @@ export async function queueBatchesRevise(admin: any, run: any, draftJson: any, r
   const issues = reviewSteps
     .map((s: any) => `--- ${SEAT_LABEL[s.seat as Seat]} ---\n${JSON.stringify(s.response_json ?? { missing: true }, null, 2)}`)
     .join("\n\n");
+  const isImport = !!project?.is_import;
+  const batchRangeText = isImport ? "3-6" : "6-8";
+  const batchCountRule = isImport
+    ? "Between 3 and 6 batches, chosen to be the smallest count that covers the locked improvement plan. Merge overlapping concerns; do NOT pad to reach six."
+    : "Exactly 6 batches unless a 7th/8th is strictly required. Merge overlapping concerns.";
   const system = `Batches revision — you are the Chair. The Inspector and Contrarian reviewed your drafted build sequence and found issues. FIX every blocking issue and every major issue you agree with — do not merely acknowledge them. Keep every uncontested batch verbatim. The LIVE REPO CONTRACT outranks any guessed name in your original draft or the PRD; correct invented paths to the real ones, or relabel them CREATE/ADD with proper dependency ordering.
 
 ${manual}
 
 OUTPUT DISCIPLINE (hard limits — the run FAILS if you exceed them):
-- Exactly 6 batches unless a 7th/8th is strictly required. Merge overlapping concerns.
+- ${batchCountRule}
 - Each prompt_md: 900-2,600 characters, MAX 8 numbered items, 2-4 acceptance checks for code batches.
 - Do NOT restate plan/PRD prose, feature lists, or design tokens verbatim. Reference them by name.
 - Total serialized JSON payload: <=24,000 characters. If you approach that, cut prose — not scope.
@@ -1067,7 +1087,7 @@ Return ONLY the same JSON shape as the original draft:
   "batches": [ { "batch_no": 1, "title": "...", "channel": "lovable"|"supabase"|"human", "prompt_md": "..." } ]
 }
 
-Constraints: 6-8 batches (prefer 6), unique ascending integer batch_no starting at 1, every prompt_md within character limits, following the batch skeleton exactly (numbered items, acceptance checks for code batches, "Keep everything else identical.", "Typecheck when done." for code batches). Never delete Enhancement batches to satisfy a reviewer unless the reviewer explicitly flagged them.`;
+Constraints: ${batchRangeText} batches, unique ascending integer batch_no starting at 1, every prompt_md within character limits, following the batch skeleton exactly (numbered items, acceptance checks for code batches, "Keep everything else identical.", "Typecheck when done." for code batches). Never delete Enhancement batches to satisfy a reviewer unless the reviewer explicitly flagged them. For imported apps, NEVER pad to six batches to match a greenfield default.`;
   const compactPlan = compactMarkdown(plan?.content_md ?? "", COMPACT_ARTIFACT_CAP);
   const compactPrd = compactMarkdown(plan?.prd_md ?? "", COMPACT_ARTIFACT_CAP);
   const compactDesign = compactMarkdown(design?.content_md ?? "", COMPACT_ARTIFACT_CAP);

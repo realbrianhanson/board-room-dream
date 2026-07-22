@@ -13,6 +13,9 @@ type Answers = {
   buyer?: string;
   pain?: string;
   money?: "one_time" | "subscription" | "service_enabler";
+  paid_offer?: string;
+  price_anchor?: string;
+  upgrade_trigger?: string;
   inspiration?: string;
 };
 
@@ -128,9 +131,13 @@ function IntakePage() {
   const progress = useMemo(() => (step + 1) / STEPS.length, [step]);
   const current = STEPS[step];
   const currentValue = current ? (answers as Record<string, unknown>)[current.field] : undefined;
+  const trimmed = (v: unknown) => (typeof v === "string" ? v.trim() : "");
   const canProceed =
     current?.kind === "money"
-      ? Boolean(currentValue)
+      ? Boolean(answers.money) &&
+        trimmed(answers.paid_offer).length > 2 &&
+        trimmed(answers.price_anchor).length > 0 &&
+        trimmed(answers.upgrade_trigger).length > 2
       : typeof currentValue === "string" && currentValue.trim().length > 3;
 
   async function persist(next: Answers) {
@@ -282,25 +289,56 @@ function IntakePage() {
             className="w-full rounded-md border border-border bg-surface-1 px-4 py-3 text-base text-foreground outline-none focus:border-primary"
           />
         ) : (
-          <div className="grid gap-3 md:grid-cols-3">
-            {MONEY_OPTIONS.map((opt) => {
-              const active = answers.money === opt.value;
-              return (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => persist({ ...answers, money: opt.value })}
-                  className={`rounded-xl border p-5 text-left transition-all ${
-                    active
-                      ? "border-primary bg-surface-2"
-                      : "border-border bg-surface-1 hover:bg-surface-2"
-                  }`}
-                >
-                  <p className="font-display text-lg text-foreground">{opt.title}</p>
-                  <p className="mt-2 text-xs text-muted-foreground">{opt.body}</p>
-                </button>
-              );
-            })}
+          <div className="space-y-6">
+            <div className="grid gap-3 md:grid-cols-3">
+              {MONEY_OPTIONS.map((opt) => {
+                const active = answers.money === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => persist({ ...answers, money: opt.value })}
+                    className={`rounded-xl border p-5 text-left transition-all ${
+                      active
+                        ? "border-primary bg-surface-2"
+                        : "border-border bg-surface-1 hover:bg-surface-2"
+                    }`}
+                  >
+                    <p className="font-display text-lg text-foreground">{opt.title}</p>
+                    <p className="mt-2 text-xs text-muted-foreground">{opt.body}</p>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="space-y-4">
+              <MoneyDetail
+                label="What exactly do they pay for?"
+                hint="One concrete deliverable — e.g. “access to the weekly research briefing PDF.”"
+                value={answers.paid_offer ?? ""}
+                onChange={(v) => setAnswers((a) => ({ ...a, paid_offer: v }))}
+                onBlur={() => persist(answers)}
+                required
+                missing={!trimmed(answers.paid_offer)}
+              />
+              <MoneyDetail
+                label="Best starting-price guess"
+                hint={'A number is best. If you truly don\'t know, type "not set — recommend one" and the board will propose one.'}
+                value={answers.price_anchor ?? ""}
+                onChange={(v) => setAnswers((a) => ({ ...a, price_anchor: v }))}
+                onBlur={() => persist(answers)}
+                required
+                missing={!trimmed(answers.price_anchor)}
+              />
+              <MoneyDetail
+                label="What makes them buy now, renew, or move up?"
+                hint="One trigger — a deadline, an outcome they hit, a moment of pain."
+                value={answers.upgrade_trigger ?? ""}
+                onChange={(v) => setAnswers((a) => ({ ...a, upgrade_trigger: v }))}
+                onBlur={() => persist(answers)}
+                required
+                missing={!trimmed(answers.upgrade_trigger)}
+              />
+            </div>
           </div>
         )}
       </div>
@@ -342,6 +380,44 @@ function IntakePage() {
         </p>
       )}
     </div>
+  );
+}
+
+function MoneyDetail({
+  label,
+  hint,
+  value,
+  onChange,
+  onBlur,
+  required,
+  missing,
+}: {
+  label: string;
+  hint: string;
+  value: string;
+  onChange: (v: string) => void;
+  onBlur: () => void;
+  required?: boolean;
+  missing?: boolean;
+}) {
+  return (
+    <label className="block">
+      <span className="text-sm text-foreground">
+        {label}
+        {required && <span className="ml-1 text-primary">*</span>}
+      </span>
+      <span className="mt-1 block text-xs text-muted-foreground">{hint}</span>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
+        placeholder="Type here…"
+        className={`mt-2 w-full rounded-md border bg-surface-1 px-3 py-2 text-sm text-foreground outline-none focus:border-primary ${
+          missing ? "border-[hsl(8_60%_45%)]" : "border-border"
+        }`}
+      />
+    </label>
   );
 }
 
