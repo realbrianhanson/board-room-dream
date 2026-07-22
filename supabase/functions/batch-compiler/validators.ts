@@ -297,7 +297,7 @@ export function skeletonError(
   // G1 FIX: the previous check compared against "code" and never fired because
   // real batch channels are "lovable" / "supabase" / "human".
   if (isCodeChannel(batch.channel)) {
-    const acceptIdx = text.search(/^\s*(?:#+\s*)?acceptance\b[:\s]*$/im);
+    const acceptIdx = text.search(/^\s*(?:#+\s*)?acceptance(?:\s+checks)?\s*[:\s]*$/im);
     if (acceptIdx < 0) return `Missing "Acceptance" section.`;
     const afterAccept = text.slice(acceptIdx).split(/\n/).slice(1);
     const acceptLines: string[] = [];
