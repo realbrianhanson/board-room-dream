@@ -99,9 +99,12 @@ export function buildImplementedBatchesContext(
     const overhead = bHead.length + trailer.length;
     const remaining = MAX_EXTRA_CONTRACT_CHARS - used;
     if (remaining <= overhead + 80) {
-      parts.push(
-        "\n[TRUNCATED: additional implemented batches omitted to keep audit context <= 30000 chars]\n",
-      );
+      const tail =
+        "\n[TRUNCATED: additional implemented batches omitted to keep audit context <= 30000 chars]\n";
+      if (used + tail.length <= MAX_EXTRA_CONTRACT_CHARS) {
+        parts.push(tail);
+        used += tail.length;
+      }
       truncated = true;
       break;
     }
