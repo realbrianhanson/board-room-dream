@@ -1678,7 +1678,7 @@ async function handleRequest(req: Request): Promise<Response> {
     try {
       await createInitialSteps(admin, run);
     } catch (e) {
-      if (e instanceof RepoContractUnavailable) {
+      if (e instanceof RepoContractUnavailable || e instanceof BatchContextTooLarge) {
         await admin
           .from("boardroom_runs")
           .update({ status: "failed", error: e.message })
