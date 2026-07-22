@@ -92,16 +92,36 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-24.per-run-capacity-rpc.i1";
+const BUILD_VERSION = "2026-07-25.terminal-parent-hygiene.i1";
+
+// Terminal statuses for a boardroom_run. A terminal parent must never own a
+// queued/running child: failRun() eagerly terminalizes siblings, and every
+// requeue path funnels through requeue_step_if_parent_active() which cancels
+// the child instead of resurrecting work under a dead parent.
+const TERMINAL_RUN_STATUSES = ["failed", "completed", "consensus", "chair_ruled"] as const;
 
 // Terminal-fail a run and, when it drives an audit, fail the audit row in
 // lockstep so audits/runs never drift. Budget pauses and recoverable requeues
 // must NOT call this — they leave the run recoverable and the audit intact.
+// Also terminalizes every queued/running SIBLING step so the run cannot
+// accumulate ghost work after failure. In-flight model calls that finish
+// after this still get cost-accounted by the proxy (recordCall is atomic
+// and independent of this transition), but their late status write is
+// blocked by the .eq('status','running') guard in executeStep.
 async function failRun(admin: any, run: any, errorMsg: string): Promise<void> {
   await admin
     .from("boardroom_runs")
     .update({ status: "failed", error: errorMsg })
     .eq("id", run.id);
+  await admin
+    .from("run_steps")
+    .update({
+      status: "failed",
+      error: "cancelled_parent_terminal",
+      completed_at: new Date().toISOString(),
+    })
+    .eq("run_id", run.id)
+    .in("status", ["queued", "running"]);
   const auditId: string | undefined = run?.consensus?.audit_id;
   if (run?.kind === "audit" && auditId) {
     await admin
