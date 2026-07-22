@@ -85,7 +85,24 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-22.active-run-uniqueness.1";
+const BUILD_VERSION = "2026-07-22.audit-lifecycle.1";
+
+// Terminal-fail a run and, when it drives an audit, fail the audit row in
+// lockstep so audits/runs never drift. Budget pauses and recoverable requeues
+// must NOT call this — they leave the run recoverable and the audit intact.
+async function failRun(admin: any, run: any, errorMsg: string): Promise<void> {
+  await admin
+    .from("boardroom_runs")
+    .update({ status: "failed", error: errorMsg })
+    .eq("id", run.id);
+  const auditId: string | undefined = run?.consensus?.audit_id;
+  if (run?.kind === "audit" && auditId) {
+    await admin
+      .from("audits")
+      .update({ status: "failed", completed_at: new Date().toISOString() })
+      .eq("id", auditId);
+  }
+}
 
 function fireSelfTick(body: any = {}) {
   // Register the background kick with EdgeRuntime.waitUntil so the platform
@@ -287,10 +304,7 @@ async function executeStep(admin: any, run: any, step: any) {
           .from("run_steps")
           .update({ status: "failed", error: (e as Error).message, completed_at: new Date().toISOString() })
           .eq("id", step.id);
-        await admin
-          .from("boardroom_runs")
-          .update({ status: "failed", error: (e as Error).message })
-          .eq("id", run.id);
+        await failRun(admin, run, (e as Error).message);
         return;
       }
       if ((e as any)?.isHardTimeout) {
@@ -300,7 +314,7 @@ async function executeStep(admin: any, run: any, step: any) {
           .from("run_steps")
           .update({ status: "failed", error: "hard_timeout", completed_at: new Date().toISOString() })
           .eq("id", step.id);
-        await admin.from("boardroom_runs").update({ status: "failed", error: tmsg }).eq("id", run.id);
+        await failRun(admin, run, tmsg);
         return;
       }
       if (networkAttempt === 0) {
@@ -314,7 +328,7 @@ async function executeStep(admin: any, run: any, step: any) {
         .from("run_steps")
         .update({ status: "failed", error: msg, completed_at: new Date().toISOString() })
         .eq("id", step.id);
-      await admin.from("boardroom_runs").update({ status: "failed", error: msg }).eq("id", run.id);
+      await failRun(admin, run, msg);
       return;
     }
   }
@@ -688,7 +702,7 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
           user_id: audit.user_id,
           batch_no: nextNo,
           title: "Final A-Z QA",
-          channel: "lovable",
+          channel: "human",
           prompt_md: qa,
           status: "pending",
         });
@@ -748,6 +762,35 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
       fixBatchId = inserted?.id ?? null;
     }
     await admin.from("batches").update({ status: "fix_needed" }).eq("id", audit.batch_id);
+  }
+
+  // Final A-Z audits: any serious findings + a real fix prompt must NOT be
+  // silently discarded. Append one pending Lovable fix batch at the next
+  // integer batch_no and link the findings to it.
+  if (isFinal && hasSerious && fixPrompt) {
+    const { data: last } = await admin
+      .from("batches")
+      .select("batch_no")
+      .eq("project_id", audit.project_id)
+      .order("batch_no", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const nextNo = Math.floor(Number(last?.batch_no ?? 0)) + 1;
+    const { data: inserted } = await admin
+      .from("batches")
+      .insert({
+        project_id: audit.project_id,
+        user_id: audit.user_id,
+        batch_no: nextNo,
+        title: "Fix — Final A-Z Audit",
+        channel: "lovable",
+        prompt_md: fixPrompt,
+        status: "pending",
+        is_fix: true,
+      })
+      .select("id")
+      .single();
+    fixBatchId = inserted?.id ?? null;
   }
 
   if (findings.length) {
@@ -1098,10 +1141,14 @@ async function pipelineTick(admin: any) {
         .update({ status: "failed", error: "stuck_model_call", completed_at: new Date().toISOString() })
         .eq("id", st.id)
         .eq("status", "running");
-      await admin
+      const { data: staleRun } = await admin
         .from("boardroom_runs")
-        .update({ status: "failed", error: `Step ${st.step_key} kept timing out — even the fallback model could not answer in time.` })
-        .eq("id", st.run_id);
+        .select("id, kind, consensus")
+        .eq("id", st.run_id)
+        .maybeSingle();
+      if (staleRun) {
+        await failRun(admin, staleRun, `Step ${st.step_key} kept timing out — even the fallback model could not answer in time.`);
+      }
       continue;
     }
     await admin

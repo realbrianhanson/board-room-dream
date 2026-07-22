@@ -164,14 +164,13 @@ function RunwayPage() {
   const [compiling, setCompiling] = useState(false);
 
   const loadAll = useCallback(async () => {
-    const [{ data: p }, { data: pv }, { data: dv }, { data: bs }, { data: rs }, { data: au }, { data: fi }] = await Promise.all([
+    const [{ data: p }, { data: pv }, { data: dv }, { data: bs }, { data: rs }, { data: au }] = await Promise.all([
       supabase.from("projects").select("id, name, user_id, status, lovable_project_url, current_batch_no, github_repo, is_import").eq("id", projectId).maybeSingle(),
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "plan").limit(1),
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "design").limit(1),
       supabase.from("batches").select("*").eq("project_id", projectId).order("batch_no", { ascending: true }),
       supabase.from("boardroom_runs").select("id, kind, status, error, spent_usd, budget_usd, created_at").eq("project_id", projectId).eq("kind", "batches").in("status", ["queued","running","paused","paused_budget","failed","completed"]).order("spent_usd", { ascending: false }).order("created_at", { ascending: false }).limit(10),
       supabase.from("audits").select("id, batch_id, kind, status, loop_no, source, head_sha, files_analyzed, summary, created_at").eq("project_id", projectId).order("created_at", { ascending: false }),
-      supabase.from("audit_findings").select("id, audit_id, severity, file_path, title, status").order("severity", { ascending: true }),
     ]);
     setProject((p as Project) ?? null);
     setGhRepo((p as { github_repo: string | null } | null)?.github_repo ?? null);
@@ -191,8 +190,20 @@ function RunwayPage() {
       const latestTerminal = runList.find((r) => !["queued","running","paused","paused_budget"].includes(r.status)) ?? null;
       setRun(active[0] ?? latestTerminal);
     }
-    setAudits((au ?? []) as AuditRow[]);
-    setFindings((fi ?? []) as FindingRow[]);
+    const auditRows = (au ?? []) as AuditRow[];
+    setAudits(auditRows);
+    // Scope findings to THIS project's audit ids only.
+    const auditIds = auditRows.map((a) => a.id);
+    if (auditIds.length === 0) {
+      setFindings([]);
+    } else {
+      const { data: fi } = await supabase
+        .from("audit_findings")
+        .select("id, audit_id, severity, file_path, title, status")
+        .in("audit_id", auditIds)
+        .order("severity", { ascending: true });
+      setFindings((fi ?? []) as FindingRow[]);
+    }
     if (p && !urlEdit) setUrlEdit((p as Project).lovable_project_url ?? "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);

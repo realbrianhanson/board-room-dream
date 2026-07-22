@@ -22,7 +22,7 @@ export function useProjectJourney(projectId: string): JourneyStage[] | null {
         supabase.from("batches").select("status").eq("project_id", projectId),
         supabase
           .from("audits")
-          .select("id")
+          .select("id, status")
           .eq("project_id", projectId)
           .eq("kind", "final_az"),
       ]);
@@ -36,7 +36,7 @@ export function useProjectJourney(projectId: string): JourneyStage[] | null {
       }
       const pvs = (pvRes.data ?? []) as Array<{ kind: string }>;
       const batches = (batchRes.data ?? []) as Array<{ status: string }>;
-      const audits = (auditRes.data ?? []) as Array<{ id: string }>;
+      const audits = (auditRes.data ?? []) as Array<{ id: string; status: string }>;
       const flags: JourneyFlags = {
         is_import: !!proj.is_import,
         status: proj.status ?? "",
@@ -47,7 +47,9 @@ export function useProjectJourney(projectId: string): JourneyStage[] | null {
         all_passed:
           batches.length > 0 &&
           batches.every((b) => b.status === "passed" || b.status === "skipped"),
-        has_final_audit: audits.length > 0,
+        // Only terminal-quality outcomes count. Running/failed audits must
+        // never check off the Audit stage.
+        has_final_audit: audits.some((a) => a.status === "clean" || a.status === "findings"),
       };
       setStages(buildJourney(flags));
     })();

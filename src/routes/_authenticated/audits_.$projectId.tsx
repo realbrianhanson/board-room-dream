@@ -62,19 +62,33 @@ function AuditCenterPage() {
   const [pasted, setPasted] = useState("");
 
   const load = useCallback(async () => {
-    const [{ data: p }, { data: au }, { data: fi }, { data: bs }] = await Promise.all([
+    const [{ data: p }, { data: au }, { data: bs }] = await Promise.all([
       supabase.from("projects").select("name, is_import, github_repo").eq("id", projectId).maybeSingle(),
       supabase.from("audits").select("*").eq("project_id", projectId).order("created_at", { ascending: false }),
-      supabase.from("audit_findings").select("*").order("severity", { ascending: true }),
       supabase.from("batches").select("id, batch_no, title, status").eq("project_id", projectId).order("batch_no", { ascending: true }),
     ]);
     const proj = p as { name?: string; is_import?: boolean; github_repo?: string | null } | null;
     setProjectName(proj?.name ?? "");
     setIsImport(!!proj?.is_import);
     setGhRepo(proj?.github_repo ?? null);
-    setAudits((au ?? []) as Audit[]);
-    setFindings((fi ?? []) as Finding[]);
+    const auditRows = (au ?? []) as Audit[];
+    setAudits(auditRows);
     setBatches((bs ?? []) as Batch[]);
+    // Scope findings to THIS project's audits only. Never issue an unfiltered
+    // audit_findings query — RLS returns just this owner's rows, but pulling
+    // every one of them for a single project view is wasteful and leaks
+    // cross-project noise into the realtime handler.
+    const auditIds = auditRows.map((a) => a.id);
+    if (auditIds.length === 0) {
+      setFindings([]);
+    } else {
+      const { data: fi } = await supabase
+        .from("audit_findings")
+        .select("*")
+        .in("audit_id", auditIds)
+        .order("severity", { ascending: true });
+      setFindings((fi ?? []) as Finding[]);
+    }
     setLoading(false);
   }, [projectId]);
 

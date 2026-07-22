@@ -219,6 +219,25 @@ async function beginAudit(params: {
   const { admin, userId, project, batchId, kind, loopNo, source, pastedCode, budget } = params;
   const isFinal = kind === "final_az";
 
+  // Short-circuit: if this owner already has an active audit run for this
+  // project, return it instead of creating a duplicate audit + run pair.
+  // Active = queued | running | paused | paused_budget.
+  {
+    const { data: activeRuns } = await admin
+      .from("boardroom_runs")
+      .select("id, status, consensus, created_at")
+      .eq("project_id", project.id)
+      .eq("user_id", userId)
+      .eq("kind", "audit")
+      .in("status", ["queued", "running", "paused", "paused_budget"])
+      .order("created_at", { ascending: true });
+    const winner = (activeRuns ?? [])[0];
+    if (winner) {
+      const auditId: string | null = winner.consensus?.audit_id ?? null;
+      return { existing: true as const, run_id: winner.id, audit_id: auditId, status: winner.status };
+    }
+  }
+
   // For imports without a locked plan, substitute the intake description + goals.
   const plan = (await loadLockedPlan(admin, project.id)) ?? (await loadImportContract(admin, project.id));
 
