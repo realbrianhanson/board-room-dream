@@ -947,6 +947,34 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      claim_run_step_with_capacity: {
+        Args: { p_capacity: number; p_run_id: string }
+        Returns: {
+          completed_at: string | null
+          cost_usd: number
+          created_at: string
+          error: string | null
+          id: string
+          request: Json | null
+          response_json: Json | null
+          response_text: string | null
+          round: number
+          run_id: string
+          seat: string
+          started_at: string | null
+          status: string
+          step_key: string
+          tokens_in: number
+          tokens_out: number
+          user_id: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "run_steps"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       get_compiler_schema_inventory: { Args: never; Returns: Json }
       join_cohort: { Args: { code: string }; Returns: string }
       record_model_call_atomic: {
