@@ -811,7 +811,7 @@ Constraints: 6-8 batches (prefer 6), unique ascending integer batch_no starting 
 
   const user = `${repoContract}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}${deferredBlock}\n\nProduce the JSON now.`;
 
-  await admin.from("run_steps").insert({
+  await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
     step_key: "batches_chair",
