@@ -3,7 +3,7 @@
 // parseVerdict must cap monetization_path <= 5 when any of the three is
 // missing from the intake answers (legacy intakes).
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { buildUserPrompt, parseVerdict } from "./index.ts";
+import { buildUserPrompt, parseVerdict } from "./prompt.ts";
 
 Deno.test("validate-intake prompt names the 4a/4b/4c triple + hard cap rule", () => {
   const p = buildUserPrompt({
