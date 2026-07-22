@@ -245,7 +245,7 @@ Deno.serve(async (req) => {
       return j(400, { error: (e as Error).message });
     }
   } else {
-    if (!pastedCode.trim()) return j(400, { error: "Empty pasted code." });
+    if (!pastedCode || !pastedCode.trim()) return j(400, { error: "Empty pasted code." });
     codePayload = fitPasted(pastedCode);
     filesAnalyzed = 1;
   }

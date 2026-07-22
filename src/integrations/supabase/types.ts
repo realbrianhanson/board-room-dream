@@ -933,6 +933,19 @@ export type Database = {
         }
       }
       join_cohort: { Args: { code: string }; Returns: string }
+      record_model_call_atomic: {
+        Args: {
+          p_cost_usd: number
+          p_model_id: string
+          p_project_id: string
+          p_run_id: string
+          p_seat: string
+          p_tokens_in: number
+          p_tokens_out: number
+          p_user_id: string
+        }
+        Returns: number
+      }
     }
     Enums: {
       [_ in never]: never
