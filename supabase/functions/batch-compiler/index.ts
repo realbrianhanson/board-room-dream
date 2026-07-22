@@ -20,7 +20,7 @@ import { detectStackFromRepo, loadFieldManual, renderStackBlock } from "../_shar
 import { injectOwnerAuthority, loadOwnerAuthority, OWNER_AUTHORITY_RULES } from "../_shared/owner-authority.ts";
 import { batchAuthorityError, shapeError, type Parsed } from "./validators.ts";
 
-const BUILD_VERSION = "2026-07-27.owner-authority.j1";
+const BUILD_VERSION = "2026-07-27.owner-authority-prelock.k1";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -47,7 +47,7 @@ function fitPasted(text: string): string {
 async function loadPlan(admin: any, projectId: string) {
   const { data } = await admin
     .from("plan_versions")
-    .select("content_md, prd_md, features")
+    .select("content_md, prd_md, features, source_run_id")
     .eq("project_id", projectId)
     .eq("kind", "plan")
     .order("version", { ascending: false })
@@ -55,6 +55,44 @@ async function loadPlan(admin: any, projectId: string) {
     .maybeSingle();
   return data ?? null;
 }
+
+// Load founder_notes from any owner-authored run linked to the batch: the
+// run that produced the locked plan (plan_versions.source_run_id) plus the
+// most recent batch-generation run for this project. Both feed the compiler's
+// independent owner-authority pool alongside intake + approved change requests.
+async function loadRelevantFounderNotes(
+  admin: any,
+  projectId: string,
+  planSourceRunId: string | null,
+): Promise<Array<{ source: string; text: string }>> {
+  const out: Array<{ source: string; text: string }> = [];
+  const runIds = new Set<string>();
+  if (planSourceRunId) runIds.add(planSourceRunId);
+  try {
+    const { data: latestBatchesRun } = await admin
+      .from("boardroom_runs")
+      .select("id")
+      .eq("project_id", projectId)
+      .eq("kind", "batches")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (latestBatchesRun?.id) runIds.add(latestBatchesRun.id);
+  } catch { /* ignore */ }
+  if (!runIds.size) return out;
+  try {
+    const { data: runs } = await admin
+      .from("boardroom_runs")
+      .select("id, kind, founder_notes")
+      .in("id", Array.from(runIds));
+    for (const r of runs ?? []) {
+      const t = String(r?.founder_notes ?? "").trim();
+      if (t) out.push({ source: `founder_notes:run:${r.id}:${r.kind}`, text: t });
+    }
+  } catch { /* ignore */ }
+  return out;
+}
+
 
 async function loadDesignBrief(admin: any, projectId: string): Promise<string | null> {
   const { data } = await admin
@@ -260,7 +298,7 @@ Deno.serve(async (req) => {
     filesAnalyzed = 1;
   }
 
-  const [plan, designBrief, outcomes, findings, manual, currentBatches, schemaInv, { count: totalBatches }, authority] = await Promise.all([
+  const [plan, designBrief, outcomes, findings, manual, currentBatches, schemaInv, { count: totalBatches }] = await Promise.all([
     loadPlan(admin, batch.project_id),
     loadDesignBrief(admin, batch.project_id),
     loadOutcomes(admin, batch.project_id, Number(batch.batch_no)),
@@ -269,12 +307,22 @@ Deno.serve(async (req) => {
     loadCurrentBatches(admin, batch.project_id),
     source === "github" ? loadSchemaInventory(admin) : Promise.resolve({ tables: [], routines: [], objectsLower: new Set<string>(), ok: false, reason: "paste source: schema inventory not loaded" } as SchemaInventory),
     admin.from("batches").select("id", { count: "exact", head: true }).eq("project_id", batch.project_id),
-    // Compiler INDEPENDENTLY reloads owner authority; it never trusts an
-    // upstream "reviewed" flag from a locked plan or batch draft. Founder
-    // notes live on runs, not batches, so we pass none here — the compiler's
-    // authorization pool is intake + approved change_requests only.
-    loadOwnerAuthority(admin, { projectId: batch.project_id }),
   ]);
+  // Compiler INDEPENDENTLY reloads owner authority; it never trusts an
+  // upstream "reviewed" flag from a locked plan or batch draft. Founder
+  // notes come from BOTH the run that produced the locked plan
+  // (plan_versions.source_run_id) and the most recent batches-generation run
+  // for this project. Intake + approved change requests are always included.
+  const extraFounderNotes = await loadRelevantFounderNotes(
+    admin,
+    batch.project_id,
+    (plan as any)?.source_run_id ?? null,
+  );
+  const authority = await loadOwnerAuthority(admin, {
+    projectId: batch.project_id,
+    extraFounderNotes,
+  });
+
 
   const outcomesBlock = outcomes.length
     ? outcomes.map((o: any) => `--- Batch ${o.batch_no} "${o.title}" [${o.status}] ---\n${String(o.outcome_md).trim()}`).join("\n\n")
@@ -454,11 +502,40 @@ Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=
   }
 
   if (!parsed) {
+    // Validation failed after model calls — clear any prior compiled fields so
+    // the UI cannot keep showing a stale, unsafe prompt from an earlier build.
+    // Persist compile_meta with status='blocked' + build_version + detail for
+    // observability. Idempotent even if the row was already null.
+    const blockedMeta = {
+      status: "blocked",
+      head_sha: headSha,
+      files_analyzed: filesAnalyzed,
+      source,
+      original_batch_no: Number(batch.batch_no),
+      original_title: batch.title,
+      original_channel: batch.channel,
+      reason: "compiler_validation_failed",
+      validation_detail: lastErr ?? "validation failed",
+      build_version: BUILD_VERSION,
+      invalidated_at: new Date().toISOString(),
+    };
+    await admin
+      .from("batches")
+      .update({
+        compiled_prompt_md: null,
+        compiled_verification_prompt_md: null,
+        compiled_at: null,
+        compile_meta: blockedMeta,
+      })
+      .eq("id", batch.id);
     return j(422, {
+      status: "blocked",
       error: "The Chair couldn't produce an evidence-backed compile against the live code.",
       detail: lastErr ?? "validation failed",
+      build_version: BUILD_VERSION,
     });
   }
+
 
   const compileMeta = {
     status: parsed.status,

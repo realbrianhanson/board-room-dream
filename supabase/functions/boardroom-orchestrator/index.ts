@@ -43,6 +43,7 @@ import {
   queueRound4,
   RepoContractUnavailable,
 } from "./queues.ts";
+import { loadOwnerAuthority, preLockAuthorityError } from "../_shared/owner-authority.ts";
 
 
 
@@ -92,7 +93,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-26.first-terminal-wins.i1";
+const BUILD_VERSION = "2026-07-27.owner-authority-prelock.k1";
 
 import {
   failRun,
@@ -510,10 +511,7 @@ async function lockPlanAndQueueBlueprint(
 
   // Never lock an empty document: fail loudly instead of finalizing garbage.
   if (!contentMd.trim()) {
-    await admin
-      .from("boardroom_runs")
-      .update({ status: "failed", error: "empty_final_document", updated_at: new Date().toISOString() })
-      .eq("id", run.id);
+    await failRun(admin, run, "empty_final_document");
     await insertAlert(admin, {
       user_id: run.user_id,
       project_id: run.project_id,
@@ -522,6 +520,36 @@ async function lockPlanAndQueueBlueprint(
     });
     return;
   }
+
+  // Pre-lock owner-authority gate: independently load owner sources and run
+  // the high-impact validator over the exact artifacts we are about to lock.
+  // Chair/loop3 CANNOT override — a violation terminalizes the run before any
+  // downstream blueprint work is queued.
+  try {
+    const authority = await loadOwnerAuthority(admin, {
+      projectId: run.project_id,
+      founderNotes: run.founder_notes ?? null,
+    });
+    const preErr = preLockAuthorityError(
+      [{ label: `${planKind}.content_md (pending lock)`, text: contentMd }],
+      authority,
+    );
+    if (preErr) {
+      await failRun(admin, run, preErr);
+      await insertAlert(admin, {
+        user_id: run.user_id,
+        project_id: run.project_id,
+        kind: "owner_authority_violation",
+        detail: { run_id: run.id, mode, phase: "pre_lock", excerpt: preErr.slice(0, 800) },
+      });
+      return;
+    }
+  } catch (e) {
+    // Loader failure is safe-fail: block the lock, not the process.
+    await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
+    return;
+  }
+
 
   // Atomically claim the lock transition: two concurrent ticks can both reach
   // this point; flipping round_no to 6 in one guarded UPDATE lets exactly one
@@ -718,7 +746,36 @@ async function finalizeBatches(admin: any, run: any, batchesJson: any[]) {
     status: "pending",
     is_fix: false,
   }));
+
+  // Pre-promotion owner-authority gate: independently validate the complete
+  // batch set BEFORE any executable row is saved. Reviewer/reviser upstream
+  // signals are advisory; this is the deterministic last-line gate.
+  try {
+    const authority = await loadOwnerAuthority(admin, {
+      projectId: run.project_id,
+      founderNotes: run.founder_notes ?? null,
+    });
+    const preErr = preLockAuthorityError(
+      rows.map((r) => ({ label: `batch[${r.batch_no}] "${r.title}".prompt_md`, text: r.prompt_md })),
+      authority,
+    );
+    if (preErr) {
+      await failRun(admin, run, preErr);
+      await insertAlert(admin, {
+        user_id: run.user_id,
+        project_id: run.project_id,
+        kind: "owner_authority_violation",
+        detail: { run_id: run.id, phase: "pre_promote_batches", excerpt: preErr.slice(0, 800) },
+      });
+      return;
+    }
+  } catch (e) {
+    await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
+    return;
+  }
+
   const { error: insErr } = await admin.from("batches").insert(rows);
+
   if (insErr) {
     await admin
       .from("boardroom_runs")
