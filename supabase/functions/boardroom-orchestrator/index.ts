@@ -100,7 +100,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-28.product-strategy.r1";
+const BUILD_VERSION = "2026-07-28.final-audit-supersession-r1";
 
 import {
   failRun,
@@ -974,6 +974,34 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
     return;
   }
 
+  const isFinal = audit.kind === "final_az";
+
+  // FINAL-AUDIT-SUPERSESSION-R1: for a successful final_az finalization
+  // (validation passed; clean OR findings verdict), resolve open/fix_drafted
+  // findings from OLDER final_az audits and archive+delete their pending,
+  // unsent, unbuilt fix batches. Runs BEFORE we publish the current audit
+  // result so a batch_no collision or dangling stale fix batch cannot survive.
+  // Fails loud — no partial publish.
+  if (isFinal) {
+    try {
+      const { supersedeOlderFinalAudits } = await import("../_shared/audit-supersession.ts");
+      await supersedeOlderFinalAudits(admin, {
+        auditId,
+        projectId: audit.project_id,
+        userId: audit.user_id,
+        runId: run.id,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await admin
+        .from("audits")
+        .update({ status: "failed", completed_at: new Date().toISOString(), summary: { error: `supersession_failed: ${msg}` } })
+        .eq("id", auditId);
+      await failRun(admin, run, `final-audit supersession failed: ${msg}`);
+      return;
+    }
+  }
+
   const verdict = evaluation.verdict;
   const filesAnalyzed = Number(run.consensus?.files_analyzed ?? 0) || null;
 
@@ -988,9 +1016,6 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
     },
     validation_downgrades: downgrades,
   };
-
-
-  const isFinal = audit.kind === "final_az";
 
   if (verdict === "clean") {
     if (audit.batch_id) {
