@@ -99,7 +99,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-27.import-trust.l1";
+const BUILD_VERSION = "2026-07-27.import-trust.l2";
 
 import {
   failRun,
@@ -1682,13 +1682,29 @@ async function handleRequest(req: Request): Promise<Response> {
       if (!changeRequestId) return j(400, { error: "Missing change_request_id" });
       const { data: cr } = await admin
         .from("change_requests")
-        .select("id, user_id, project_id, status")
+        .select("id, user_id, project_id, status, plan_version_id")
         .eq("id", changeRequestId)
         .maybeSingle();
       if (!cr || cr.user_id !== userId || cr.project_id !== projectId) {
         return j(404, { error: "Change request not found" });
       }
       if (cr.status !== "pending") return j(400, { error: "Change request is not pending" });
+      if (!cr.plan_version_id) {
+        return j(400, { error: "Change request is not attached to a build-safe plan version." });
+      }
+      const { data: planRow } = await admin
+        .from("plan_versions")
+        .select("id, project_id, kind, is_build_safe")
+        .eq("id", cr.plan_version_id)
+        .maybeSingle();
+      if (
+        !planRow ||
+        planRow.project_id !== projectId ||
+        planRow.kind !== "plan" ||
+        planRow.is_build_safe !== true
+      ) {
+        return j(400, { error: "This change request targets a plan version that is not build-safe. File a new change request against the current plan." });
+      }
       consensusMeta = { change_request_id: changeRequestId };
     }
 

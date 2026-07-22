@@ -32,6 +32,8 @@ type PlanVersion = {
   dissent_ledger: Array<{ seat: string; objection: string; chair_response?: string }> | null;
   locked_at: string;
   source_run_id: string | null;
+  is_build_safe: boolean;
+  invalidated_reason: string | null;
 };
 type ChangeRequest = {
   id: string;
@@ -84,7 +86,7 @@ function PlanWorkspacePage() {
       const { data: pvs } = await supabase
         .from("plan_versions")
         .select(
-          "id, project_id, version, content_md, prd_md, features, decision_log, is_chair_ruled, dissent_ledger, locked_at, source_run_id",
+          "id, project_id, version, content_md, prd_md, features, decision_log, is_chair_ruled, dissent_ledger, locked_at, source_run_id, is_build_safe, invalidated_reason",
         )
         .eq("project_id", projectId)
         .eq("kind", "plan")
@@ -92,7 +94,8 @@ function PlanWorkspacePage() {
       const list = (pvs ?? []) as unknown as PlanVersion[];
       if (!cancelled) {
         setVersions(list);
-        setSelectedVersionId(list[0]?.id ?? null);
+        const initialSafe = list.find((v) => v.is_build_safe);
+        setSelectedVersionId(initialSafe?.id ?? list[0]?.id ?? null);
       }
 
       const { data: crList } = await supabase
@@ -120,18 +123,19 @@ function PlanWorkspacePage() {
           const { data: pvs } = await supabase
             .from("plan_versions")
             .select(
-              "id, project_id, version, content_md, prd_md, features, decision_log, is_chair_ruled, dissent_ledger, locked_at, source_run_id",
+              "id, project_id, version, content_md, prd_md, features, decision_log, is_chair_ruled, dissent_ledger, locked_at, source_run_id, is_build_safe, invalidated_reason",
             )
             .eq("project_id", projectId)
             .eq("kind", "plan")
             .order("version", { ascending: false });
           setVersions((prev) => {
             const next = (pvs ?? []) as unknown as PlanVersion[];
-            // Keep selection on latest when user hasn't picked a specific older one, or if id vanished
-            const latestId = next[0]?.id ?? null;
+            // Prefer the newest build-safe version; fall back only to keep the
+            // list non-empty (History still needs a selection).
+            const fallbackId = next.find((v) => v.is_build_safe)?.id ?? next[0]?.id ?? null;
             setSelectedVersionId((currentId) => {
-              if (!currentId) return latestId;
-              return next.some((v) => v.id === currentId) ? currentId : latestId;
+              if (!currentId) return fallbackId;
+              return next.some((v) => v.id === currentId) ? currentId : fallbackId;
             });
             void prev;
             return next;
@@ -187,16 +191,19 @@ function PlanWorkspacePage() {
     };
   }, [projectId]);
 
-  const latest = versions?.[0] ?? null;
+  // "Current" plan means the newest BUILD-SAFE version. Unsafe rows may
+  // exist in history but never present as current.
+  const current = versions?.find((v) => v.is_build_safe) ?? null;
   const selected = useMemo(
-    () => versions?.find((v) => v.id === selectedVersionId) ?? latest,
-    [versions, selectedVersionId, latest],
+    () => versions?.find((v) => v.id === selectedVersionId) ?? current,
+    [versions, selectedVersionId, current],
   );
   const isOwner = !!(me && project && me === project.user_id);
-  const isViewingOlder = !!(latest && selected && selected.id !== latest.id);
+  const isViewingOlder = !!(current && selected && selected.id !== current.id);
+  const selectedUnsafe = !!(selected && !selected.is_build_safe);
 
-  // Blueprint drafting state: latest exists but has no prd yet (r5 running)
-  const blueprintDrafting = !!(latest && !latest.prd_md);
+  // Blueprint drafting state: current exists but has no prd yet (r5 running)
+  const blueprintDrafting = !!(current && !current.prd_md);
 
   if (loading) {
     return (
@@ -207,7 +214,10 @@ function PlanWorkspacePage() {
   }
   if (!project) return null;
 
-  if (!latest || !selected) {
+  // No build-safe plan yet: show the legacy warning + links. Do not surface
+  // an unsafe version as current, and do not render the CR form.
+  if (!current) {
+    const hasLegacy = (versions ?? []).length > 0;
     return (
       <div className="mx-auto w-full max-w-3xl px-6 py-16">
         <Link
@@ -217,13 +227,48 @@ function PlanWorkspacePage() {
         >
           ← Boardroom
         </Link>
-        <h1 className="mt-3 font-display text-3xl text-foreground">No plan locked yet.</h1>
-        <p className="mt-3 text-sm text-muted-foreground">
-          The board hasn't reached consensus on this project.
-        </p>
+        <h1 className="mt-3 font-display text-3xl text-foreground">No build-safe plan yet.</h1>
+        {hasLegacy ? (
+          <p className="mt-3 text-sm text-muted-foreground">
+            Earlier plan versions exist but predate the current founder-authority rules
+            and are marked <span className="font-mono text-foreground/80">legacy · not build-safe</span>.
+            Reconvene the board to produce a build-safe result before filing change requests
+            or generating batches.
+          </p>
+        ) : (
+          <p className="mt-3 text-sm text-muted-foreground">
+            The board hasn't reached consensus on this project.
+          </p>
+        )}
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Link
+            to="/boardroom/$projectId"
+            params={{ projectId }}
+            className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:brightness-110"
+          >
+            To the Boardroom
+          </Link>
+          <Link
+            to="/audits/$projectId"
+            params={{ projectId }}
+            className="inline-flex items-center gap-2 rounded-md border border-border bg-surface-1 px-4 py-2 text-sm text-foreground hover:border-primary/40"
+          >
+            Audits
+          </Link>
+        </div>
+        {hasLegacy && (
+          <div className="mt-10">
+            <HistoryTab
+              versions={versions ?? []}
+              selectedId=""
+              onSelect={() => { /* history-only preview elsewhere */ }}
+            />
+          </div>
+        )}
       </div>
     );
   }
+  if (!selected) return null;
 
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-10 md:py-14">
@@ -240,14 +285,14 @@ function PlanWorkspacePage() {
             {project.name}
           </h1>
           <p className="mt-1 font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
-            The plan is locked · {new Date(latest.locked_at).toLocaleDateString()}
+            The plan is locked · {new Date(current.locked_at).toLocaleDateString()}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <span className="rounded-full border border-border bg-surface-2 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
-            v{latest.version}
+            v{current.version}
           </span>
-          {latest.is_chair_ruled && (
+          {current.is_chair_ruled && (
             <span className="inline-flex items-center gap-1.5 rounded-full border border-[hsl(38_65%_55%/0.4)] bg-[hsl(38_65%_55%/0.08)] px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-[hsl(38_65%_70%)]">
               <Gavel className="h-3 w-3" />
               Chair ruled
@@ -256,9 +301,14 @@ function PlanWorkspacePage() {
         </div>
       </div>
 
-      {isViewingOlder && (
+      {isViewingOlder && !selectedUnsafe && (
         <div className="mt-6 rounded-md border border-[hsl(38_65%_55%/0.35)] bg-[hsl(38_65%_55%/0.06)] px-4 py-2.5 font-mono text-[11px] text-[hsl(38_65%_75%)]">
-          Viewing v{selected.version} — the board's current plan is v{latest.version}.
+          Viewing v{selected.version} — the board's current plan is v{current.version}.
+        </div>
+      )}
+      {selectedUnsafe && (
+        <div className="mt-6 rounded-md border border-[hsl(38_65%_55%/0.35)] bg-[hsl(38_65%_55%/0.06)] px-4 py-2.5 font-mono text-[11px] text-[hsl(38_65%_75%)]">
+          Legacy · not build-safe{selected.invalidated_reason ? ` — ${selected.invalidated_reason}` : ""}. Read-only. The current build-safe plan is v{current.version}.
         </div>
       )}
 
@@ -295,7 +345,7 @@ function PlanWorkspacePage() {
           <PlanTab plan={selected} projectName={project.name} />
         )}
         {tab === "prd" && (
-          <PrdTab plan={selected} projectName={project.name} blueprintDrafting={blueprintDrafting && selected.id === latest.id} />
+          <PrdTab plan={selected} projectName={project.name} blueprintDrafting={blueprintDrafting && selected.id === current.id} />
         )}
         {tab === "features" && <FeaturesTab plan={selected} />}
         {tab === "decisions" && <DecisionsTab plan={selected} />}
@@ -318,13 +368,19 @@ function PlanWorkspacePage() {
           <h2 className="font-display text-lg text-foreground">Change requests</h2>
         </div>
         {isOwner ? (
-          <ChangeRequestForm
-            projectId={projectId}
-            disabled={!!activeCrRun}
-            onSubmitted={() => {
-              // Realtime will refresh
-            }}
-          />
+          selectedUnsafe ? (
+            <p className="mt-4 text-sm text-muted-foreground">
+              Change requests target the current build-safe plan (v{current.version}). Switch to it to file one.
+            </p>
+          ) : (
+            <ChangeRequestForm
+              projectId={projectId}
+              disabled={!!activeCrRun}
+              onSubmitted={() => {
+                // Realtime will refresh
+              }}
+            />
+          )
         ) : (
           <p className="mt-4 text-sm text-muted-foreground">
             Instructor view — read-only.
@@ -633,6 +689,14 @@ function HistoryTab({
                   Chair ruled
                 </span>
               )}
+              {!v.is_build_safe && (
+                <span
+                  title={v.invalidated_reason ?? undefined}
+                  className="inline-flex items-center gap-1 rounded-full border border-[hsl(8_60%_45%/0.45)] bg-[hsl(8_60%_45%/0.08)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[hsl(8_60%_70%)]"
+                >
+                  Legacy · not build-safe
+                </span>
+              )}
               <span className="ml-auto font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
                 {new Date(v.locked_at).toLocaleDateString()}
               </span>
@@ -671,15 +735,21 @@ function ChangeRequestForm({
         .select("id")
         .eq("project_id", projectId)
         .eq("kind", "plan")
+        .eq("is_build_safe", true)
         .order("version", { ascending: false })
         .limit(1)
         .maybeSingle();
+      if (!plan?.id) {
+        throw new Error(
+          "No build-safe plan yet. Reconvene the board before filing a change request.",
+        );
+      }
       const { data: cr, error: crErr } = await supabase
         .from("change_requests")
         .insert({
           project_id: projectId,
           user_id: userData.user.id,
-          plan_version_id: plan?.id ?? null,
+          plan_version_id: plan.id,
           description: description.trim(),
         })
         .select("id")

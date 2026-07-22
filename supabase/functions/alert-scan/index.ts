@@ -113,7 +113,7 @@ Deno.serve(async (req) => {
     .lt("created_at", cutoff7d);
 
   for (const p of validated ?? []) {
-    const { data: pv } = await admin.from("plan_versions").select("id").eq("project_id", p.id).limit(1);
+    const { data: pv } = await admin.from("plan_versions").select("id").eq("project_id", p.id).eq("is_build_safe", true).limit(1);
     if ((pv ?? []).length) continue;
     if (await hasOpenAlert(admin, p.id, "never_locked")) continue;
     const cohort_id = await cohortFor(admin, p.user_id);
@@ -131,7 +131,7 @@ Deno.serve(async (req) => {
   // Auto-resolve never_locked when a plan_versions row now exists.
   const { data: openNL } = await admin.from("alerts").select("id, project_id").eq("kind", "never_locked").eq("status", "open");
   for (const a of openNL ?? []) {
-    const { data: pv } = await admin.from("plan_versions").select("id").eq("project_id", a.project_id).limit(1);
+    const { data: pv } = await admin.from("plan_versions").select("id").eq("project_id", a.project_id).eq("is_build_safe", true).limit(1);
     if ((pv ?? []).length) {
       await admin.from("alerts").update({ status: "resolved", resolved_at: new Date().toISOString() }).eq("id", a.id);
       stats.never_locked_resolved++;

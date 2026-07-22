@@ -24,7 +24,7 @@ function RunwayIndex() {
       if (!p.length) { setRows([]); return; }
       const ids = p.map((x) => x.id);
       const [{ data: pvs }, { data: bs }] = await Promise.all([
-        supabase.from("plan_versions").select("project_id").eq("kind", "plan").in("project_id", ids),
+        supabase.from("plan_versions").select("project_id").eq("kind", "plan").eq("is_build_safe", true).in("project_id", ids),
         supabase.from("batches").select("project_id").in("project_id", ids),
       ]);
       const locked = new Set((pvs ?? []).map((r: any) => r.project_id));

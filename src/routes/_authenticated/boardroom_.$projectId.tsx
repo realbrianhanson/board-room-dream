@@ -15,23 +15,57 @@ const CONVENE_BLOCKED: Record<string, string> = {
   killed: "This idea was killed. Revise it before reconvening.",
 };
 
+// Exact backend message used by boardroom-orchestrator's start_run gate.
+const IMPORT_AUDIT_GATE_MESSAGE =
+  "Complete a successful A–Z audit before convening the improvement board.";
+
 function BoardroomProjectPage() {
   const { projectId } = Route.useParams();
   const journey = useProjectJourney(projectId);
   const [projectName, setProjectName] = useState<string>("Project");
   const [isImport, setIsImport] = useState<boolean>(false);
+  const [gateLoading, setGateLoading] = useState<boolean>(true);
+  const [hasSuccessfulAudit, setHasSuccessfulAudit] = useState<boolean>(false);
+  const [hasSafePlan, setHasSafePlan] = useState<boolean>(false);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      const { data } = await supabase
-        .from("projects")
-        .select("name, is_import")
-        .eq("id", projectId)
-        .maybeSingle();
-      if (data?.name) setProjectName(data.name);
-      setIsImport(!!data?.is_import);
+      const [{ data: proj }, { data: audits }, { data: plans }] = await Promise.all([
+        supabase.from("projects").select("name, is_import").eq("id", projectId).maybeSingle(),
+        supabase
+          .from("audits")
+          .select("id, status")
+          .eq("project_id", projectId)
+          .eq("kind", "final_az")
+          .in("status", ["clean", "findings"])
+          .limit(1),
+        supabase
+          .from("plan_versions")
+          .select("id")
+          .eq("project_id", projectId)
+          .eq("kind", "plan")
+          .eq("is_build_safe", true)
+          .limit(1),
+      ]);
+      if (cancelled) return;
+      if (proj?.name) setProjectName(proj.name);
+      setIsImport(!!proj?.is_import);
+      setHasSuccessfulAudit((audits ?? []).length > 0);
+      setHasSafePlan((plans ?? []).length > 0);
+      setGateLoading(false);
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [projectId]);
+
+  const extraConveneGate = () => {
+    if (!isImport) return null;
+    if (gateLoading) return IMPORT_AUDIT_GATE_MESSAGE;
+    if (!hasSuccessfulAudit) return IMPORT_AUDIT_GATE_MESSAGE;
+    return null;
+  };
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-10 md:px-10 md:py-14">
@@ -51,8 +85,11 @@ function BoardroomProjectPage() {
         kind="plan"
         rubric={PLAN_RUBRIC}
         conveneLabel={isImport ? "Convene the improvement board" : "Convene the board"}
+        reconveneImportLabel="Reconvene the improvement board"
         runningTitle="The Boardroom"
         conveneBlockedByStatus={CONVENE_BLOCKED}
+        extraConveneGate={extraConveneGate}
+        legacyRequiresSafeArtifact={{ hasSafeArtifact: hasSafePlan }}
         emptyTitle={isImport ? "The board reviews what you've already built." : "The room is quiet."}
         emptySubtitle={
           isImport

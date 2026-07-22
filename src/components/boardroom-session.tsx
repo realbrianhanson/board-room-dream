@@ -30,6 +30,7 @@ export type SessionRun = {
   founder_notes: string | null;
   error: string | null;
   created_at: string;
+  constitution_version?: number | null;
 };
 export type SessionStep = {
   id: string;
@@ -68,7 +69,14 @@ export type BoardroomSessionProps = {
   onRunLoaded?: (run: SessionRun | null) => void;
   /** When true, all mutation UI (convene, pause/resume, retry) is hidden regardless of ownership. */
   readOnly?: boolean;
-
+  /** Label used for the terminal-reconvene button on import projects. */
+  reconveneImportLabel?: string;
+  /**
+   * When provided, a locked (consensus / chair_ruled) run whose owner-authority
+   * artifact is not build-safe is treated as legacy: the lock card is hidden
+   * and a legacy warning banner is rendered instead.
+   */
+  legacyRequiresSafeArtifact?: { hasSafeArtifact: boolean };
 };
 
 export function BoardroomSession(props: BoardroomSessionProps) {
@@ -86,6 +94,8 @@ export function BoardroomSession(props: BoardroomSessionProps) {
     showHeader = true,
     onRunLoaded,
     readOnly = false,
+    reconveneImportLabel,
+    legacyRequiresSafeArtifact,
   } = props;
 
   const navigate = useNavigate();
@@ -296,6 +306,15 @@ export function BoardroomSession(props: BoardroomSessionProps) {
 
   const overBudget = run && Number(run.spent_usd) >= Number(run.budget_usd) * 0.8;
   const locked = run?.status === "consensus" || run?.status === "chair_ruled";
+  const terminal = !!run && ["failed", "completed", "consensus", "chair_ruled"].includes(run.status);
+  const isLegacy = !!(
+    run &&
+    terminal &&
+    (
+      (typeof run.constitution_version === "number" && run.constitution_version < 3) ||
+      (legacyRequiresSafeArtifact && !legacyRequiresSafeArtifact.hasSafeArtifact)
+    )
+  );
   const gateReason = project ? (conveneBlockedByStatus?.[project.status] ?? extraConveneGate?.() ?? null) : null;
 
   return (
@@ -376,7 +395,22 @@ export function BoardroomSession(props: BoardroomSessionProps) {
         />
       </div>
 
-      {locked && run && lockCard?.(run)}
+      {locked && !isLegacy && run && lockCard?.(run)}
+
+      {isLegacy && run && (
+        <div className="mt-8 flex items-start gap-3 rounded-xl border border-[hsl(38_65%_55%/0.4)] bg-[hsl(38_65%_55%/0.06)] p-5">
+          <AlertTriangle className="mt-0.5 h-4 w-4 text-[hsl(38_65%_70%)]" />
+          <div className="min-w-0 flex-1">
+            <p className="font-mono text-[11px] uppercase tracking-widest text-[hsl(38_65%_70%)]">
+              Legacy session — not build-safe under current founder-authority rules
+            </p>
+            <p className="mt-1 text-sm text-foreground">
+              This session predates the current founder-authority rules or its artifact was
+              invalidated. Reconvene the board to produce a build-safe result.
+            </p>
+          </div>
+        </div>
+      )}
 
       {run?.status === "failed" && run.error && (
         <div className="mt-8 flex items-start gap-3 rounded-xl border border-[hsl(8_60%_45%/0.4)] bg-[hsl(8_60%_45%/0.08)] p-5">
@@ -385,15 +419,21 @@ export function BoardroomSession(props: BoardroomSessionProps) {
             <p className="font-mono text-[11px] uppercase tracking-widest text-[hsl(8_60%_65%)]">Session failed</p>
             <p className="mt-1 text-sm text-foreground">{run.error}</p>
           </div>
-          {!readOnly && isOwner && !gateReason && (
-            <button
-              onClick={convene}
-              disabled={convening}
-              className="shrink-0 rounded-md border border-[hsl(38_65%_55%/0.5)] bg-[hsl(38_65%_55%/0.08)] px-3 py-1.5 font-mono text-[11px] uppercase tracking-widest text-[hsl(38_65%_70%)] hover:bg-[hsl(38_65%_55%/0.14)] disabled:opacity-50"
-            >
-              {convening ? "Reconvening…" : "Reconvene"}
-            </button>
-          )}
+        </div>
+      )}
+
+      {terminal && !readOnly && isOwner && (
+        <div className="mt-6 flex justify-end">
+          <button
+            onClick={convene}
+            disabled={convening || hasKey === false || !!gateReason}
+            title={gateReason ?? (hasKey === false ? "Seat the board first — add your OpenRouter key in Settings." : undefined)}
+            className="rounded-md border border-[hsl(38_65%_55%/0.5)] bg-[hsl(38_65%_55%/0.08)] px-4 py-2 font-mono text-[11px] uppercase tracking-widest text-[hsl(38_65%_70%)] hover:bg-[hsl(38_65%_55%/0.14)] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {convening
+              ? "Reconvening…"
+              : reconveneImportLabel ?? "Convene again"}
+          </button>
         </div>
       )}
 

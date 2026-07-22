@@ -92,7 +92,7 @@ Deno.serve(async (req) => {
     const projIds = (projects ?? []).map((p: any) => p.id);
     let lockedSet = new Set<string>();
     if (projIds.length) {
-      const { data } = await admin.from("plan_versions").select("project_id").eq("kind", "plan").in("project_id", projIds);
+      const { data } = await admin.from("plan_versions").select("project_id").eq("kind", "plan").eq("is_build_safe", true).in("project_id", projIds);
       lockedSet = new Set((data ?? []).map((r: any) => r.project_id));
     }
 
