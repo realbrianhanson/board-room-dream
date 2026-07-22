@@ -1192,6 +1192,25 @@ async function handleRequest(req: Request): Promise<Response> {
       .maybeSingle();
     if (!project || project.user_id !== userId) return j(404, { error: "Project not found" });
 
+    // At most one active run per (project_id, kind). If one exists, return it
+    // instead of inserting a duplicate. Ordered by most progress: higher
+    // spent_usd first, then older created_at.
+    {
+      const { data: existingActive } = await admin
+        .from("boardroom_runs")
+        .select("id, status, spent_usd, created_at")
+        .eq("project_id", projectId)
+        .eq("user_id", userId)
+        .eq("kind", kind)
+        .in("status", ["queued", "running", "paused", "paused_budget"])
+        .order("spent_usd", { ascending: false })
+        .order("created_at", { ascending: true });
+      if (existingActive && existingActive.length > 0) {
+        const winner = existingActive[0];
+        return j(200, { run_id: winner.id, status: winner.status, existing: true });
+      }
+    }
+
     if (kind === "design" || kind === "batches") {
       const locked = await loadLockedPlan(admin, projectId);
       if (!locked) {
