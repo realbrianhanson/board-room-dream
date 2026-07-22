@@ -260,7 +260,13 @@ export function downgradeUnsupported(
 
 // Strict validator. Returns null on OK, or a short message describing the
 // first violation. Enforces per-finding shape, counts, and payload size.
-export function validateMerged(findings: CleanFinding[]): string | null {
+// AUDIT-MERGE-BOUNDED-R3: uses merge-specific per-field caps (tighter than
+// the global CAPS.titleMax/etc used during normalization) and optionally
+// validates the merge summary length.
+export function validateMerged(
+  findings: CleanFinding[],
+  summary?: string | null,
+): string | null {
   if (findings.length > CAPS.mergeFindingsMax) {
     return `merged findings has ${findings.length} entries — max ${CAPS.mergeFindingsMax}. Dedupe and drop lowest-severity duplicates.`;
   }
@@ -271,9 +277,9 @@ export function validateMerged(findings: CleanFinding[]): string | null {
     if (typeof f.title !== "string" || !f.title.trim()) return `findings[${i}].title missing`;
     if (typeof f.description !== "string") return `findings[${i}].description must be a string`;
     if (typeof f.evidence !== "string") return `findings[${i}].evidence must be a string`;
-    if (f.title.length > CAPS.titleMax) return `findings[${i}].title over ${CAPS.titleMax}`;
-    if (f.description.length > CAPS.descriptionMax) return `findings[${i}].description over ${CAPS.descriptionMax}`;
-    if (f.evidence.length > CAPS.evidenceMax) return `findings[${i}].evidence over ${CAPS.evidenceMax}`;
+    if (f.title.length > CAPS.mergeTitleMax) return `findings[${i}].title over ${CAPS.mergeTitleMax}`;
+    if (f.description.length > CAPS.mergeDescriptionMax) return `findings[${i}].description over ${CAPS.mergeDescriptionMax}`;
+    if (f.evidence.length > CAPS.mergeEvidenceMax) return `findings[${i}].evidence over ${CAPS.mergeEvidenceMax}`;
     if (f.line_start !== null && !(Number.isInteger(f.line_start) && f.line_start > 0)) {
       return `findings[${i}].line_start invalid`;
     }
@@ -287,6 +293,9 @@ export function validateMerged(findings: CleanFinding[]): string | null {
   const payloadLen = JSON.stringify(findings).length;
   if (payloadLen > CAPS.mergeSerializedMax) {
     return `serialized merged findings is ${payloadLen} chars — exceeds ${CAPS.mergeSerializedMax}. Compress evidence.`;
+  }
+  if (typeof summary === "string" && summary.length > CAPS.mergeSummaryMax) {
+    return `summary is ${summary.length} chars — exceeds ${CAPS.mergeSummaryMax}.`;
   }
   return null;
 }
