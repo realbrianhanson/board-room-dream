@@ -268,7 +268,7 @@ Deno.serve(async (req) => {
 
   const { data: batch } = await admin
     .from("batches")
-    .select("id, project_id, user_id, batch_no, title, channel, prompt_md, status")
+    .select("id, project_id, user_id, batch_no, title, channel, prompt_md, status, created_at")
     .eq("id", batchId)
     .maybeSingle();
   if (!batch || batch.user_id !== userId) return j(404, { error: "Batch not found" });
