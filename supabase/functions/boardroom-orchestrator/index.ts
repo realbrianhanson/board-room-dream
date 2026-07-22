@@ -736,7 +736,7 @@ async function finalizeChangeRequest(admin: any, run: any, steps: any[]) {
         projectId: run.project_id,
         founderNotes: run.founder_notes ?? null,
         extraFounderNotes: crDescription
-          ? [{ source: `change_request:${crId}`, text: crDescription }]
+          ? [{ source: `approved_change_request:${crId}`, text: crDescription }]
           : [],
       });
       const preErr = finalizeChangeRequestAuthorityError(v, authority);
