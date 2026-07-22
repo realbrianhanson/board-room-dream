@@ -131,7 +131,7 @@ function AuthenticatedShell() {
     <div className="flex min-h-screen w-full bg-background text-foreground">
       {/* Mobile top bar */}
       <div className="fixed inset-x-0 top-0 z-40 flex items-center justify-between border-b border-border bg-surface-1/90 px-4 py-3 backdrop-blur md:hidden">
-        <span className="font-display text-sm tracking-[0.28em]">BOARDROOM</span>
+        <span className="font-display text-sm tracking-[0.28em]">APP BLUEPRINT</span>
         <button
           onClick={() => setMobileOpen((v) => !v)}
           aria-label="Toggle navigation"
