@@ -20,7 +20,7 @@ import { detectStackFromRepo, loadFieldManual, renderStackBlock } from "../_shar
 import { injectOwnerAuthority, loadOwnerAuthority, OWNER_AUTHORITY_RULES } from "../_shared/owner-authority.ts";
 import { batchAuthorityError, shapeError, type Parsed } from "./validators.ts";
 
-const BUILD_VERSION = "2026-07-27.owner-authority-prelock.k1";
+const BUILD_VERSION = "2026-07-27.owner-authority-final.l1";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -56,41 +56,53 @@ async function loadPlan(admin: any, projectId: string) {
   return data ?? null;
 }
 
-// Load founder_notes from any owner-authored run linked to the batch: the
-// run that produced the locked plan (plan_versions.source_run_id) plus the
-// most recent batch-generation run for this project. Both feed the compiler's
-// independent owner-authority pool alongside intake + approved change requests.
+// Assemble the compiler's owner-authored founder_notes pool. We pull notes
+// ONLY from runs deterministically relevant to THIS batch:
+//   1. plan_versions.source_run_id — the run that produced the locked plan.
+//   2. The latest boardroom_runs where kind='batches' AND status IN terminal
+//      successful set ('consensus','chair_ruled') AND created_at <= this
+//      batch's created_at. A failed/running/future unrelated run is ignored.
+// All owner-authored notes are concatenated into a SINGLE allowed source
+// labeled "founder_notes", so the existing marker grammar
+// [OWNER-AUTHORIZED: source="founder_notes" quote="..."] keeps working.
 async function loadRelevantFounderNotes(
   admin: any,
   projectId: string,
   planSourceRunId: string | null,
+  batchCreatedAt: string | null,
 ): Promise<Array<{ source: string; text: string }>> {
-  const out: Array<{ source: string; text: string }> = [];
   const runIds = new Set<string>();
   if (planSourceRunId) runIds.add(planSourceRunId);
   try {
-    const { data: latestBatchesRun } = await admin
+    let q = admin
       .from("boardroom_runs")
-      .select("id")
+      .select("id, created_at")
       .eq("project_id", projectId)
       .eq("kind", "batches")
+      .in("status", ["consensus", "chair_ruled"])
       .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (latestBatchesRun?.id) runIds.add(latestBatchesRun.id);
+      .limit(1);
+    if (batchCreatedAt) q = q.lte("created_at", batchCreatedAt);
+    const { data: latest } = await q.maybeSingle();
+    if (latest?.id) runIds.add(latest.id);
   } catch { /* ignore */ }
-  if (!runIds.size) return out;
+  if (!runIds.size) return [];
+  const combined: string[] = [];
   try {
     const { data: runs } = await admin
       .from("boardroom_runs")
-      .select("id, kind, founder_notes")
+      .select("id, founder_notes")
       .in("id", Array.from(runIds));
     for (const r of runs ?? []) {
       const t = String(r?.founder_notes ?? "").trim();
-      if (t) out.push({ source: `founder_notes:run:${r.id}:${r.kind}`, text: t });
+      if (t && !combined.includes(t)) combined.push(t);
     }
   } catch { /* ignore */ }
-  return out;
+  if (!combined.length) return [];
+  // Single combined authority block, keyed as "founder_notes" so a marker
+  // source="founder_notes" quote="…" is verbatim-checked against all
+  // relevant notes at once. No namespaced grammar change required.
+  return [{ source: "founder_notes", text: combined.join("\n\n") }];
 }
 
 
@@ -256,7 +268,7 @@ Deno.serve(async (req) => {
 
   const { data: batch } = await admin
     .from("batches")
-    .select("id, project_id, user_id, batch_no, title, channel, prompt_md, status")
+    .select("id, project_id, user_id, batch_no, title, channel, prompt_md, status, created_at")
     .eq("id", batchId)
     .maybeSingle();
   if (!batch || batch.user_id !== userId) return j(404, { error: "Batch not found" });
@@ -311,12 +323,14 @@ Deno.serve(async (req) => {
   // Compiler INDEPENDENTLY reloads owner authority; it never trusts an
   // upstream "reviewed" flag from a locked plan or batch draft. Founder
   // notes come from BOTH the run that produced the locked plan
-  // (plan_versions.source_run_id) and the most recent batches-generation run
-  // for this project. Intake + approved change requests are always included.
+  // (plan_versions.source_run_id) and the latest terminal-successful
+  // batches-generation run created at or before THIS batch's created_at.
+  // Intake + approved change requests are always included.
   const extraFounderNotes = await loadRelevantFounderNotes(
     admin,
     batch.project_id,
     (plan as any)?.source_run_id ?? null,
+    (batch as any)?.created_at ?? null,
   );
   const authority = await loadOwnerAuthority(admin, {
     projectId: batch.project_id,

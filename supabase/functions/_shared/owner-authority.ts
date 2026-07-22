@@ -188,10 +188,11 @@ export function normalize(s: string): string {
   return (s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-// Line/sentence-scoped negation. Only the matched directive's OWN line (or
-// its containing sentence) is checked for preservation/negation — not a
-// neighboring line, so `Do not add Stripe.\nAdd Stripe checkout for $49.`
-// still fires on the second line.
+// Sentence-scoped negation. Checked against the sentence/clause that
+// contains the individual match — NOT the whole line — so that a directive
+// like `Do not add Stripe. Add Stripe checkout for $49.` (one line, two
+// sentences) still fires on the second sentence. Same for semicolon-
+// separated clauses: `Do not add Stripe; add Stripe checkout for $49.`
 const NEGATION_OR_PRESERVE = /\b(do\s+not|don['’]?t|never|avoid|reject|instead\s+of|keep\s+existing|preserve|preserving|already\s+exists|already\s+integrated|do not add|remove\s+the\s+dead|dead\s+import)\b/i;
 
 // Category -> keyword vocabulary a marker quote must include to authorize
@@ -316,10 +317,59 @@ export function extractProvenanceMarkers(text: string, authority: OwnerAuthority
   return out;
 }
 
+// Extract the salient "entity" tokens from a matched directive so that a
+// marker quote authorizing e.g. `drop old_policy` cannot authorize
+// `DROP TABLE projects`, a `$49` quote cannot authorize `$999/month`, and
+// a Stripe quote cannot authorize PayPal. If a category has no meaningful
+// entity to enforce (e.g. custom_domain / broaden_auth), returns []; the
+// caller treats an empty result as "category-only match is sufficient".
+export function extractDirectiveEntities(category: UnauthorizedCategory, snippet: string): string[] {
+  const s = snippet.toLowerCase();
+  const out: string[] = [];
+  if (category === "monetary_amount") {
+    // Capture the numeric amount (e.g. "$49", "$999.00", "eur 20") as digits.
+    const m = s.match(/\d[\d,]*(?:\.\d+)?/);
+    if (m) out.push(m[0].replace(/[,]/g, ""));
+  } else if (category === "payment_provider_or_checkout") {
+    const providers = ["stripe", "paddle", "paypal", "lemon squeezy", "lemonsqueezy", "shopify", "square", "braintree", "razorpay"];
+    for (const p of providers) if (s.includes(p)) out.push(p);
+  } else if (category === "new_external_integration") {
+    const provs = ["sendgrid", "twilio", "sentry", "intercom", "slack", "openai", "anthropic", "resend", "postmark", "mailgun", "segment", "amplitude", "posthog", "mixpanel", "pusher", "algolia", "cloudinary"];
+    for (const p of provs) if (s.includes(p)) out.push(p);
+  } else if (category === "disable_or_retire_existing") {
+    const named = s.match(/\b(flywheel[-\s]?miner|instructor[-\s]?digest|alert[-\s]?scan|audit[-\s]?runner|batch[-\s]?compiler|boardroom[-\s]?orchestrator|key[-\s]?vault)\b/g);
+    if (named) out.push(...named.map((x) => x.replace(/\s+/g, "-")));
+  } else if (category === "destructive_sql") {
+    const m = s.match(/\b(?:DROP\s+(?:TABLE|COLUMN|FUNCTION|VIEW|MATERIALIZED\s+VIEW|POLICY|TYPE|SCHEMA|INDEX|TRIGGER|DATABASE)|TRUNCATE(?:\s+TABLE)?|DELETE\s+FROM)\s+([a-z_][a-z0-9_.]*)/i);
+    if (m) out.push(m[1].toLowerCase().replace(/^public\./, ""));
+  }
+  return out;
+}
+
+// Return the sentence/clause (bounded by . ! ? ;) inside `ownLine` that
+// contains position `matchOffset`.
+function sentenceForMatch(ownLine: string, matchOffset: number): string {
+  const parts: Array<{ start: number; end: number }> = [];
+  let start = 0;
+  for (let i = 0; i < ownLine.length; i++) {
+    const c = ownLine.charCodeAt(i);
+    if (c === 46 || c === 33 || c === 63 || c === 59) {
+      parts.push({ start, end: i + 1 });
+      start = i + 1;
+    }
+  }
+  if (start < ownLine.length) parts.push({ start, end: ownLine.length });
+  for (const p of parts) {
+    if (matchOffset >= p.start && matchOffset < p.end) return ownLine.slice(p.start, p.end);
+  }
+  return ownLine;
+}
+
 // Find spans in `text` that describe net-new / destructive high-impact
 // directives which are NOT covered by a verified OWNER-AUTHORIZED marker on
 // the same line or the immediately-following line, AND whose category is
-// actually authorized by the marker's quote.
+// actually authorized by the marker's quote, AND whose salient entity/value
+// (provider name, numeric amount, object name) actually overlaps the quote.
 export function findUnauthorizedHighImpact(
   text: string,
   authority: OwnerAuthority,
@@ -334,21 +384,31 @@ export function findUnauthorizedHighImpact(
     let m: RegExpExecArray | null;
     while ((m = rule.re.exec(text))) {
       const start = m.index;
-      // Own-sentence/line scope: negation only counts on the directive's own
-      // line. Find the line containing the match.
       const line = findLineIndex(lineStarts, start);
       const lineStart = lineStarts[line];
       const lineEnd = line + 1 < lineStarts.length ? lineStarts[line + 1] : text.length;
       const ownLine = text.slice(lineStart, lineEnd);
-      if (NEGATION_OR_PRESERVE.test(ownLine)) continue;
+      // Sentence-scope: negation/preservation only silences the individual
+      // match if it occurs in the same sentence/clause. We anchor on the
+      // END of the match so a greedy match like `add Stripe; add Stripe
+      // checkout for $49` is judged in the sentence containing the actual
+      // noun (`checkout`/`$49`), not the earlier `Do not add Stripe`.
+      const endOff = Math.min(ownLine.length - 1, Math.max(0, (start - lineStart) + m[0].length - 1));
+      const sentence = sentenceForMatch(ownLine, endOff);
+      if (NEGATION_OR_PRESERVE.test(sentence)) continue;
       if (rule.category === "monetary_amount" && /(?:\$|€|£|¥)\s*0(?![.,]?\d)/i.test(m[0])) continue;
-      // Marker coverage: same line or the immediately-following line only.
-      const covered = markers.some(
-        (mk) =>
-          mk.ok &&
-          (mk.line === line || mk.line === line + 1) &&
-          mk.categories.has(rule.category),
-      );
+      const directiveEntities = extractDirectiveEntities(rule.category, m[0]);
+      // Marker coverage: same line or the immediately-following line, category
+      // match, AND (when the directive has a salient entity) meaningful
+      // overlap between that entity and the marker's quote.
+      const covered = markers.some((mk) => {
+        if (!mk.ok) return false;
+        if (!(mk.line === line || mk.line === line + 1)) return false;
+        if (!mk.categories.has(rule.category)) return false;
+        if (!directiveEntities.length) return true;
+        const nq = normalize(mk.quote);
+        return directiveEntities.every((e) => nq.includes(e.toLowerCase()));
+      });
       if (covered) continue;
       out.push({ category: rule.category, snippet: m[0].trim().slice(0, 200) });
     }
@@ -416,4 +476,43 @@ export function preLockAuthorityError(
   }
   if (!violations.length) return null;
   return `proposal_requires_owner_approval — the following executable artifacts contain high-impact directives without verified owner authorization and CANNOT be locked, queued, or promoted. Each item must be removed, replaced with a repo-proven preservation/repair, or accompanied by a valid [OWNER-AUTHORIZED: source="..." quote="..."] marker whose quote appears verbatim in intake, founder_notes, or an approved change_request AND whose text references the same category:\n${violations.join("\n")}`;
+}
+
+// Convenience wrappers for the two finalization gates. They call
+// preLockAuthorityError with the exact artifacts each callsite is about to
+// commit (plan_versions row update / plan_versions row insert). Exported
+// (instead of inlined in the orchestrator) so they can be exercised by
+// behavior-level regression tests without a fake supabase client.
+export function finalizePlanAuthorityError(
+  prdMd: string,
+  features: unknown,
+  authority: OwnerAuthority,
+): string | null {
+  return preLockAuthorityError(
+    [
+      { label: "plan.prd_md (pending finalization)", text: String(prdMd ?? "") },
+      {
+        label: "plan.features (pending finalization)",
+        text: JSON.stringify(features ?? []),
+      },
+    ],
+    authority,
+  );
+}
+
+export function finalizeChangeRequestAuthorityError(
+  v: any,
+  authority: OwnerAuthority,
+): string | null {
+  return preLockAuthorityError(
+    [
+      { label: "change_request.amended_plan_md (pending finalization)", text: String(v?.amended_plan_md ?? "") },
+      { label: "change_request.amended_prd_md (pending finalization)", text: String(v?.amended_prd_md ?? "") },
+      {
+        label: "change_request.amended_features (pending finalization)",
+        text: JSON.stringify(v?.amended_features ?? []),
+      },
+    ],
+    authority,
+  );
 }

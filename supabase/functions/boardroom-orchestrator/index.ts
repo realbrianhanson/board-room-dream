@@ -43,7 +43,12 @@ import {
   queueRound4,
   RepoContractUnavailable,
 } from "./queues.ts";
-import { loadOwnerAuthority, preLockAuthorityError } from "../_shared/owner-authority.ts";
+import {
+  finalizeChangeRequestAuthorityError,
+  finalizePlanAuthorityError,
+  loadOwnerAuthority,
+  preLockAuthorityError,
+} from "../_shared/owner-authority.ts";
 
 
 
@@ -93,7 +98,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-27.owner-authority-prelock.k1";
+const BUILD_VERSION = "2026-07-27.owner-authority-final.l1";
 
 import {
   failRun,
@@ -649,6 +654,41 @@ async function finalizeBlueprint(admin: any, run: any, steps: any[]) {
   const features = Array.isArray(extract?.response_json?.features)
     ? extract!.response_json.features
     : Array.isArray(bp?.response_json?.features) ? bp!.response_json.features : [];
+
+  // Pre-finalization owner-authority gate: the PRD markdown + features are
+  // generated AFTER lockPlanAndQueueBlueprint and would otherwise bypass the
+  // deterministic gate. Independently load owner sources and validate both
+  // artifacts. On violation: do NOT update plan_versions, do NOT mark the
+  // run completed. Fail with proposal_requires_owner_approval + alert.
+  // Chair-ruled and consensus flows are treated identically.
+  if (planVersionId && (prdMd || (features && features.length))) {
+    try {
+      const authority = await loadOwnerAuthority(admin, {
+        projectId: run.project_id,
+        founderNotes: run.founder_notes ?? null,
+      });
+      const preErr = finalizePlanAuthorityError(prdMd, features, authority);
+      if (preErr) {
+        await failRun(admin, run, preErr);
+        await insertAlert(admin, {
+          user_id: run.user_id,
+          project_id: run.project_id,
+          kind: "owner_authority_violation",
+          detail: {
+            run_id: run.id,
+            mode: finalStatus,
+            phase: "pre_finalize_blueprint",
+            excerpt: preErr.slice(0, 800),
+          },
+        });
+        return;
+      }
+    } catch (e) {
+      await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
+      return;
+    }
+  }
+
   if (planVersionId && prdMd) {
     await admin
       .from("plan_versions")
@@ -677,6 +717,49 @@ async function finalizeChangeRequest(admin: any, run: any, steps: any[]) {
   const verdict = v.verdict === "approved" ? "approved" : "rejected";
   let newVersionId: string | null = null;
   if (verdict === "approved" && crId) {
+    // Pre-finalization owner-authority gate for change requests. Load the
+    // EXACT current change_requests.description as an explicit owner source
+    // scoped to THIS CR run only. A Chair cannot expand beyond the submitted
+    // change (e.g. tack on Stripe/DROP TABLE). On violation: insert NO plan
+    // version, do NOT mark the CR approved, fail clearly.
+    let crDescription = "";
+    try {
+      const { data: crRow } = await admin
+        .from("change_requests")
+        .select("description")
+        .eq("id", crId)
+        .maybeSingle();
+      crDescription = String(crRow?.description ?? "");
+    } catch { /* ignore — an empty CR description simply blocks any high-impact expansion */ }
+    try {
+      const authority = await loadOwnerAuthority(admin, {
+        projectId: run.project_id,
+        founderNotes: run.founder_notes ?? null,
+        extraFounderNotes: crDescription
+          ? [{ source: `change_request:${crId}`, text: crDescription }]
+          : [],
+      });
+      const preErr = finalizeChangeRequestAuthorityError(v, authority);
+      if (preErr) {
+        await failRun(admin, run, preErr);
+        await insertAlert(admin, {
+          user_id: run.user_id,
+          project_id: run.project_id,
+          kind: "owner_authority_violation",
+          detail: {
+            run_id: run.id,
+            change_request_id: crId,
+            phase: "pre_finalize_change_request",
+            excerpt: preErr.slice(0, 800),
+          },
+        });
+        return;
+      }
+    } catch (e) {
+      await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
+      return;
+    }
+
     const { data: existing } = await admin
       .from("plan_versions")
       .select("version")
