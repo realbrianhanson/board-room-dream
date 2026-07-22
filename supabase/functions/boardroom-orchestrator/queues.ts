@@ -1123,6 +1123,9 @@ Constraints: ${batchRangeText} batches, unique ascending integer batch_no starti
 
 export async function createInitialSteps(admin: any, run: any) {
   if (run.kind === "test") {
+    // DIRECT INSERT (allow-listed): pipeline-health smoke test. The single
+    // user message is a canned "reply with one sentence" — no artifacts, no
+    // scope, no owner-authority-relevant surface.
     await admin.from("run_steps").insert({
       run_id: run.id,
       user_id: run.user_id,
