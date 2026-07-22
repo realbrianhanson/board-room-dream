@@ -139,10 +139,12 @@ Deno.test("assertChunkInvariants rejects >MAX_CHUNKS groups", () => {
 });
 
 Deno.test("safeUtf8Cut returns codepoint boundary and never splits continuation bytes", () => {
-  const bytes = new TextEncoder().encode("a€漢🙂"); // 11 bytes: 1,3,3,4
-  // cutting at 2 (inside €) walks back to 1
+  const bytes = new TextEncoder().encode("a€漢🙂"); // 11 bytes: 1+3+3+4
+  // maxBytes=2 lands inside €; walk back to end of 'a' at cut=1
   assertEquals(safeUtf8Cut(bytes, 2), 1);
-  // cutting at 3 lands on € boundary
-  assertEquals(safeUtf8Cut(bytes, 3), 4); // wait: index 4 is start of 漢? actually after € (bytes 1..3) next boundary is index 4
-  // The cut is the length of prefix, so we accept 4 as after €.
+  // maxBytes=4 is exactly on the boundary after € — accept it
+  assertEquals(safeUtf8Cut(bytes, 4), 4);
+  // maxBytes >= length returns full length
+  assertEquals(safeUtf8Cut(bytes, 999), bytes.length);
 });
+
