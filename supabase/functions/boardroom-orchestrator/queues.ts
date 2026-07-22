@@ -332,11 +332,13 @@ Respond with the markdown document ONLY — no JSON, no preamble, no closing rem
     status: "queued",
     request: {
       reasoning_effort: "high",
+      max_tokens: 10000,
       messages: [
         { role: "system", content: system },
         { role: "user", content: withImages(user, imageParts) },
       ],
     },
+
   });
 }
 
