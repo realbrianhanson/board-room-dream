@@ -354,11 +354,9 @@ function RunwayPage() {
   }
 
   async function regenerateSafely() {
-    if (!confirm(
-      "Archive the current build sequence and regenerate from scratch?\n\n" +
-      "Your current batches will be snapshotted for the record, then removed so the board can produce a fresh sequence grounded in your live repo. This only runs while no batch has been touched yet.",
-    )) return;
+    setRegenerateConfirmOpen(false);
     setGenerating(true);
+
     try {
       const { data, error } = await supabase.functions.invoke("boardroom-orchestrator", {
         body: { action: "regenerate_batches", project_id: projectId },
