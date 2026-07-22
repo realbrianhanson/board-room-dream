@@ -8,22 +8,28 @@ export const Route = createFileRoute("/reset-password")({
 
 function ResetPasswordPage() {
   const navigate = useNavigate();
-  const [ready, setReady] = useState(false);
+  const [ready, setReady] = useState<"pending" | "ok" | "invalid">("pending");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ tone: "error" | "info"; text: string } | null>(null);
 
   useEffect(() => {
-    // Supabase parses the recovery token from the URL hash and emits a
-    // PASSWORD_RECOVERY event; the session is set so updateUser() can run.
     const { data: sub } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") setReady(true);
+      if (event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") setReady("ok");
     });
     supabase.auth.getSession().then(({ data }) => {
-      if (data.session) setReady(true);
+      if (data.session) setReady("ok");
     });
-    return () => sub.subscription.unsubscribe();
+    // Bounded wait: after 5s, if we still have no session, treat the link as
+    // invalid/expired and surface a real recovery path instead of spinning.
+    const timer = window.setTimeout(() => {
+      setReady((prev) => (prev === "pending" ? "invalid" : prev));
+    }, 5_000);
+    return () => {
+      sub.subscription.unsubscribe();
+      window.clearTimeout(timer);
+    };
   }, []);
 
   async function handleSubmit(e: React.FormEvent) {
