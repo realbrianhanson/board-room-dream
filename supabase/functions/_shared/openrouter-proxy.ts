@@ -515,6 +515,7 @@ export async function callSeat(
       tokensOut: fbAttempt.tokensOut,
       costUsd: fbAttempt.costUsd,
       raw: fbAttempt.raw,
+      finishReason: fbAttempt.finishReason,
       fallback: {
         fallback_model_used: fbAttempt.modelId,
         primary_model: seatRow.model_id,

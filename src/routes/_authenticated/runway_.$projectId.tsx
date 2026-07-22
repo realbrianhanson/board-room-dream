@@ -638,7 +638,7 @@ function RunwayPage() {
               disabled={generating}
               className="mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
             >
-              Try again
+              Start fresh generation
             </button>
           )}
         </div>

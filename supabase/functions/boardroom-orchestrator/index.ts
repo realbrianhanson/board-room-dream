@@ -214,15 +214,15 @@ async function requeueForTimeout(admin: any, step: any): Promise<void> {
     .eq("id", step.id);
 }
 
-async function requeueForValidation(admin: any, step: any, baseMessages: any[], assistantContent: string, validationError: string): Promise<void> {
+async function requeueForValidation(admin: any, step: any, baseMessages: any[], assistantContent: string, validationError: string, truncated: boolean): Promise<void> {
   const attempts = Number(step.request?._validation_attempts ?? 0) + 1;
+  const correctionText = truncated
+    ? `Your JSON was truncated. Return exactly 6 batches; each prompt_md <=2,800 characters; total JSON <=28,000 characters. Preserve required coverage but remove repeated context.`
+    : `Your previous response failed validation: ${validationError}\nReturn ONLY the required JSON object, no prose, no code fences.`;
   const correctionMessages = [
     ...baseMessages,
     { role: "assistant", content: assistantContent },
-    {
-      role: "user",
-      content: `Your previous response failed validation: ${validationError}\nReturn ONLY the required JSON object, no prose, no code fences.`,
-    },
+    { role: "user", content: correctionText },
   ];
   await admin
     .from("run_steps")
@@ -230,7 +230,7 @@ async function requeueForValidation(admin: any, step: any, baseMessages: any[], 
       status: "queued",
       started_at: null,
       completed_at: null,
-      error: "invalid_json_requeued",
+      error: truncated ? "truncated_output_requeued" : "invalid_json_requeued",
       request: {
         ...(step.request ?? {}),
         messages: correctionMessages,
@@ -1485,7 +1485,7 @@ async function handleRequest(req: Request): Promise<Response> {
     }
     if (action === "resume") {
       const extra = Number(body?.extra_budget_usd ?? 0);
-      const patch: any = { status: "queued" };
+      const patch: any = { status: "queued", error: null };
       if (extra > 0) patch.budget_usd = Number(run.budget_usd) + extra;
       await admin.from("boardroom_runs").update(patch).eq("id", runId);
       fireSelfTick();
