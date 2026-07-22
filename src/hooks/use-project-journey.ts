@@ -18,7 +18,9 @@ export function useProjectJourney(projectId: string): JourneyStage[] | null {
           .from("plan_versions")
           .select("kind")
           .eq("project_id", projectId)
+          .eq("is_build_safe", true)
           .in("kind", ["plan", "design"]),
+
         supabase.from("batches").select("status").eq("project_id", projectId),
         supabase
           .from("audits")

@@ -173,10 +173,10 @@ function RunwayPage() {
   const loadAll = useCallback(async () => {
     const [{ data: p }, { data: pv }, { data: dv }, { data: bs }, { data: rs }, { data: au }] = await Promise.all([
       supabase.from("projects").select("id, name, user_id, status, lovable_project_url, current_batch_no, github_repo, is_import").eq("id", projectId).maybeSingle(),
-      supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "plan").limit(1),
-      supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "design").limit(1),
+      supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "plan").eq("is_build_safe", true).limit(1),
+      supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "design").eq("is_build_safe", true).limit(1),
       supabase.from("batches").select("*").eq("project_id", projectId).order("batch_no", { ascending: true }),
-      supabase.from("boardroom_runs").select("id, kind, status, error, spent_usd, budget_usd, created_at").eq("project_id", projectId).eq("kind", "batches").in("status", ["queued","running","paused","paused_budget","failed","completed"]).order("spent_usd", { ascending: false }).order("created_at", { ascending: false }).limit(10),
+      supabase.from("boardroom_runs").select("id, kind, status, error, spent_usd, budget_usd, created_at").eq("project_id", projectId).eq("kind", "batches").in("status", ["queued","running","paused","paused_budget","failed","completed","consensus","chair_ruled"]).order("created_at", { ascending: false }).limit(10),
       supabase.from("audits").select("id, batch_id, kind, status, loop_no, source, head_sha, files_analyzed, summary, created_at").eq("project_id", projectId).order("created_at", { ascending: false }),
     ]);
     setProject((p as Project) ?? null);
@@ -187,16 +187,18 @@ function RunwayPage() {
     {
       const runList = (rs ?? []) as Run[];
       const active = runList.filter((r) => ["queued","running","paused","paused_budget"].includes(r.status));
-      // Ordering already: spent_usd DESC, created_at DESC. For active tie-break
-      // we want older created_at first (most progress) — flip that here.
+      // Active tie-break: prefer greatest spent (most progress), then oldest.
       active.sort((a, b) => {
         const sa = Number(a.spent_usd ?? 0), sb = Number(b.spent_usd ?? 0);
         if (sb !== sa) return sb - sa;
         return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
       });
+      // Newest-run terminal selection: runList is already created_at DESC,
+      // so the first terminal row is the most recent one.
       const latestTerminal = runList.find((r) => !["queued","running","paused","paused_budget"].includes(r.status)) ?? null;
       setRun(active[0] ?? latestTerminal);
     }
+
     const auditRows = (au ?? []) as AuditRow[];
     setAudits(auditRows);
     // Scope findings to THIS project's audit ids only.

@@ -111,11 +111,13 @@ export async function loadLockedPlan(admin: any, projectId: string) {
     .select("content_md, prd_md, features, dissent_ledger, decision_log")
     .eq("project_id", projectId)
     .eq("kind", "plan")
+    .eq("is_build_safe", true)
     .order("version", { ascending: false })
     .limit(1)
     .maybeSingle();
   return data ?? null;
 }
+
 
 
 
@@ -316,12 +318,14 @@ export async function latestAuditSummary(admin: any, projectId: string) {
     .select("id, kind, status, summary, completed_at")
     .eq("project_id", projectId)
     .eq("kind", "final_az")
+    .in("status", ["clean", "findings"])
     .not("summary", "is", null)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   return data ?? null;
 }
+
 
 
 // ============================== Step queuing ==============================

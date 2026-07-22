@@ -50,11 +50,13 @@ async function loadPlan(admin: any, projectId: string) {
     .select("content_md, prd_md, features, source_run_id")
     .eq("project_id", projectId)
     .eq("kind", "plan")
+    .eq("is_build_safe", true)
     .order("version", { ascending: false })
     .limit(1)
     .maybeSingle();
   return data ?? null;
 }
+
 
 // Assemble the compiler's owner-authored founder_notes pool. We pull notes
 // ONLY from runs deterministically relevant to THIS batch:
@@ -112,11 +114,13 @@ async function loadDesignBrief(admin: any, projectId: string): Promise<string | 
     .select("content_md")
     .eq("project_id", projectId)
     .eq("kind", "design")
+    .eq("is_build_safe", true)
     .order("version", { ascending: false })
     .limit(1)
     .maybeSingle();
   return data?.content_md ?? null;
 }
+
 
 async function loadOutcomes(admin: any, projectId: string, uptoBatchNo: number) {
   const { data } = await admin

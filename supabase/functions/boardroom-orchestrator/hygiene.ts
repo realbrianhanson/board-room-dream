@@ -58,7 +58,7 @@ export async function requeueStepIfParentActive(
 //      the paired audits row.
 export async function failRun(
   admin: any,
-  run: { id: string; kind?: string; consensus?: { audit_id?: string } | null },
+  run: { id: string; kind?: string; project_id?: string; consensus?: { audit_id?: string } | null },
   errorMsg: string,
 ): Promise<"won" | "lost_terminal"> {
   const { data, error } = await admin
@@ -88,8 +88,43 @@ export async function failRun(
       .update({ status: "failed", completed_at: new Date().toISOString() })
       .eq("id", auditId);
   }
+
+  // Zero-batch failure reconciliation: a failed 'batches' run that produced
+  // no batches would leave projects.status='auditing' or similar, which
+  // the Dashboard would misread as "Review findings". Reset to a truthful
+  // state: 'locked' when a build-safe plan exists, 'imported' otherwise.
+  if (run?.kind === "batches" && run?.project_id) {
+    try {
+      const { count: batchCount } = await admin
+        .from("batches")
+        .select("id", { count: "exact", head: true })
+        .eq("project_id", run.project_id);
+      if ((batchCount ?? 0) === 0) {
+        const { data: safePlan } = await admin
+          .from("plan_versions")
+          .select("id")
+          .eq("project_id", run.project_id)
+          .eq("kind", "plan")
+          .eq("is_build_safe", true)
+          .limit(1)
+          .maybeSingle();
+        const { data: project } = await admin
+          .from("projects")
+          .select("is_import")
+          .eq("id", run.project_id)
+          .maybeSingle();
+        const nextStatus = safePlan ? "locked" : (project?.is_import ? "imported" : "validated");
+        await admin
+          .from("projects")
+          .update({ status: nextStatus, current_batch_no: 1 })
+          .eq("id", run.project_id);
+      }
+    } catch { /* best-effort reconciliation */ }
+  }
+
   return "won";
 }
+
 
 // Legacy/pre-migration orphans: rows stuck in status='running' with a NULL
 // started_at (every live claim now stamps started_at). Before this fix a bulk

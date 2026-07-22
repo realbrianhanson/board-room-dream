@@ -27,11 +27,13 @@ function DesignIndex() {
           .from("plan_versions")
           .select("project_id")
           .eq("kind", "plan")
+          .eq("is_build_safe", true)
           .in("project_id", projects.map((p) => p.id));
         setLockedIds(new Set((pvs ?? []).map((r: any) => r.project_id)));
       }
     })();
   }, []);
+
 
   return (
     <div className="mx-auto w-full max-w-4xl px-6 py-12 md:py-16">
