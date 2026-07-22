@@ -293,8 +293,10 @@ export function skeletonError(
   if (!titleSemanticallyMatches(m[1], batch.title)) {
     return `First-line title "${m[1]}" does not semantically match current batch title "${batch.title}".`;
   }
-  // Acceptance section required for code batches only.
-  if (batch.channel === "code") {
+  // Acceptance section required for code batches (lovable + supabase).
+  // G1 FIX: the previous check compared against "code" and never fired because
+  // real batch channels are "lovable" / "supabase" / "human".
+  if (isCodeChannel(batch.channel)) {
     const acceptIdx = text.search(/^\s*(?:#+\s*)?acceptance\b[:\s]*$/im);
     if (acceptIdx < 0) return `Missing "Acceptance" section.`;
     const afterAccept = text.slice(acceptIdx).split(/\n/).slice(1);
