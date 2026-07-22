@@ -111,11 +111,13 @@ export async function loadLockedPlan(admin: any, projectId: string) {
     .select("content_md, prd_md, features, dissent_ledger, decision_log")
     .eq("project_id", projectId)
     .eq("kind", "plan")
+    .eq("is_build_safe", true)
     .order("version", { ascending: false })
     .limit(1)
     .maybeSingle();
   return data ?? null;
 }
+
 
 
 
