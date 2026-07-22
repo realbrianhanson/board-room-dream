@@ -1024,6 +1024,23 @@ function BatchCard({
   const [outcomeDraft, setOutcomeDraft] = useState(batch.outcome_md ?? "");
   const [showOriginal, setShowOriginal] = useState(false);
 
+  const isCode = batch.channel !== "human";
+  const compileReady = batch.compile_meta?.status === "ready" && !!batch.compiled_prompt_md;
+  const compileBlocked = batch.compile_meta?.status === "blocked";
+  const compileAlreadyDone = batch.compile_meta?.status === "already_done";
+  const showCopy = !isCode || compileReady;
+  const promptLabel = !isCode
+    ? "Checklist"
+    : compileReady
+      ? "Compiled prompt"
+      : "Uncompiled roadmap — not safe to paste";
+  const promptLabelClass = isCode && !compileReady
+    ? "font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(8_60%_75%)]"
+    : "font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground";
+  const bodyText = compileReady && !showOriginal
+    ? (batch.compiled_prompt_md ?? "")
+    : batch.prompt_md;
+
   const ch = CHANNEL_STYLE[batch.channel];
   const st = STATUS_STYLE[batch.status];
   const isPassed = batch.status === "passed";
