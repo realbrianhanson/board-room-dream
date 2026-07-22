@@ -362,12 +362,14 @@ Return ONLY valid JSON:
     request: {
       json_output: true,
       temperature: 0,
+      max_tokens: 8000,
       messages: [
         { role: "system", content: system },
         { role: "user", content: `CANDIDATE DOCUMENT\n\n${String(draft?.response_text ?? "")}\n\nProduce your JSON now.` },
       ],
     },
   });
+
 }
 
 
