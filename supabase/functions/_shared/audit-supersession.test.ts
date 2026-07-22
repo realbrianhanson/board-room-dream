@@ -141,7 +141,7 @@ Deno.test("scope: excludes current audit id and per-batch audits", async () => {
   // per-batch audit finding stays open; per-batch fix batch is NOT touched.
   const bx = admin._state.batches.find((b) => b.id === "bx");
   assert(bx, "per-batch fix batch must be preserved");
-  const fBatch = admin._state.findings.find((f) => f.id === "f-batch");
+  const fBatch = admin._state.audit_findings.find((f) => f.id === "f-batch");
   assertEquals(fBatch?.status, "open");
 });
 
@@ -165,11 +165,11 @@ Deno.test("findings verdict entry: resolves older findings + archives + deletes 
   assertEquals(res.archived_batch_ids, ["bOld"]);
   assertEquals(res.deleted_batch_ids, ["bOld"]);
   assertEquals(admin._state.batches.length, 0);
-  assertEquals(admin._state.archives.length, 1);
-  const arch = admin._state.archives[0];
+  assertEquals(admin._state.batch_generation_archives.length, 1);
+  const arch = admin._state.batch_generation_archives[0];
   assertEquals(arch.batches_json.reason, SUPERSEDE_REASON);
   assertEquals(arch.batches_json.archived_batch_id, "bOld");
-  assertEquals(admin._state.findings.every((f) => f.status === "resolved"), true);
+  assertEquals(admin._state.audit_findings.every((f) => f.status === "resolved"), true);
 });
 
 Deno.test("clean verdict entry: still runs supersession", async () => {
@@ -230,5 +230,5 @@ Deno.test("idempotent retry: existing archive marker skips duplicate insert; mis
   assertEquals(res.archived_batch_ids.length, 0);
   assertEquals(res.deleted_batch_ids.sort(), ["bGone", "bOld"]);
   assertEquals(admin._state.batches.length, 0);
-  assertEquals(admin._state.archives.length, 1, "no duplicate archive inserted");
+  assertEquals(admin._state.batch_generation_archives.length, 1, "no duplicate archive inserted");
 });
