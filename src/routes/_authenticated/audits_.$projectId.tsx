@@ -338,6 +338,23 @@ function AuditCenterPage() {
               </span>
             </div>
             {finalAudit.summary?.text && <p className="mt-3 text-sm text-foreground/85">{finalAudit.summary.text}</p>}
+            {finalAudit.summary?.validation_downgrades && finalAudit.summary.validation_downgrades.length > 0 && (
+              <div className="mt-4 rounded-md border border-border/60 bg-surface-2 p-3">
+                <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
+                  Downgraded by the board — {finalAudit.summary.validation_downgrades.length} unsupported serious claim(s) rescored
+                </p>
+                <ul className="mt-2 space-y-1">
+                  {finalAudit.summary.validation_downgrades.map((d, i) => (
+                    <li key={i} className="font-mono text-[11px] text-muted-foreground">
+                      <span className="text-[hsl(38_65%_72%)]">{d.from} → {d.to}</span>
+                      {" · "}{d.title}
+                      {d.file_path ? ` (${d.file_path})` : ""}
+                      {" · "}{d.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {finalAudit.status === "clean" && !isImport && (
               <p className="mt-3 inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.22em] text-[hsl(160_45%_70%)]">
                 <Check className="h-4 w-4" /> Passed A–Z. Ship it.
