@@ -428,7 +428,8 @@ async function executeStep(admin: any, run: any, step: any) {
       await admin
         .from("run_steps")
         .update({ status: "failed", error: msg, completed_at: new Date().toISOString() })
-        .eq("id", step.id);
+        .eq("id", step.id)
+        .eq("status", "running");
       await failRun(admin, run, msg);
       return;
     }
