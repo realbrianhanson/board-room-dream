@@ -49,7 +49,9 @@ function RunwayIndex() {
           <div className="rounded-xl border border-dashed border-border bg-surface-1/40 px-8 py-16 text-center">
             <Rocket className="mx-auto h-6 w-6 text-muted-foreground" />
             <p className="mt-4 font-display text-2xl text-foreground">No projects yet.</p>
-            <p className="mt-2 text-sm text-muted-foreground">Bring an idea through intake first.</p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              The Runway takes off from the Dashboard — bring a new idea through intake, or import an existing app and run the required A–Z audit first.
+            </p>
             <button
               onClick={() => navigate({ to: "/dashboard" })}
               className="mt-6 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
