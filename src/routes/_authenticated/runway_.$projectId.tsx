@@ -1202,13 +1202,20 @@ function BatchCard({
               ) : (
                 <>
                   {batch.status === "pending" && (
-                    <button
-                      onClick={() => onAdvance("sent")}
-                      className="inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground transition-colors hover:border-primary/40"
-                    >
-                      Mark sent
-                    </button>
+                    isCode && !compileReady ? (
+                      <span className="inline-flex items-center gap-2 rounded-md border border-dashed border-border bg-surface-2 px-4 py-2 text-xs text-muted-foreground">
+                        Compile this batch before marking it sent.
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => onAdvance("sent")}
+                        className="inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground transition-colors hover:border-primary/40"
+                      >
+                        Mark sent
+                      </button>
+                    )
                   )}
+
                   {batch.status === "sent" && (
                     <button
                       onClick={() => onAdvance("built")}
