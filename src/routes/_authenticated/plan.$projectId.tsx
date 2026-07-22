@@ -372,6 +372,17 @@ function PlanWorkspacePage() {
             <p className="mt-4 text-sm text-muted-foreground">
               Change requests target the current build-safe plan (v{current.version}). Switch to it to file one.
             </p>
+          ) : isViewingOlder ? (
+            <div className="mt-4 rounded-md border border-border bg-surface-2 p-4 text-sm text-muted-foreground">
+              You're viewing v{selected.version}. Change requests always submit against the newest plan (v{current.version}).
+              <button
+                type="button"
+                onClick={() => setSelectedVersionId(current.id)}
+                className="ml-2 text-primary underline-offset-2 hover:underline"
+              >
+                Switch to v{current.version} to file one
+              </button>
+            </div>
           ) : (
             <ChangeRequestForm
               projectId={projectId}
