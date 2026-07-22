@@ -20,7 +20,7 @@ function make(over: Partial<CleanFinding> = {}): CleanFinding {
     file_path: "src/routes/index.tsx",
     title: "RLS bypass on posts",
     description: "Anon can select every row of public.posts because policy is USING (true).",
-    evidence: "supabase/migrations/2026_posts.sql line 42: CREATE POLICY \"read\" ON posts FOR SELECT USING (true)",
+    evidence: "QUOTE: CREATE POLICY \"read\" ON posts FOR SELECT USING (true) | WHY: unconditional USING clause exposes every row to anon.",
     confidence: "high",
     line_start: 42,
     line_end: 42,
@@ -70,7 +70,7 @@ Deno.test("3 maximal seat reports compact below 80k and merge validator accepts 
 
 Deno.test("dedupeFindings collapses duplicates and keeps strongest", () => {
   const a = make({ severity: "P2", confidence: "low", evidence: "weak" });
-  const b = make({ severity: "P1", confidence: "high", evidence: "strong evidence here that is concrete" });
+  const b = make({ severity: "P1", confidence: "high", evidence: "QUOTE: strong evidence here that is concrete | WHY: exact vulnerable construct is quoted." });
   const merged = dedupeFindings([a, b]);
   assertEquals(merged.length, 1);
   assertEquals(merged[0].severity, "P1");
