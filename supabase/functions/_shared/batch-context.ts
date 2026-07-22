@@ -303,13 +303,23 @@ export function isBatchGenerationStep(stepKey: string | null | undefined): boole
   return k === "batches_chair" || k === "batches_revise_chair" || k.startsWith("batches_review_");
 }
 
-// Audit map/extraction steps (per-chunk per-seat). Echoing the truncated
-// prior response back to the model was letting it re-emit the same
-// near-cap output and truncate identically. For these steps we always
-// drop the echo and rely on the tightened correction copy alone.
+// Audit map/extraction steps (per-chunk per-seat) AND the Chair merge step.
+// Echoing the truncated prior response back to the model was letting it
+// re-emit the same near-cap output and truncate identically. For these
+// steps we always drop the echo and rely on the tightened correction copy
+// alone. AUDIT-MERGE-BOUNDED-R3 extends this to audit_chair_merge — the
+// live truncation at 6485/6500 tokens repeated when the echo was included.
 export function isAuditMapStep(stepKey: string | null | undefined): boolean {
   const k = String(stepKey ?? "");
   return /^audit_(chair|strategist|contrarian|inspector|reserve)(_c\d+)?$/.test(k) && k !== "audit_chair_merge";
+}
+
+export function isAuditMergeStep(stepKey: string | null | undefined): boolean {
+  return String(stepKey ?? "") === "audit_chair_merge";
+}
+
+export function isAuditNoEchoStep(stepKey: string | null | undefined): boolean {
+  return isAuditMapStep(stepKey) || isAuditMergeStep(stepKey);
 }
 
 // ============================== Validation retry builder ==============================
