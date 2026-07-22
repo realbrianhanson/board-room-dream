@@ -1,10 +1,30 @@
 // Shared AES-256-GCM helpers used by key-vault and openrouter-proxy.
-const KEY_ENCRYPTION_SECRET = Deno.env.get("KEY_ENCRYPTION_SECRET")!;
+// Read + validate the secret PER CALL. Never hash the literal string
+// "undefined" (previously produced by `Deno.env.get(...) !` when the secret
+// was missing) — that quietly minted a stable but attacker-guessable key.
+
+// Pure helper for tests: returns the trimmed secret when valid, otherwise
+// throws the exact operator-actionable error.
+export function validateEncryptionSecret(v: string | undefined | null): string {
+  if (v === undefined || v === null) {
+    throw new Error("KEY_ENCRYPTION_SECRET is not configured");
+  }
+  const t = String(v).trim();
+  if (t === "" || t === "undefined" || t === "null") {
+    throw new Error("KEY_ENCRYPTION_SECRET is not configured");
+  }
+  return t;
+}
+
+function requireEncryptionSecret(): string {
+  return validateEncryptionSecret(Deno.env.get("KEY_ENCRYPTION_SECRET"));
+}
 
 async function importAesKey(): Promise<CryptoKey> {
+  const secret = requireEncryptionSecret();
   const hash = await crypto.subtle.digest(
     "SHA-256",
-    new TextEncoder().encode(KEY_ENCRYPTION_SECRET),
+    new TextEncoder().encode(secret),
   );
   return crypto.subtle.importKey("raw", hash, { name: "AES-GCM" }, false, [
     "encrypt",

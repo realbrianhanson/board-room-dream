@@ -143,7 +143,7 @@ export async function assembleFromGithub(
     const size: number = c.body?.size ?? 0;
     if (size > maxFileBytes) { skipped++; continue; }
     const raw = c.body?.encoding === "base64"
-      ? atob(String(c.body?.content ?? "").replace(/\n/g, ""))
+      ? decodeGithubBase64(String(c.body?.content ?? ""))
       : String(c.body?.content ?? "");
     const content = redactSecrets(raw);
     if (total + content.length > maxTotalBytes) { skipped++; continue; }
