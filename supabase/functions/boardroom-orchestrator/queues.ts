@@ -962,9 +962,9 @@ export async function queueBatchesReview(admin: any, run: any, draftJson: any) {
 }
 
 Hard output limits (enforced by validator):
-- issues array: MAX 10 items. Merge duplicates. Drop minor items if you must trim.
-- issue.text: 10-350 characters. One tight sentence naming the batch, the exact problem, and the fix. No restating the draft or the plan.
-- Total serialized JSON: <=6,000 characters. If close, cut wording, not blocking findings.
+- issues array: MAX 8 items. Merge duplicates. Drop minor items if you must trim.
+- issue.text: 10-280 characters. One tight sentence naming the batch, the exact problem, and the fix. No restating the draft or the plan.
+- Total serialized JSON: <=4,500 characters. If close, cut wording, not blocking findings.
 
 Verdict "approve" only if there are zero blocking issues. Every issue must cite either a live path from the LIVE REPO CONTRACT or the missing CREATE/ADD instruction it depends on.
 
