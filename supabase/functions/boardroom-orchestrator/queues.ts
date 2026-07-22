@@ -321,7 +321,7 @@ Requirements: at least ONE objection targeting EACH of the three other seats, at
 
     };
   });
-  await admin.from("run_steps").insert(rows);
+  await queueSteps(admin, run, rows);
 }
 
 
