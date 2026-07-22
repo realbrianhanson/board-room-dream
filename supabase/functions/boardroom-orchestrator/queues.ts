@@ -497,6 +497,10 @@ Return ONLY valid JSON:
   "decision_log": [ { "from_seat": "...", "objection": "...", "decision": "accepted"|"rejected", "reason": "..." } ],
   "steals_adopted": [ "..." ]
 }`;
+  // DIRECT INSERT (allow-listed): pure extraction — copies structured fields
+  // (decision_log, steals_adopted) out of the Chair's already-produced candidate
+  // markdown. No new decisions, no generative scope. Owner-authority injection
+  // is unnecessary because this step cannot introduce executable scope.
   await admin.from("run_steps").insert({
     run_id: run.id,
     user_id: run.user_id,
