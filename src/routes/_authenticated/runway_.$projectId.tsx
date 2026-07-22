@@ -215,7 +215,8 @@ function RunwayPage() {
   }, [projectId, loadAll]);
 
   const isOwner = !!project && !!uid && project.user_id === uid;
-  const runInFlight = run && ["queued", "running"].includes(run.status);
+  const runInFlight = run && ["queued", "running", "paused", "paused_budget"].includes(run.status);
+  const runPaused = run && ["paused", "paused_budget"].includes(run.status);
 
   const passedCount = useMemo(() => (batches ?? []).filter((b) => b.status === "passed").length, [batches]);
   const total = (batches ?? []).length;
