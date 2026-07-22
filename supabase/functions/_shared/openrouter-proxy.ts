@@ -70,6 +70,8 @@ export type ProxyOptions = {
   online?: boolean;
   /** Use the seat's fallback model as the primary for this call (watchdog retries). */
   forceFallback?: boolean;
+  /** Cap completion tokens to bound cost/latency on JSON-shape emitters. */
+  maxTokens?: number;
 };
 
 export type FallbackMeta = {
@@ -395,6 +397,7 @@ export async function callSeat(
     if (options.json) body.response_format = { type: "json_object" };
     if (options.reasoningEffort) body.reasoning = { effort: options.reasoningEffort };
     if (options.online) body.plugins = [{ id: "web", max_results: 5 }];
+    if (options.maxTokens && options.maxTokens > 0) body.max_tokens = options.maxTokens;
     return body;
   };
 

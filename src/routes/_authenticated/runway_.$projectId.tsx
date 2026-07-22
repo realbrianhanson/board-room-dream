@@ -50,6 +50,9 @@ type CompileMeta = {
   based_on?: { outcomes: number; findings: number };
   drift_notes?: string[];
   rationale?: string;
+  touched_paths?: { path: string; action: "update" | "create"; reason: string }[];
+  evidence?: { claim: string; path: string; detail: string }[];
+  build_version?: string;
 };
 
 type Batch = {
@@ -684,7 +687,15 @@ function RunwayPage() {
                 auditFindings={auditFindings}
                 fixBatch={fixBatch as Batch | null}
                 ghRepo={ghRepo}
-                onCopyPrompt={() => copy(b.compiled_prompt_md ?? b.prompt_md, "Paste it into Lovable and let it build.")}
+                onCopyPrompt={() => {
+                  if (b.channel === "human") {
+                    copy(b.prompt_md, "Work through the checklist in order.");
+                    return;
+                  }
+                  if (b.compile_meta?.status === "ready" && b.compiled_prompt_md) {
+                    copy(b.compiled_prompt_md, "Paste it into Lovable and let it build.");
+                  }
+                }}
                 onAdvance={(next) => advance(b, next)}
                 onOpenRollback={() => setShowRollback(true)}
                 onRequestSkip={() => setShowSkipConfirm(b)}
@@ -840,6 +851,8 @@ function CompileBanner({ batch }: { batch: Batch }) {
   if (!meta) return null;
   const sha = meta.head_sha ? meta.head_sha.slice(0, 7) : null;
   const drift = meta.drift_notes ?? [];
+  const touched = meta.touched_paths ?? [];
+  const evidence = meta.evidence ?? [];
 
   if (meta.status === "blocked") {
     return (
@@ -863,16 +876,48 @@ function CompileBanner({ batch }: { batch: Batch }) {
       <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[hsl(38_65%_72%)]">
         Compiled against your live code{sha ? ` · commit ${sha}` : ""} · {meta.files_analyzed} file{meta.files_analyzed === 1 ? "" : "s"} read
       </p>
-      {drift.length > 0 && (
-        <div className="mt-2">
-          <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Drift from the plan</p>
-          <ul className="mt-1 space-y-0.5">
-            {drift.map((d, i) => (
-              <li key={i} className="text-xs text-foreground/85">— {d}</li>
-            ))}
-          </ul>
+      <details className="mt-2 group">
+        <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground">
+          Why this prompt is safe to paste ({touched.length} touched · {evidence.length} evidence{drift.length ? ` · ${drift.length} drift` : ""})
+        </summary>
+        <div className="mt-3 space-y-3">
+          {touched.length > 0 && (
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Files this prompt touches</p>
+              <ul className="mt-1 space-y-0.5">
+                {touched.map((t, i) => (
+                  <li key={i} className="text-xs text-foreground/85">
+                    <span className={`font-mono ${t.action === "create" ? "text-[hsl(160_45%_65%)]" : "text-[hsl(38_65%_72%)]"}`}>{t.action.toUpperCase()}</span>{" "}
+                    <span className="font-mono">{t.path}</span> — <span className="text-muted-foreground">{t.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {evidence.length > 0 && (
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Evidence in the live code</p>
+              <ul className="mt-1 space-y-0.5">
+                {evidence.map((e, i) => (
+                  <li key={i} className="text-xs text-foreground/85">
+                    — {e.claim} <span className="text-muted-foreground">(<span className="font-mono">{e.path}</span>: {e.detail})</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {drift.length > 0 && (
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Drift from the plan</p>
+              <ul className="mt-1 space-y-0.5">
+                {drift.map((d, i) => (
+                  <li key={i} className="text-xs text-foreground/85">— {d}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
-      )}
+      </details>
     </div>
   );
 }
@@ -979,6 +1024,23 @@ function BatchCard({
   const [outcomeDraft, setOutcomeDraft] = useState(batch.outcome_md ?? "");
   const [showOriginal, setShowOriginal] = useState(false);
 
+  const isCode = batch.channel !== "human";
+  const compileReady = batch.compile_meta?.status === "ready" && !!batch.compiled_prompt_md;
+  const compileBlocked = batch.compile_meta?.status === "blocked";
+  const compileAlreadyDone = batch.compile_meta?.status === "already_done";
+  const showCopy = !isCode || compileReady;
+  const promptLabel = !isCode
+    ? "Checklist"
+    : compileReady
+      ? "Compiled prompt"
+      : "Uncompiled roadmap — not safe to paste";
+  const promptLabelClass = isCode && !compileReady
+    ? "font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(8_60%_75%)]"
+    : "font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground";
+  const bodyText = compileReady && !showOriginal
+    ? (batch.compiled_prompt_md ?? "")
+    : batch.prompt_md;
+
   const ch = CHANNEL_STYLE[batch.channel];
   const st = STATUS_STYLE[batch.status];
   const isPassed = batch.status === "passed";
@@ -1050,10 +1112,8 @@ function BatchCard({
           <CompileBanner batch={batch} />
 
           <div className="mb-2 flex items-center justify-between gap-2">
-            <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
-              {batch.compiled_prompt_md ? "Compiled prompt" : "Prompt"}
-            </p>
-            {batch.compiled_prompt_md && (
+            <p className={promptLabelClass}>{promptLabel}</p>
+            {compileReady && (
               <button
                 onClick={() => setShowOriginal((v) => !v)}
                 className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground underline underline-offset-4 hover:text-foreground"
@@ -1063,18 +1123,25 @@ function BatchCard({
             )}
           </div>
           <pre className="max-h-[420px] overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-[12px] leading-relaxed text-foreground/90 whitespace-pre-wrap">
-{showOriginal ? batch.prompt_md : (batch.compiled_prompt_md ?? batch.prompt_md)}
+{bodyText}
           </pre>
 
           {isOwner && (
             <div className="mt-4 flex flex-wrap gap-2">
-              <button
-                onClick={onCopyPrompt}
-                className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
-              >
-                <Copy className="h-4 w-4" /> Copy prompt
-              </button>
-              {batch.channel !== "human" && (
+              {showCopy && (
+                <button
+                  onClick={onCopyPrompt}
+                  className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
+                >
+                  <Copy className="h-4 w-4" /> Copy prompt
+                </button>
+              )}
+              {isCode && !compileReady && !compileBlocked && !compileAlreadyDone && (
+                <span className="inline-flex items-center gap-2 rounded-md border border-dashed border-[hsl(8_60%_55%/0.4)] bg-[hsl(8_60%_25%/0.15)] px-3 py-2 font-mono text-[10px] uppercase tracking-[0.22em] text-[hsl(8_60%_75%)]">
+                  Compile first — the roadmap prompt references code that may not exist
+                </span>
+              )}
+              {isCode && (
                 <button
                   onClick={onCompile}
                   title="Rewrite this prompt against the code Lovable has actually produced so far"
@@ -1083,6 +1150,7 @@ function BatchCard({
                   <Wand2 className="h-4 w-4" /> {batch.compiled_prompt_md ? "Recompile" : "Compile against live code"}
                 </button>
               )}
+
               {lovableUrl ? (
                 <a
                   href={lovableUrl}
