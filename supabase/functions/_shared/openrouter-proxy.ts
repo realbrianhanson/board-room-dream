@@ -294,7 +294,7 @@ async function callOpenRouter(
   apiKey: string,
   body: any,
 ): Promise<{ content: string; finishReason: string | undefined; usage: any; raw: any }> {
-  // BUILD: 2026-07-22.streamed-body-timeout.1 — timer stays live through the
+  // BUILD: 2026-07-22.atomic-accounting.1 — timer stays live through the
   // ENTIRE response lifecycle (fetch + non-OK body read + r.json body read),
   // and is cleared exactly once in the outer finally. The prior code cleared
   // the timer after headers arrived, so a stalled body read could complete
