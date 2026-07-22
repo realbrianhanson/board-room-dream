@@ -43,7 +43,7 @@ import {
   queueRound4,
   RepoContractUnavailable,
 } from "./queues.ts";
-import { BatchContextTooLarge, buildValidationRetryRequest } from "../_shared/batch-context.ts";
+import { BatchContextTooLarge, MarkdownCompactionImpossible, buildValidationRetryRequest } from "../_shared/batch-context.ts";
 import {
   finalizeChangeRequestAuthorityError,
   finalizePlanAuthorityError,
