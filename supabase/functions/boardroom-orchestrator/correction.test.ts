@@ -143,13 +143,15 @@ Deno.test("validateStepJson — audit_chair_merge accepts a within-cap correctio
 });
 
 Deno.test("validateStepJson — audit_chair_merge catches over-9,000 serialized payload before finalization", () => {
-  // 12 findings each ~800 chars pushes serialized size well past 9,000.
+  // 12 findings at merge per-field caps (title 120, description 320,
+  // evidence 200) pushes serialized findings JSON past 9,000 chars while
+  // every individual finding still passes the per-field validator.
   const findings = Array.from({ length: 12 }, (_, i) => ({
     severity: "P2",
-    file_path: `src/f${i}.ts`,
-    title: `Finding ${i}`,
-    description: "y".repeat(310),
-    evidence: "z".repeat(190),
+    file_path: `src/some/deep/path/file_number_${i}.ts`,
+    title: "T".repeat(120),
+    description: "d".repeat(320),
+    evidence: "e".repeat(200),
     confidence: "medium",
     line_start: 1,
     line_end: 2,
@@ -158,4 +160,5 @@ Deno.test("validateStepJson — audit_chair_merge catches over-9,000 serialized 
   const err = validateStepJson("audit_chair_merge", oversize);
   assert(err && /9[, ]?000/.test(err), `expected serialized-size violation, got: ${err}`);
 });
+
 
