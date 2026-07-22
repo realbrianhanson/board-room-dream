@@ -648,23 +648,57 @@ function RunwayPage() {
             const noActiveBatchesRun = !runInFlight;
             if (!isOwner || !allUntouched || !noActiveBatchesRun) return null;
             return (
-              <div className="rounded-xl border border-border/60 bg-surface-1 p-4 flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="font-display text-[15px] text-foreground">Regenerate safely</div>
-                  <div className="text-[13px] text-muted-foreground mt-1">
-                    No batch has been touched yet. The board can archive this sequence and produce a fresh one grounded in your live repo.
+              <div className="rounded-xl border border-border/60 bg-surface-1 p-4">
+                {!regenerateConfirmOpen ? (
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="font-display text-[15px] text-foreground">Regenerate safely</div>
+                      <div className="text-[13px] text-muted-foreground mt-1">
+                        No batch has been touched yet. The board can archive this sequence and produce a fresh one grounded in your live repo.
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setRegenerateConfirmOpen(true)}
+                      disabled={generating}
+                      className="shrink-0 rounded-md border border-border/60 bg-surface-2 px-3 py-2 text-[13px] hover:bg-surface-2/70 disabled:opacity-50"
+                      aria-label="Regenerate safely — requires confirmation"
+                    >
+                      {generating ? "Working…" : "Regenerate safely"}
+                    </button>
                   </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={regenerateSafely}
-                  disabled={generating}
-                  className="shrink-0 rounded-md border border-border/60 bg-surface-2 px-3 py-2 text-[13px] hover:bg-surface-2/70 disabled:opacity-50"
-                >
-                  {generating ? "Working…" : "Regenerate safely"}
-                </button>
+                ) : (
+                  <div className="rounded-lg border border-[hsl(8_60%_55%/0.4)] bg-[hsl(8_60%_25%/0.15)] p-4">
+                    <p className="font-display text-[15px] text-foreground">
+                      Archive the current build sequence and regenerate from scratch?
+                    </p>
+                    <p className="mt-1 text-[13px] text-muted-foreground">
+                      Your current batches will be snapshotted for the record, then removed so the board can produce a fresh sequence grounded in your live repo. This only runs while no batch has been touched yet.
+                    </p>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setRegenerateConfirmOpen(false)}
+                        disabled={generating}
+                        className="rounded-md border border-border/60 bg-surface-2 px-3 py-2 text-[13px] hover:bg-surface-2/70 disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={regenerateSafely}
+                        disabled={generating}
+                        className="rounded-md bg-[hsl(8_60%_45%)] px-3 py-2 text-[13px] text-foreground transition-all hover:brightness-110 disabled:opacity-50"
+                        aria-label="Confirm regeneration"
+                      >
+                        {generating ? "Working…" : "Confirm regeneration"}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             );
+
           })()}
 
 
