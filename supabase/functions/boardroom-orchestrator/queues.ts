@@ -667,6 +667,7 @@ Write the documents at FULL length — never compress them because they are insi
 export async function queueBatchesStep(admin: any, run: any) {
   const manual = await loadFieldManual(admin);
   const plan = await loadLockedPlan(admin, run.project_id);
+  const project = await loadProjectMeta(admin, run.project_id);
   const { data: design } = await admin
     .from("plan_versions")
     .select("content_md")
@@ -680,7 +681,11 @@ export async function queueBatchesStep(admin: any, run: any) {
     ? `LOCKED DESIGN BRIEF\n\n${design.content_md}\n\nBatch 1 MUST install these design tokens (CSS variables, Tailwind config, font imports) BEFORE any feature work.`
     : `NO LOCKED DESIGN BRIEF — do not fabricate one. The student will convene the Design Council later.`;
 
-  const system = `You are the Chair, sequencing this student's build for their Lovable project. Produce 6-16 dependency-safe, single-concern build batches that turn the locked plan + PRD into a shippable app — core batches first, then clearly-labeled Enhancement batches so lower-priority value is never silently dropped.
+  // May throw RepoContractUnavailable for import projects — the caller
+  // catches and fails the run with a human-readable error.
+  const repoContract = await loadLiveRepoContract(admin, project);
+
+  const system = `You are the Chair, sequencing this student's build for their Lovable project. Produce 6-14 dependency-safe, single-concern build batches that turn the locked plan + PRD into a shippable app — core batches first, then clearly-labeled Enhancement batches so lower-priority value is never silently dropped.
 
 ${manual}
 
@@ -695,6 +700,7 @@ Rules for EVERY batch:
 - Sequence so nothing depends on a later batch. Auth/data foundations early. Polish/SEO/analytics late.
 - EVERY feature in the FEATURES list must land in some batch. Must-have/high-priority features go in the core batches; lower-priority features go in final batches titled "Enhancement — <name>" (same skeleton, same rigor). Never silently drop a listed feature.
 - If a DEFERRED VALUE section is provided, harvest the still-valuable ideas that do not contradict the locked plan into the Enhancement batches too — the student paid for that thinking; do not lose it. Never resurrect anything the board explicitly rejected as harmful.
+- REPO GROUNDING (critical): The LIVE REPO CONTRACT is authoritative. Any path/route/component/table/function that already exists there is an UPDATE target and MUST match the contract verbatim. Anything not in the contract MUST be labelled CREATE/ADD, and its dependencies MUST be sequenced earlier. Never invent an UPDATE against a filename that is not in the contract.
 - Every prompt_md follows this skeleton:
   """
   Batch N — <one-line batch name>. Numbered items only, no scope creep.
@@ -718,7 +724,7 @@ Return ONLY valid JSON:
   ]
 }
 
-Constraints: 6-16 batches, unique ascending integer batch_no starting at 1, every prompt_md non-empty, FULL length, and following the skeleton exactly.`;
+Constraints: 6-14 batches, unique ascending integer batch_no starting at 1, every prompt_md non-empty, FULL length, and following the skeleton exactly.`;
 
   const featuresBlock = Array.isArray(plan?.features) && plan!.features.length
     ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
@@ -732,7 +738,7 @@ Constraints: 6-16 batches, unique ascending integer batch_no starting at 1, ever
     ? `\n\nDEFERRED VALUE (board decision log + dissent ledger) — ideas debated and not adopted into the core plan. Harvest anything still valuable and consistent with the locked plan into the final Enhancement batches:\n${JSON.stringify(deferredRaw).slice(0, 4000)}`
     : "";
 
-  const user = `LOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}${deferredBlock}\n\nProduce the JSON now.`;
+  const user = `${repoContract}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}${deferredBlock}\n\nProduce the JSON now.`;
 
   await admin.from("run_steps").insert({
     run_id: run.id,
@@ -759,6 +765,19 @@ Constraints: 6-16 batches, unique ascending integer batch_no starting at 1, ever
 export async function queueBatchesReview(admin: any, run: any, draftJson: any) {
   const manual = await loadFieldManual(admin);
   const plan = await loadLockedPlan(admin, run.project_id);
+  const project = await loadProjectMeta(admin, run.project_id);
+  const repoContract = await loadLiveRepoContract(admin, project);
+  const { data: design } = await admin
+    .from("plan_versions")
+    .select("content_md")
+    .eq("project_id", run.project_id)
+    .eq("kind", "design")
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const featuresBlock = Array.isArray(plan?.features) && plan!.features.length
+    ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
+    : "(none listed)";
   const draftBlock = JSON.stringify(draftJson?.batches ?? [], null, 2);
   const shape = `Return ONLY valid JSON:
 {
@@ -766,7 +785,12 @@ export async function queueBatchesReview(admin: any, run: any, draftJson: any) {
   "issues": [ { "batch_no": <number or null>, "severity": "blocking"|"major"|"minor", "text": "specific issue and the fix" } ]
 }
 
-Verdict "approve" only if there are zero blocking issues. Be specific — name the batch and the exact item.`;
+Verdict "approve" only if there are zero blocking issues. Be specific — name the batch and the exact item. Every issue must cite either a live path from the LIVE REPO CONTRACT or the missing CREATE/ADD instruction it depends on.
+
+Review rules (apply strictly):
+- BLOCKING: any UPDATE target that does not appear verbatim in the LIVE REPO CONTRACT — the batch is invented; say which real path the student should use, or that the item should be labelled CREATE/ADD with dependencies sequenced first.
+- BLOCKING: any schema/route/function name that contradicts the LIVE REPO CONTRACT (e.g. renamed table, wrong column, non-existent route).
+- NOT A FINDING: treating a filename alone as proof of a leaked secret. Public Supabase anon/publishable keys are not secret exposure. Only flag secrets when the batch itself embeds or exports actual secret material.`;
   const prompts: Record<string, string> = {
     inspector: `Batches review — Inspector. Check the drafted build sequence for coverage and dependency integrity:
 - Every MVP feature in the PRD lands in some batch; name any orphan (blocking).
@@ -788,7 +812,10 @@ ${manual}
 
 ${shape}`,
   };
-  const user = `LOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nDRAFT BATCHES\n\n${draftBlock}\n\nProduce your JSON now.`;
+  const designSection = design?.content_md
+    ? `LOCKED DESIGN BRIEF\n\n${design.content_md}`
+    : `NO LOCKED DESIGN BRIEF.`;
+  const user = `${repoContract}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nDRAFT BATCHES\n\n${draftBlock}\n\nProduce your JSON now.`;
   const rows = (["inspector", "contrarian"] as const).map((seat) => ({
     run_id: run.id,
     user_id: run.user_id,
@@ -811,10 +838,24 @@ ${shape}`,
 
 export async function queueBatchesRevise(admin: any, run: any, draftJson: any, reviewSteps: any[]) {
   const manual = await loadFieldManual(admin);
+  const plan = await loadLockedPlan(admin, run.project_id);
+  const project = await loadProjectMeta(admin, run.project_id);
+  const repoContract = await loadLiveRepoContract(admin, project);
+  const { data: design } = await admin
+    .from("plan_versions")
+    .select("content_md")
+    .eq("project_id", run.project_id)
+    .eq("kind", "design")
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const featuresBlock = Array.isArray(plan?.features) && plan!.features.length
+    ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
+    : "(none listed)";
   const issues = reviewSteps
     .map((s: any) => `--- ${SEAT_LABEL[s.seat as Seat]} ---\n${JSON.stringify(s.response_json ?? { missing: true }, null, 2)}`)
     .join("\n\n");
-  const system = `Batches revision — you are the Chair. The Inspector and Contrarian reviewed your drafted build sequence and found issues. Fix every blocking issue and every major issue you agree with; keep everything uncontested verbatim.
+  const system = `Batches revision — you are the Chair. The Inspector and Contrarian reviewed your drafted build sequence and found issues. FIX every blocking issue and every major issue you agree with — do not merely acknowledge them. Keep every uncontested batch verbatim. The LIVE REPO CONTRACT outranks any guessed name in your original draft or the PRD; correct invented paths to the real ones, or relabel them CREATE/ADD with proper dependency ordering.
 
 ${manual}
 
@@ -823,8 +864,11 @@ Return ONLY the same JSON shape as the original draft:
   "batches": [ { "batch_no": 1, "title": "...", "channel": "lovable"|"supabase"|"human", "prompt_md": "..." } ]
 }
 
-Constraints: 6-16 batches, unique ascending integer batch_no starting at 1, every prompt_md non-empty, FULL length, following the batch skeleton exactly (numbered items, acceptance checks for code batches, "Keep everything else identical.", "Typecheck when done." for code batches). Never delete Enhancement batches to satisfy a reviewer unless the reviewer explicitly flagged them.`;
-  const user = `YOUR DRAFT\n\n${JSON.stringify(draftJson?.batches ?? [], null, 2)}\n\nREVIEW ISSUES\n\n${issues}\n\nProduce the revised JSON now.`;
+Constraints: 6-14 batches, unique ascending integer batch_no starting at 1, every prompt_md non-empty, FULL length, following the batch skeleton exactly (numbered items, acceptance checks for code batches, "Keep everything else identical.", "Typecheck when done." for code batches). Never delete Enhancement batches to satisfy a reviewer unless the reviewer explicitly flagged them.`;
+  const designSection = design?.content_md
+    ? `LOCKED DESIGN BRIEF\n\n${design.content_md}`
+    : `NO LOCKED DESIGN BRIEF.`;
+  const user = `${repoContract}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nYOUR DRAFT\n\n${JSON.stringify(draftJson?.batches ?? [], null, 2)}\n\nREVIEW ISSUES\n\n${issues}\n\nProduce the revised JSON now.`;
   await admin.from("run_steps").insert({
     run_id: run.id,
     user_id: run.user_id,
@@ -842,6 +886,7 @@ Constraints: 6-16 batches, unique ascending integer batch_no starting at 1, ever
     },
   });
 }
+
 
 
 export async function createInitialSteps(admin: any, run: any) {
