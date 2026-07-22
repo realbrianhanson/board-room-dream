@@ -17,7 +17,7 @@ function Landing() {
       />
       <header className="relative z-10 flex items-center justify-between px-8 py-6">
         <span className="font-display text-lg tracking-[0.28em] text-foreground">
-          BOARDROOM
+          APP BLUEPRINT
         </span>
         <Link
           to="/auth"
