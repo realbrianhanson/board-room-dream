@@ -244,20 +244,36 @@ async function insertAuditSteps(
   run: any,
   chunks: string[],
   batchPrompt: string | null,
-  plan: any,
-  designBrief: string | null,
+  finalContract: ResolvedContract | null,
+  batchPlan: { content_md?: string | null; prd_md?: string | null } | null,
+  batchDesignBrief: string | null,
   isFinal: boolean,
   batchOutcome: string | null,
   fileTree: string[],
 ) {
   const contract = isFinal
-    ? `FINAL A-Z AUDIT — verify the whole app against the plan + PRD.`
+    ? finalContract?.mode === "import_current_milestone"
+      ? `FINAL A-Z AUDIT (CURRENT MILESTONE) — this is an imported app. Audit today's shipped code against the intake contract and any implemented improvement batches ONLY. Do NOT grade unbuilt future work; there is no locked improvement plan or design brief in scope for this run.`
+      : `FINAL A-Z AUDIT — verify the whole app against the plan + PRD.`
     : `BATCH CONTRACT (what this batch was supposed to do):\n\n${batchPrompt}`;
   const outcomeBlock = batchOutcome?.trim()
     ? `\n\nOWNER-REPORTED OUTCOME (what Lovable actually said or did — errors, drift, surprises; investigate every claim):\n${batchOutcome.trim()}`
     : "";
   const manual = await loadFieldManual(admin);
   const multi = chunks.length > 1;
+
+  // Contract section is fixed per-run; batch audits use the current locked
+  // plan/design (unchanged); final audits use the resolved contract mode.
+  const contractSection = isFinal && finalContract
+    ? renderContractSection(finalContract)
+    : renderContractSection({
+      planContentMd: batchPlan?.content_md ?? null,
+      prdMd: batchPlan?.prd_md ?? null,
+      designBrief: batchDesignBrief ?? null,
+      extraContext: "",
+      mode: "full_blueprint",
+    });
+
   const rows: any[] = [];
   chunks.forEach((code, idx) => {
     const chunkNote = multi
@@ -267,14 +283,7 @@ async function insertAuditSteps(
 
 ${manual}
 
-PRD
-${plan?.prd_md ?? "(none)"}
-
-PLAN
-${plan?.content_md ?? "(none)"}
-
-DESIGN BRIEF
-${designBrief ?? "(none)"}
+${contractSection}
 
 CODE
 ${code}
@@ -300,6 +309,7 @@ Produce your JSON now.`;
   });
   await admin.from("run_steps").insert(rows);
 }
+
 
 function fireOrchestrator() {
   try {
