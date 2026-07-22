@@ -1,14 +1,12 @@
 // deno-lint-ignore-file no-explicit-any
-// The JIT Prompt Compiler.
+// The JIT Prompt Compiler — F1 authority repair.
 //
-// A batch's prompt_md was written at plan-lock time against a codebase that
-// did not exist yet. By the time the student reaches Batch 5, Lovable has
-// renamed components, chosen its own table names, and half-built features —
-// the original prompt describes an app that is gone. This function recompiles
-// the active batch against reality: the live repo, the student's own outcome
-// reports, and any open audit findings. The Chair emits a fresh, single-
-// concern Lovable prompt that references the code that ACTUALLY exists AND
-// backs every claim with an evidence path from the current fileTree.
+// A batch's original prompt_md was written at plan-lock time against a
+// codebase that did not yet exist. This function recompiles the CURRENT
+// batch row (authoritative for scope + sequence) against the live repo
+// (authoritative for reality), the student's outcome reports, and any open
+// audit findings. It never substitutes an older plan's same-number batch,
+// and it emits an evidence-backed, deterministic contract the UI can trust.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import {
   adminClient,
@@ -19,8 +17,9 @@ import {
 } from "../_shared/openrouter-proxy.ts";
 import { assembleFromGithub, formatFiles, ghToken, redactSecrets } from "../_shared/github-payload.ts";
 import { loadFieldManual } from "../_shared/lovable-field-manual.ts";
+import { batchAuthorityError, shapeError, type Parsed } from "./validators.ts";
 
-const BUILD_VERSION = "2026-07-22.compile-gate.1";
+const BUILD_VERSION = "2026-07-22.compile-authority.f1";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -96,92 +95,86 @@ async function loadOpenFindings(admin: any, projectId: string) {
   return data ?? [];
 }
 
+// Load the current Runway batch sequence so the model sees THIS batch inside
+// its actual siblings — not the older locked-plan sequence.
+async function loadCurrentBatches(admin: any, projectId: string) {
+  const { data } = await admin
+    .from("batches")
+    .select("batch_no, title, channel, status")
+    .eq("project_id", projectId)
+    .order("batch_no", { ascending: true });
+  return data ?? [];
+}
+
+// Live DB inventory: table names + RPC names + migration files. Powers the
+// schema authority check (existing objects can never be told to CREATE).
+async function loadSchemaInventory(admin: any): Promise<{
+  tables: string[];
+  columnsByTable: Record<string, string[]>;
+  rpcs: string[];
+  objectsLower: Set<string>;
+}> {
+  const objectsLower = new Set<string>();
+  const tables: string[] = [];
+  const columnsByTable: Record<string, string[]> = {};
+  const rpcs: string[] = [];
+  try {
+    const { data: cols } = await admin
+      .schema("information_schema")
+      .from("columns")
+      .select("table_name, column_name")
+      .eq("table_schema", "public")
+      .limit(4000);
+    for (const c of (cols ?? []) as Array<{ table_name: string; column_name: string }>) {
+      const t = c.table_name;
+      if (!columnsByTable[t]) { columnsByTable[t] = []; tables.push(t); objectsLower.add(t.toLowerCase()); }
+      columnsByTable[t].push(c.column_name);
+    }
+  } catch { /* schema may be inaccessible in some envs; treat as empty */ }
+  try {
+    const { data: fns } = await admin
+      .schema("information_schema")
+      .from("routines")
+      .select("routine_name")
+      .eq("routine_schema", "public")
+      .eq("routine_type", "FUNCTION")
+      .limit(500);
+    for (const f of (fns ?? []) as Array<{ routine_name: string }>) {
+      rpcs.push(f.routine_name);
+      objectsLower.add(f.routine_name.toLowerCase());
+    }
+  } catch { /* ignore */ }
+  return { tables, columnsByTable, rpcs, objectsLower };
+}
+
 const SHAPE = `Return ONLY valid JSON:
 {
   "status": "ready" | "already_done" | "blocked",
-  "compiled_prompt_md": "the fresh Lovable prompt (REQUIRED and non-empty when status is 'ready'; empty string otherwise)",
-  "rationale": "one paragraph: what you changed vs the original and why (REQUIRED, always concrete)",
+  "compiled_prompt_md": "the fresh Lovable prompt (REQUIRED and non-empty when status is 'ready'; empty string otherwise). Its first heading MUST semantically match the CURRENT batch title. Its stated channel MUST match the current batch channel.",
+  "primary_intent_summary": "one sentence: the CURRENT batch's primary intent in your own words, so the caller can confirm scope was preserved.",
+  "rationale": "one paragraph: what you changed vs the original and why (REQUIRED, always concrete).",
   "drift_notes": [ "specific ways the live code diverged from the plan's guessed names" ],
+  "preserved_intents": [ "each numbered item from the original prompt that still needs doing, restated concisely" ],
+  "satisfied_items": [ { "item": "original intent already done", "evidence": "concrete path/table/object that proves it" } ],
+  "added_prerequisites": [ { "item": "smallest prerequisite you had to add", "reason": "why the current batch cannot complete without it", "evidence": "path/object grounding the need" } ],
   "touched_paths": [
-    { "path": "src/routes/example.tsx", "action": "update" | "create", "reason": "why this file must change" }
+    { "path": "src/routes/example.tsx", "action": "update" | "create" | "verify", "reason": "why this file must change" }
   ],
   "evidence": [
     { "claim": "one thing the prompt asserts about the live app", "path": "src/routes/example.tsx", "detail": "what in that file grounds the claim" }
   ]
 }
 
-RULES for touched_paths and evidence (ENFORCED — invalid output is rejected):
-- status "ready" MUST include at least one touched_path and at least one evidence item.
-- Every "update" path MUST appear verbatim in the LIVE REPO CONTRACT file tree.
-- Every "create" path MUST NOT already appear in the file tree; new paths must be justified in reason.
+RULES (ENFORCED — invalid output is rejected):
+- The CURRENT batch row (title / channel / prompt_md / batch_no) is the ONLY sequencing identity. Never adopt scope, title, or numbered items from any OTHER artifact's "Batch N".
+- Every "update" or "verify" path MUST appear verbatim in the LIVE REPO CONTRACT file tree.
+- Every "create" path MUST NOT already appear in the file tree; if it does, use "update" or "verify", or move the item to satisfied_items.
 - Every evidence.path MUST appear verbatim in the file tree.
+- Do NOT tell Lovable to CREATE a database object (table/function/policy/index) that already exists in the DB SCHEMA INVENTORY — convert to ALTER/VERIFY or move to satisfied_items.
+- Do NOT introduce unrelated features, refactors, CI/GitHub-Actions scripts, package.json scripts, or repo-wide sweeps that are not proved prerequisites of the current batch intent.
+- Any shell/SQL command you include MUST actually fail when the check fails. Commands ending in "|| exit 0", "|| true", or "; true" are REJECTED as unsafe non-checks.
 - Do NOT use absolute paths, "..", or duplicate the same (path, action) pair.
-- status "already_done" and "blocked" MAY use empty touched_paths and evidence arrays, but rationale MUST cite a concrete file/table/route that grounds the decision.`;
-
-type Parsed = {
-  status: "ready" | "already_done" | "blocked";
-  compiled_prompt_md: string;
-  rationale: string;
-  drift_notes: string[];
-  touched_paths: { path: string; action: "update" | "create"; reason: string }[];
-  evidence: { claim: string; path: string; detail: string }[];
-};
-
-// Shape validation — does the model even return the right JSON keys?
-function shapeError(p: any): string | null {
-  if (!p || typeof p !== "object") return "Not a JSON object.";
-  if (!["ready", "already_done", "blocked"].includes(p.status)) return "Missing/invalid status.";
-  if (typeof p.rationale !== "string" || !p.rationale.trim()) return "Missing rationale.";
-  if (!Array.isArray(p.drift_notes)) return "Missing drift_notes array.";
-  if (!Array.isArray(p.touched_paths)) return "Missing touched_paths array.";
-  if (!Array.isArray(p.evidence)) return "Missing evidence array.";
-  for (const t of p.touched_paths) {
-    if (!t || typeof t.path !== "string" || !t.path.trim()) return "touched_paths entries need a non-empty path.";
-    if (!["update", "create"].includes(t.action)) return "touched_paths.action must be 'update' or 'create'.";
-    if (typeof t.reason !== "string" || !t.reason.trim()) return "touched_paths entries need a non-empty reason.";
-  }
-  for (const e of p.evidence) {
-    if (!e || typeof e.claim !== "string" || !e.claim.trim()) return "evidence entries need a non-empty claim.";
-    if (typeof e.path !== "string" || !e.path.trim()) return "evidence entries need a non-empty path.";
-    if (typeof e.detail !== "string" || !e.detail.trim()) return "evidence entries need a non-empty detail.";
-  }
-  if (p.status === "ready") {
-    if (typeof p.compiled_prompt_md !== "string" || !p.compiled_prompt_md.trim()) {
-      return "status 'ready' requires a non-empty compiled_prompt_md.";
-    }
-    if (p.touched_paths.length < 1) return "status 'ready' requires at least one touched_path.";
-    if (p.evidence.length < 1) return "status 'ready' requires at least one evidence item.";
-  }
-  return null;
-}
-
-// Deterministic validation against the actual repo. Called only for GitHub-
-// sourced compiles where fileTree is authoritative; skipped for pasted code
-// where we cannot prove the negative.
-function repoError(p: Parsed, fileTreeSet: Set<string>): string | null {
-  const badPath = (path: string) => path.startsWith("/") || path.includes("..") || path.includes("\\");
-  const seen = new Set<string>();
-  for (const t of p.touched_paths) {
-    if (badPath(t.path)) return `touched_paths path "${t.path}" is not a repo-relative POSIX path.`;
-    const key = `${t.action}:${t.path}`;
-    if (seen.has(key)) return `touched_paths has a duplicate entry for ${key}.`;
-    seen.add(key);
-    // Reject the same path being both created and updated.
-    const other = t.action === "update" ? `create:${t.path}` : `update:${t.path}`;
-    if (seen.has(other)) return `touched_paths conflicts on "${t.path}" (both create and update).`;
-    if (t.action === "update" && !fileTreeSet.has(t.path)) {
-      return `touched_paths update target "${t.path}" does not exist in the live repo.`;
-    }
-    if (t.action === "create" && fileTreeSet.has(t.path)) {
-      return `touched_paths create target "${t.path}" already exists in the live repo — use action "update" or drop it.`;
-    }
-  }
-  for (const e of p.evidence) {
-    if (badPath(e.path)) return `evidence path "${e.path}" is not a repo-relative POSIX path.`;
-    if (!fileTreeSet.has(e.path)) return `evidence path "${e.path}" does not exist in the live repo.`;
-  }
-  return null;
-}
+- status "already_done" and "blocked" MAY use empty touched_paths / evidence / preserved_intents, but rationale MUST cite a concrete file/table/route that grounds the decision.`;
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
@@ -250,12 +243,14 @@ Deno.serve(async (req) => {
     filesAnalyzed = 1;
   }
 
-  const [plan, designBrief, outcomes, findings, manual, { count: totalBatches }] = await Promise.all([
+  const [plan, designBrief, outcomes, findings, manual, currentBatches, schemaInv, { count: totalBatches }] = await Promise.all([
     loadPlan(admin, batch.project_id),
     loadDesignBrief(admin, batch.project_id),
     loadOutcomes(admin, batch.project_id, Number(batch.batch_no)),
     loadOpenFindings(admin, batch.project_id),
     loadFieldManual(admin),
+    loadCurrentBatches(admin, batch.project_id),
+    source === "github" ? loadSchemaInventory(admin) : Promise.resolve({ tables: [] as string[], columnsByTable: {} as Record<string, string[]>, rpcs: [] as string[], objectsLower: new Set<string>() }),
     admin.from("batches").select("id", { count: "exact", head: true }).eq("project_id", batch.project_id),
   ]);
 
@@ -271,39 +266,56 @@ Deno.serve(async (req) => {
   const featuresBlock = Array.isArray(plan?.features) && plan!.features.length
     ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
     : "(none listed)";
+  const currentBatchesBlock = currentBatches.length
+    ? currentBatches.map((b: any) => `${b.batch_no === batch.batch_no ? "→" : " "} Batch ${b.batch_no} "${b.title}" · channel ${b.channel} · ${b.status}`).join("\n")
+    : "(no batches yet)";
+  const schemaBlock = source === "github"
+    ? (schemaInv.tables.length || schemaInv.rpcs.length
+        ? `TABLES:\n${schemaInv.tables.map((t) => `- ${t}(${(schemaInv.columnsByTable[t] ?? []).slice(0, 12).join(", ")}${(schemaInv.columnsByTable[t] ?? []).length > 12 ? ", …" : ""})`).join("\n")}\nRPCs:\n${schemaInv.rpcs.map((r) => `- ${r}()`).join("\n")}`
+        : "(schema inventory unavailable)")
+    : "(schema inventory not shown for paste source — assume any database object may already exist and BLOCK on uncertainty rather than emitting a CREATE)";
 
-  const system = `You are the Chair, compiling the NEXT build prompt for a non-technical founder's Lovable project. You do not write a plan from scratch — you take one roadmap batch and re-express it against the code that now actually exists.
+  const system = `You are the Chair, compiling the NEXT build prompt for a non-technical founder's Lovable project. You do not write a plan from scratch — you take THIS ONE Runway batch (the arrow-marked row in CURRENT RUNWAY SEQUENCE) and re-express it against the code that now actually exists.
 
 ${manual}
 
-Your inputs: the batch's ORIGINAL intent (written before any code existed), the LIVE REPO CONTRACT (complete file tree + a sample of key files), the student's own reports of what Lovable did, and any open audit findings. Reconcile them:
-- Reference the REAL names in the live code (routes, components, tables, columns). Never invent a name the plan guessed if the code chose a different one — use the code's name and note the drift.
-- DROP anything the batch intended that the live code already implements correctly.
-- ADD anything the outcomes or findings reveal this batch must now also handle (a rename to absorb, a half-built piece to finish, a fix to fold in) — but stay within this batch's single concern; do not pull in later batches' scope.
+Authority rules (F1):
+- The CURRENT BATCH ROW (title, channel, prompt_md, batch_no) is the ONLY authority for THIS batch's scope and sequence identity. Do NOT swap in the same-number batch from the locked plan; the locked plan may still list an older, longer sequence — it is context and rationale only.
+- LIVE REPO / DB SCHEMA INVENTORY are the authority for reality. Convert CREATE → UPDATE/VERIFY when the object already exists. Remove already-satisfied / no-op items and record them in satisfied_items with evidence. Correct exact paths/names to match the live code.
+- Add only the smallest prerequisite strictly required to complete THIS batch's intent. Every added item goes in added_prerequisites with reason + evidence.
+- Never introduce unrelated features, refactors, CI/GitHub Actions scripts, package.json scripts, or repo-wide sweeps unless they are a proved dependency of the current batch intent.
+- Preserve every still-needed numbered item from the original prompt_md in preserved_intents; deliberately omitted items go in satisfied_items with concrete evidence.
 - Keep the batch skeleton: numbered items, click-only acceptance checks, "Keep everything else identical.", "Typecheck when done." (code batches only).
 
 Ground every claim:
-- Every file you tell Lovable to UPDATE must be listed in touched_paths with action "update" and must exist verbatim in the LIVE REPO CONTRACT file tree.
-- Every file you tell Lovable to CREATE must be listed with action "create" and must NOT already exist in the file tree; explain in reason why the new path is needed.
-- Every asserted fact about how the app currently behaves must have an evidence item citing a real file path from the tree and what in that file grounds the claim.
-- Database changes must name the existing migration file or generated type file used as evidence, or be treated as insufficiently evidenced and BLOCKED.
+- Every UPDATE/VERIFY path must be listed in touched_paths and exist verbatim in the LIVE REPO CONTRACT file tree.
+- Every CREATE path must NOT already exist in the file tree.
+- Every asserted fact about how the app currently behaves must have an evidence item citing a real file path and what in that file grounds the claim.
 - A filename alone is NEVER proof of an exposed secret. Public Supabase anon/publishable keys are NOT secrets.
+- Any shell or SQL command you include MUST fail loudly when its check fails. Reject any command containing "|| exit 0", "|| true", or "; true".
 
 Decide a status:
-- "ready": emit compiled_prompt_md plus non-empty touched_paths and evidence.
-- "already_done": the live code already satisfies this batch's intent — empty prompt/paths/evidence, rationale cites the concrete files that already implement it.
+- "ready": emit compiled_prompt_md whose first heading matches the current batch title, with non-empty touched_paths, evidence, and preserved_intents.
+- "already_done": the live code already satisfies THIS batch's intent — empty prompt/paths/evidence, rationale cites the concrete files that already implement it; satisfied_items lists each intent with evidence.
 - "blocked": a prerequisite the batch depends on is missing — empty prompt/paths/evidence, rationale names exactly what must exist first.
 
 ${SHAPE}
 
 Write compiled_prompt_md at FULL length — never compress it because it is inside a JSON string.`;
 
-  const user = `BATCH ${batch.batch_no} OF ${totalBatches ?? "?"} · channel ${batch.channel}
+  const user = `CURRENT BATCH ROW (authoritative for scope + sequence)
+- batch_no: ${batch.batch_no}
+- title: ${batch.title}
+- channel: ${batch.channel}
+- status: ${batch.status}
 
-ORIGINAL BATCH INTENT (roadmap prompt, written before code existed)
+CURRENT RUNWAY SEQUENCE (the ONLY sequence identity — ignore any other artifact's numbering)
+${currentBatchesBlock}
+
+ORIGINAL BATCH PROMPT (this batch's intent, written before code existed — preserve each still-needed numbered item)
 ${batch.prompt_md}
 
-LOCKED PLAN
+LOCKED PLAN (constraints / rationale only — NEVER substitute its "Batch ${batch.batch_no}" for the current batch above)
 ${plan?.content_md ?? "(none)"}
 
 PRD
@@ -321,10 +333,13 @@ ${outcomesBlock}
 OPEN AUDIT FINDINGS
 ${findingsBlock}
 
+DB SCHEMA INVENTORY (authoritative — never CREATE an object listed here)
+${schemaBlock}
+
 LIVE CODE (current repo state)${treeBlock}
 ${codePayload}
 
-Compile this batch now. Produce your JSON.`;
+Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=${batch.channel}) now. Produce your JSON.`;
 
   const fileTreeSet = new Set(fileTree);
   // Bounded cost: one primary call plus at most one structured correction pass.
@@ -347,8 +362,12 @@ Compile this batch now. Produce your JSON.`;
       let candidate: any = null;
       try { candidate = JSON.parse(res.content); } catch { candidate = null; }
       let err: string | null = candidate ? shapeError(candidate) : "Response was not parseable JSON.";
-      if (!err && candidate && candidate.status === "ready" && source === "github") {
-        err = repoError(candidate as Parsed, fileTreeSet);
+      if (!err && candidate) {
+        err = batchAuthorityError(candidate as Parsed, {
+          title: batch.title,
+          channel: batch.channel,
+          batch_no: Number(batch.batch_no),
+        }, fileTreeSet, { source, schemaObjects: schemaInv.objectsLower });
       }
       if (!err) {
         parsed = candidate as Parsed;
@@ -359,7 +378,7 @@ Compile this batch now. Produce your JSON.`;
       messages = [
         ...messages,
         { role: "assistant", content: res.content },
-        { role: "user", content: `Your previous response failed validation: ${err}\nReturn ONLY the corrected JSON object, no prose, no code fences. Every update path must exist in the LIVE REPO CONTRACT; every create path must NOT exist; every evidence path must exist.` },
+        { role: "user", content: `Your previous response failed validation: ${err}\nReturn ONLY the corrected JSON object, no prose, no code fences. Remember: the CURRENT batch row is the only sequencing identity — never substitute another artifact's "Batch ${batch.batch_no}" for it. Every UPDATE/VERIFY path must exist in the LIVE REPO CONTRACT; every CREATE path must NOT exist and must not be an existing DB object; no failure-swallowing commands ("|| exit 0", "|| true", "; true"); no unrelated CI / package.json script scope.` },
       ];
     } catch (e) {
       if (e instanceof NoUserKey) return j(200, { status: "no_key" });
@@ -382,10 +401,18 @@ Compile this batch now. Produce your JSON.`;
     files_analyzed: filesAnalyzed,
     source,
     based_on: { outcomes: outcomes.length, findings: findings.length },
+    original_batch_no: Number(batch.batch_no),
+    original_title: batch.title,
+    original_channel: batch.channel,
+    primary_intent_summary: parsed.primary_intent_summary,
+    preserved_intents: parsed.preserved_intents,
+    satisfied_items: parsed.satisfied_items,
+    added_prerequisites: parsed.added_prerequisites,
     drift_notes: parsed.drift_notes,
     rationale: parsed.rationale,
     touched_paths: parsed.touched_paths,
     evidence: parsed.evidence,
+    schema_inventory_size: { tables: schemaInv.tables.length, rpcs: schemaInv.rpcs.length },
     build_version: BUILD_VERSION,
   };
 
@@ -403,8 +430,12 @@ Compile this batch now. Produce your JSON.`;
     compiled_prompt_md: parsed.status === "ready" ? parsed.compiled_prompt_md : "",
     rationale: parsed.rationale,
     drift_notes: parsed.drift_notes,
+    preserved_intents: parsed.preserved_intents,
+    satisfied_items: parsed.satisfied_items,
+    added_prerequisites: parsed.added_prerequisites,
+    primary_intent_summary: parsed.primary_intent_summary,
     touched_paths: parsed.touched_paths,
     evidence: parsed.evidence,
-    meta: { head_sha: headSha, files_analyzed: filesAnalyzed, source },
+    meta: { head_sha: headSha, files_analyzed: filesAnalyzed, source, original_batch_no: batch.batch_no, original_title: batch.title },
   });
 });
