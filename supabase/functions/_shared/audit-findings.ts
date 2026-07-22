@@ -45,39 +45,29 @@ export const CAPS = {
   mergeSerializedMax: 9_000,
   titleMax: 160,
   descriptionMax: 900,
-  evidenceMax: 500,
+  // AUDIT-TRUTHFULNESS-DETERMINISTIC: raised only enough to fit compact
+  // marker text (IMPACT / CURRENT / SCHEMA_LEDGER / CALLER); the 12/9000
+  // merge caps and correction-pass caps are unchanged.
+  evidenceMax: 640,
   mergePayloadMax: 80_000,
-  // Merge-specific per-field caps (stricter than the seat-report caps
-  // above). Enforced by validateMerged; if the Chair emits over these, the
-  // merge step fails hard rather than persist an oversized report.
   mergeTitleMax: 120,
   mergeDescriptionMax: 320,
-  mergeEvidenceMax: 200,
+  mergeEvidenceMax: 280,
   mergeSummaryMax: 600,
-  // Merge correction pass (single retry). Materially smaller than the base
-  // merge shape; NEVER 30/18000.
   mergeCorrectionFindingsMax: 8,
   mergeCorrectionSerializedMax: 6_000,
   mergeCorrectionSummaryMax: 360,
   mergeCorrectionDescriptionMax: 240,
-  mergeCorrectionEvidenceMax: 140,
-  // Map/extraction (per-chunk per-seat) — deliberately narrower than the merge
-  // input caps. The live 2400-token map budget was too tight for the prior
-  // 12/8000 schema and produced structurally complete JSON that ended one
-  // token short of the outer "]}" (run e2c5faf3). Narrowing the shape gives
-  // the low-reasoning map call actual headroom under a max_tokens of 4000.
+  mergeCorrectionEvidenceMax: 200,
   mapFindingsMax: 6,
   mapSerializedMax: 4_000,
   mapTitleMax: 120,
   mapDescriptionMax: 400,
-  mapEvidenceMax: 240,
-  // Post-truncation correction — asks ONLY for a compact, complete
-  // reconstruction. Must not repeat the failure mode: never 12 findings,
-  // never 8000 chars.
+  mapEvidenceMax: 320,
   correctionFindingsMax: 3,
   correctionSerializedMax: 3_000,
   correctionDescriptionMax: 240,
-  correctionEvidenceMax: 160,
+  correctionEvidenceMax: 220,
 } as const;
 
 export const FINDING_SCHEMA_DOC = `Each finding MUST be an object with EXACTLY these keys:
@@ -254,26 +244,105 @@ export function hasQuoteWhyMarker(ev: string): boolean {
   return true;
 }
 
+// ============================== Deterministic markers ==============================
+// AUDIT-TRUTHFULNESS-DETERMINISTIC — teach the evaluator (not just prompts)
+// to recognize the compact evidence markers that gate serious severity.
+//
+//   IMPACT: build_failure|data_loss|auth_bypass|secret_exposure
+//     A P0 without a valid IMPACT class is downgraded P0 → P1.
+//   CURRENT: <quoted current effective definition>
+//     A P0/P1 whose file_path lives under supabase/migrations/* must corroborate
+//     that the quoted line still represents the CURRENT effective state; missing
+//     marker deterministically downgrades to P2.
+//   SCHEMA_LEDGER: / RUNTIME_FAILURE:
+//     A "does not exist" claim about a table/column/function may only be P0/P1
+//     when corroborated by an explicit current schema-ledger inventory or a
+//     concrete runtime failure; else P2.
+//   CALLER: <caller QUOTE from reachable code>
+//     A universal-helper claim ("all seats use", "every request goes through")
+//     requires a caller corroboration marker; else P2.
+
+const P0_IMPACT_CLASSES = ["build_failure", "data_loss", "auth_bypass", "secret_exposure"] as const;
+
+export function hasImpactMarker(ev: string): boolean {
+  const rx = new RegExp(`\\bIMPACT:\\s*(?:${P0_IMPACT_CLASSES.join("|")})\\b`, "i");
+  return rx.test(String(ev ?? ""));
+}
+export function hasCurrentMarker(ev: string): boolean { return /\bCURRENT:\s*\S/.test(String(ev ?? "")); }
+export function hasSchemaLedgerMarker(ev: string): boolean { return /\bSCHEMA_LEDGER:\s*\S/.test(String(ev ?? "")); }
+export function hasRuntimeFailureMarker(ev: string): boolean { return /\bRUNTIME_FAILURE:\s*\S/.test(String(ev ?? "")); }
+export function hasCallerMarker(ev: string): boolean { return /\bCALLER:\s*\S/.test(String(ev ?? "")); }
+
+export function isMigrationPath(fp: string | null): boolean {
+  const t = String(fp ?? "").trim().toLowerCase().replace(/^\.?\/+/, "");
+  return t.startsWith("supabase/migrations/");
+}
+
+const MISSING_OBJECT_RX =
+  /\b(does\s+not\s+exist|no\s+such|missing|undefined|non[- ]?existent|unknown)\b[^.\n]{0,80}\b(table|column|function|policy|view|index|rpc)\b/i;
+export function looksLikeMissingObjectClaim(title: string, description: string): boolean {
+  const t = `${title}\n${description}`;
+  return MISSING_OBJECT_RX.test(t);
+}
+
+const UNIVERSAL_HELPER_RX =
+  /\b(all|every|universally|globally|always|each)\b[^.\n]{0,80}\b(seat|caller|call ?site|route|request|function|batch|module|component|invocation)s?\b/i;
+export function looksLikeUniversalHelperClaim(title: string, description: string): boolean {
+  const t = `${title}\n${description}`;
+  return UNIVERSAL_HELPER_RX.test(t);
+}
+
 export function downgradeUnsupported(
   findings: CleanFinding[],
 ): { findings: CleanFinding[]; downgrades: DowngradeRecord[] } {
   const downgrades: DowngradeRecord[] = [];
   const out = findings.map((f) => {
     if (f.severity !== "P0" && f.severity !== "P1") return f;
+    let sev: Severity = f.severity;
+    const push = (from: Severity, to: Severity, reason: string) => {
+      downgrades.push({ title: f.title, file_path: f.file_path, from, to, reason });
+    };
+
+    // Rule 1 (P0 only): missing IMPACT marker → P0 becomes P1.
+    if (sev === "P0" && !hasImpactMarker(f.evidence)) {
+      push("P0", "P1", "P0 evidence missing IMPACT: build_failure|data_loss|auth_bypass|secret_exposure marker");
+      sev = "P1";
+    }
+
+    // Rule 2: supabase/migrations/* P0/P1 requires CURRENT marker.
+    if ((sev === "P0" || sev === "P1") && isMigrationPath(f.file_path) && !hasCurrentMarker(f.evidence)) {
+      push(sev, "P2", "migrations/* claim missing CURRENT: corroboration of effective state");
+      return { ...f, severity: "P2" as Severity };
+    }
+
+    // Rule 3: missing-object claim requires SCHEMA_LEDGER or RUNTIME_FAILURE.
+    if ((sev === "P0" || sev === "P1")
+        && looksLikeMissingObjectClaim(f.title, f.description)
+        && !hasSchemaLedgerMarker(f.evidence)
+        && !hasRuntimeFailureMarker(f.evidence)) {
+      push(sev, "P2", "missing-object claim lacks SCHEMA_LEDGER: or RUNTIME_FAILURE: corroboration");
+      return { ...f, severity: "P2" as Severity };
+    }
+
+    // Rule 4: universal-helper claim requires CALLER corroboration.
+    if ((sev === "P0" || sev === "P1")
+        && looksLikeUniversalHelperClaim(f.title, f.description)
+        && !hasCallerMarker(f.evidence)) {
+      push(sev, "P2", "universal-helper claim lacks CALLER: corroboration from a reachable caller");
+      return { ...f, severity: "P2" as Severity };
+    }
+
+    // Baseline QUOTE/WHY + concrete-path/evidence/confidence gate.
     const reasons: string[] = [];
     if (!isConcretePath(f.file_path)) reasons.push("missing concrete file_path");
     if (!isConcreteEvidence(f.evidence)) reasons.push("evidence lacks concrete detail");
     if (!hasQuoteWhyMarker(f.evidence)) reasons.push("evidence missing QUOTE:/WHY: marker");
     if (f.confidence === "low") reasons.push("confidence low");
-    if (reasons.length === 0) return f;
-    downgrades.push({
-      title: f.title,
-      file_path: f.file_path,
-      from: f.severity,
-      to: "P2",
-      reason: reasons.join("; "),
-    });
-    return { ...f, severity: "P2" as Severity };
+    if (reasons.length > 0) {
+      push(sev, "P2", reasons.join("; "));
+      return { ...f, severity: "P2" as Severity };
+    }
+    return sev === f.severity ? f : { ...f, severity: sev };
   });
   return { findings: out, downgrades };
 }
