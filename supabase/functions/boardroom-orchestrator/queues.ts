@@ -270,11 +270,13 @@ Requirements: at least ONE objection targeting EACH of the three other seats, at
       status: "queued",
       request: {
         json_output: true,
+        max_tokens: 3500,
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
         ],
       },
+
     };
   });
   await admin.from("run_steps").insert(rows);
@@ -330,11 +332,13 @@ Respond with the markdown document ONLY — no JSON, no preamble, no closing rem
     status: "queued",
     request: {
       reasoning_effort: "high",
+      max_tokens: 10000,
       messages: [
         { role: "system", content: system },
         { role: "user", content: withImages(user, imageParts) },
       ],
     },
+
   });
 }
 
@@ -358,12 +362,14 @@ Return ONLY valid JSON:
     request: {
       json_output: true,
       temperature: 0,
+      max_tokens: 8000,
       messages: [
         { role: "system", content: system },
         { role: "user", content: `CANDIDATE DOCUMENT\n\n${String(draft?.response_text ?? "")}\n\nProduce your JSON now.` },
       ],
     },
   });
+
 }
 
 
@@ -407,11 +413,13 @@ Resolution discipline: an objection is "resolved" ONLY if you can quote the exac
         json_output: true,
         // Voting is a judgment call, not a creative act — keep it cold.
         temperature: 0.2,
+        max_tokens: 3500,
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
         ],
       },
+
     };
   });
   await admin.from("run_steps").insert(rows);
@@ -443,11 +451,13 @@ Return ONLY valid JSON matching this shape:
     request: {
       json_output: true,
       reasoning_effort: "high",
+      max_tokens: 10000,
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
       ],
     },
+
   });
 }
 
@@ -483,6 +493,8 @@ Respond with the markdown document ONLY — no JSON, no preamble.`;
     status: "queued",
     request: {
       reasoning_effort: "high",
+      max_tokens: 10000,
+
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
@@ -510,6 +522,8 @@ Return ONLY valid JSON:
     request: {
       json_output: true,
       temperature: 0,
+      max_tokens: 8000,
+
       messages: [
         { role: "system", content: system },
         { role: "user", content: `PRD\n\n${String(draft?.response_text ?? "")}\n\nProduce your JSON now.` },
@@ -537,7 +551,9 @@ Return ONLY valid JSON matching this shape:
     status: "queued",
     request: {
       json_output: true,
+      max_tokens: 3500,
       messages: [
+
         { role: "system", content: system },
         {
           role: "user",
@@ -576,7 +592,9 @@ If rejected, amended_* may be empty strings / empty array.`;
     status: "queued",
     request: {
       json_output: true,
+      max_tokens: 10000,
       messages: [
+
         { role: "system", content: system },
         {
           role: "user",
@@ -622,6 +640,8 @@ Return ONLY valid JSON:
     request: {
       json_output: true,
       temperature: 0.2,
+      max_tokens: 3500,
+
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
@@ -655,6 +675,8 @@ Write the documents at FULL length — never compress them because they are insi
     request: {
       json_output: true,
       reasoning_effort: "high",
+      max_tokens: 10000,
+
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
@@ -750,6 +772,8 @@ Constraints: 6-14 batches, unique ascending integer batch_no starting at 1, ever
     request: {
       json_output: true,
       reasoning_effort: "high",
+      max_tokens: 10000,
+
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
@@ -826,6 +850,8 @@ ${shape}`,
     request: {
       json_output: true,
       temperature: 0.2,
+      max_tokens: 3500,
+
       messages: [
         { role: "system", content: prompts[seat] },
         { role: "user", content: user },
@@ -879,6 +905,8 @@ Constraints: 6-14 batches, unique ascending integer batch_no starting at 1, ever
     request: {
       json_output: true,
       reasoning_effort: "high",
+      max_tokens: 10000,
+
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
@@ -993,6 +1021,8 @@ Coverage honesty: the summary must state how much of the app was actually read (
     request: {
       json_output: true,
       reasoning_effort: "medium",
+      max_tokens: 6500,
+
       messages: [
         { role: "system", content: system },
         { role: "user", content: `CODE COVERAGE: ${Number(run.consensus?.files_analyzed ?? 0) || "unknown"} files were read across the seat steps.\n\nSEAT REPORTS (${seatSteps.length})\n\n${combined}\n\nProduce your JSON now.` },

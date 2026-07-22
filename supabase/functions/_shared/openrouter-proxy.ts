@@ -40,15 +40,34 @@ export class SeatBudgetExceeded extends Error {
   }
 }
 
-// Abort a model call that hangs past this many ms and fail over to the seat's
-// fallback, instead of letting a dead/stuck model (as Kimi K3 was) orphan the
-// step for 15 minutes. Generous enough for legitimate high-reasoning calls;
-// tunable via the OPENROUTER_TIMEOUT_MS secret, clamped to 30s-290s (must stay
-// under the edge function's own wall-clock limit so the abort fires first).
+// Distinct timeout error — the orchestrator (NOT this proxy) is responsible
+// for running the fallback in a fresh edge-function invocation. The platform
+// hard-kills invocations near ~150s and takes in-isolate timers with it, so
+// any fallback attempt inside the same invocation is a lie: it may look like
+// it started, but the isolate is already dead. Callers pattern-match on
+// `isTimeout === true` and requeue the step.
+export class ProxyTimeoutError extends Error {
+  isTimeout = true;
+  attemptedModel: string;
+  ms: number;
+  constructor(model: string, ms: number) {
+    super(`OpenRouter call to ${model} timed out after ${ms}ms`);
+    this.name = "ProxyTimeoutError";
+    this.attemptedModel = model;
+    this.ms = ms;
+  }
+}
+
+// Abort a model call that hangs past this many ms and surface a
+// ProxyTimeoutError so the ORCHESTRATOR can requeue the step with
+// force_fallback in a fresh invocation. Clamped to 30s-115s so the abort
+// always fires well before the platform's ~150s wall-clock cap; tunable via
+// the OPENROUTER_TIMEOUT_MS secret. Default 105s.
 const OPENROUTER_TIMEOUT_MS = Math.min(
-  290_000,
-  Math.max(30_000, Number(Deno.env.get("OPENROUTER_TIMEOUT_MS") ?? 150_000)),
+  115_000,
+  Math.max(30_000, Number(Deno.env.get("OPENROUTER_TIMEOUT_MS") ?? 105_000)),
 );
+
 
 // Multimodal content parts (OpenRouter follows the OpenAI shape). Design runs
 // attach signed screenshot URLs so the board critiques what it can actually see.
@@ -291,12 +310,12 @@ async function callOpenRouter(
       signal: controller.signal,
     });
   } catch (e) {
-    // A hung model that never responds gets aborted here — tag it so callSeat
-    // fails over to the fallback instead of orphaning the step.
+    // A hung model that never responds gets aborted here — throw a distinct
+    // ProxyTimeoutError so callSeat's caller (the orchestrator) can requeue
+    // the step with force_fallback in a fresh invocation. NEVER start a
+    // fallback call inside this same invocation; the platform will kill it.
     if ((e as Error)?.name === "AbortError") {
-      const err = new Error(`OpenRouter call timed out after ${OPENROUTER_TIMEOUT_MS}ms`);
-      (err as any).isTimeout = true;
-      throw err;
+      throw new ProxyTimeoutError(String(body?.model ?? "unknown"), OPENROUTER_TIMEOUT_MS);
     }
     throw e;
   } finally {
@@ -317,6 +336,7 @@ async function callOpenRouter(
     raw: json,
   };
 }
+
 
 async function recordCall(
   admin: SupabaseClient,
@@ -413,36 +433,31 @@ export async function callSeat(
     return { ...res, tokensIn, tokensOut, costUsd, modelId };
   };
 
-  // Watchdog retries can force the fallback model as primary — a step whose
-  // primary model keeps outliving the platform's ~150s invocation window gets
-  // re-claimed with force_fallback and answered by the fast fallback instead.
+  // The orchestrator can force the seat's fallback model as primary — a step
+  // whose primary model timed out gets requeued with force_fallback and the
+  // reserve/fallback answers in a fresh invocation (this is now the ONLY
+  // way a fallback ever runs for a timeout; see ProxyTimeoutError above).
   const primaryId = options.forceFallback
     && seatRow.fallback_model_id
     && allowed.has(seatRow.fallback_model_id)
       ? seatRow.fallback_model_id
       : seatRow.model_id;
 
-  // 1st attempt on primary; a timeout (hung model) routes straight to fallback.
-  let attempt: Awaited<ReturnType<typeof doCall>> | null = null;
-  let refused = false;
-  let timedOut = false;
-  try {
-    attempt = await doCall(primaryId);
-    refused = isRefusal(attempt.content, attempt.finishReason, !!options.json);
-  } catch (e) {
-    if ((e as any)?.isTimeout) timedOut = true;
-    else throw e;
-  }
+  // 1st attempt on primary. A ProxyTimeoutError propagates OUT of this
+  // function immediately — never start a fallback call inside the same
+  // invocation, because the platform can kill this invocation at any moment
+  // (~150s) and take the fallback call with it.
+  let attempt = await doCall(primaryId);
+  let refused = isRefusal(attempt.content, attempt.finishReason, !!options.json);
 
-  // One retry on a refusal only — a genuinely hung model won't un-hang, so
-  // don't waste another timeout window; go straight to the fallback.
-  if (refused && !timedOut) {
+  // Refusal handling is UNCHANGED — refusals are cheap sub-second responses,
+  // so one same-invocation retry + one same-invocation fallback stay safe.
+  if (refused) {
     attempt = await doCall(primaryId);
     refused = isRefusal(attempt.content, attempt.finishReason, !!options.json);
   }
 
-  // Fail over to the fallback model on a refusal OR a timeout.
-  if ((refused || timedOut)
+  if (refused
     && seatRow.fallback_model_id
     && seatRow.fallback_model_id !== seatRow.model_id
     && allowed.has(seatRow.fallback_model_id)) {
@@ -457,15 +472,9 @@ export async function callSeat(
       fallback: {
         fallback_model_used: fbAttempt.modelId,
         primary_model: seatRow.model_id,
-        reason: timedOut ? "timeout" : "refusal",
+        reason: "refusal",
       },
     };
-  }
-
-  // Primary timed out and there was no usable fallback — surface it so the step
-  // fails and the requeue rescues it, rather than returning empty content.
-  if (!attempt) {
-    throw new Error(`Seat ${seat} model ${seatRow.model_id} timed out with no available fallback`);
   }
 
   return {
@@ -477,3 +486,4 @@ export async function callSeat(
     raw: attempt.raw,
   };
 }
+
