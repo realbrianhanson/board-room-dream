@@ -20,7 +20,7 @@ type Step = {
   request?: any;
 };
 
-function makeFakeAdmin(state: { runs: Run[]; steps: Step[]; audits: any[]; rpcCalls: any[] }) {
+function makeFakeAdmin(state: { runs: Run[]; steps: Step[]; audits: any[]; rpcCalls: any[]; plans?: any[]; projects?: any[] }) {
   const admin: any = {};
 
   admin.rpc = (name: string, args: any) => {
@@ -52,7 +52,11 @@ function makeFakeAdmin(state: { runs: Run[]; steps: Step[]; audits: any[]; rpcCa
     const rows = () =>
       table === "boardroom_runs" ? state.runs :
       table === "run_steps" ? state.steps :
-      table === "audits" ? state.audits : [];
+      table === "audits" ? state.audits :
+      table === "plan_versions" ? (state.plans ?? []) :
+      table === "projects" ? (state.projects ?? []) :
+      table === "batches" ? [] : [];
+
 
     ctx.select = (_cols?: string) => {
       ctx.mode = "select";
