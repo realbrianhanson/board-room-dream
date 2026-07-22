@@ -56,41 +56,53 @@ async function loadPlan(admin: any, projectId: string) {
   return data ?? null;
 }
 
-// Load founder_notes from any owner-authored run linked to the batch: the
-// run that produced the locked plan (plan_versions.source_run_id) plus the
-// most recent batch-generation run for this project. Both feed the compiler's
-// independent owner-authority pool alongside intake + approved change requests.
+// Assemble the compiler's owner-authored founder_notes pool. We pull notes
+// ONLY from runs deterministically relevant to THIS batch:
+//   1. plan_versions.source_run_id — the run that produced the locked plan.
+//   2. The latest boardroom_runs where kind='batches' AND status IN terminal
+//      successful set ('consensus','chair_ruled') AND created_at <= this
+//      batch's created_at. A failed/running/future unrelated run is ignored.
+// All owner-authored notes are concatenated into a SINGLE allowed source
+// labeled "founder_notes", so the existing marker grammar
+// [OWNER-AUTHORIZED: source="founder_notes" quote="..."] keeps working.
 async function loadRelevantFounderNotes(
   admin: any,
   projectId: string,
   planSourceRunId: string | null,
+  batchCreatedAt: string | null,
 ): Promise<Array<{ source: string; text: string }>> {
-  const out: Array<{ source: string; text: string }> = [];
   const runIds = new Set<string>();
   if (planSourceRunId) runIds.add(planSourceRunId);
   try {
-    const { data: latestBatchesRun } = await admin
+    let q = admin
       .from("boardroom_runs")
-      .select("id")
+      .select("id, created_at")
       .eq("project_id", projectId)
       .eq("kind", "batches")
+      .in("status", ["consensus", "chair_ruled"])
       .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (latestBatchesRun?.id) runIds.add(latestBatchesRun.id);
+      .limit(1);
+    if (batchCreatedAt) q = q.lte("created_at", batchCreatedAt);
+    const { data: latest } = await q.maybeSingle();
+    if (latest?.id) runIds.add(latest.id);
   } catch { /* ignore */ }
-  if (!runIds.size) return out;
+  if (!runIds.size) return [];
+  const combined: string[] = [];
   try {
     const { data: runs } = await admin
       .from("boardroom_runs")
-      .select("id, kind, founder_notes")
+      .select("id, founder_notes")
       .in("id", Array.from(runIds));
     for (const r of runs ?? []) {
       const t = String(r?.founder_notes ?? "").trim();
-      if (t) out.push({ source: `founder_notes:run:${r.id}:${r.kind}`, text: t });
+      if (t && !combined.includes(t)) combined.push(t);
     }
   } catch { /* ignore */ }
-  return out;
+  if (!combined.length) return [];
+  // Single combined authority block, keyed as "founder_notes" so a marker
+  // source="founder_notes" quote="…" is verbatim-checked against all
+  // relevant notes at once. No namespaced grammar change required.
+  return [{ source: "founder_notes", text: combined.join("\n\n") }];
 }
 
 
