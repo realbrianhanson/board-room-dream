@@ -381,9 +381,13 @@ Do NOT label a Supabase anon/publishable key as a leaked secret. Only flag a sec
 //     — trailing commas / bare braces are NOT auto-fixed,
 //   - the resulting string still fails JSON.parse.
 // Never rewrites, deletes, guesses, or synthesizes content.
+export type TailShape = "map" | "merge";
+
 export function tryCloseJsonTail(
   text: string,
+  opts: { shape?: TailShape } = {},
 ): { ok: true; value: unknown; closed: string } | { ok: false; reason: string } {
+  const shape: TailShape = opts.shape ?? "map";
   const s = String(text ?? "");
   if (!s.trim()) return { ok: false, reason: "empty" };
   const stack: Array<"{" | "["> = [];
@@ -417,7 +421,7 @@ export function tryCloseJsonTail(
     let parsed: unknown;
     try { parsed = JSON.parse(s); }
     catch (e) { return { ok: false, reason: `parse failed after balanced scan: ${(e as Error).message}` }; }
-    const shapeErr = validateRescuedShape(parsed);
+    const shapeErr = validateRescuedShape(parsed, shape);
     if (shapeErr) return { ok: false, reason: shapeErr };
     return { ok: true, value: parsed, closed: "" };
   }
@@ -433,20 +437,25 @@ export function tryCloseJsonTail(
   let parsed: unknown;
   try { parsed = JSON.parse(attempt); }
   catch (e) { return { ok: false, reason: `parse failed after appending ${JSON.stringify(closers)}: ${(e as Error).message}` }; }
-  const shapeErr = validateRescuedShape(parsed);
+  const shapeErr = validateRescuedShape(parsed, shape);
   if (shapeErr) return { ok: false, reason: shapeErr };
   return { ok: true, value: parsed, closed: closers };
 }
 
-// Rescued JSON must at minimum look like a map-step response: an object with
-// a `findings` array whose entries survive normalizeFindings. This keeps the
-// rescue helper from ever handing the orchestrator a payload the seat/merge
-// validators would reject a step later.
-function validateRescuedShape(v: unknown): string | null {
+// Rescued JSON must at minimum look like the target shape:
+// - "map":   seat-report object with a findings array under seat caps.
+// - "merge": chair-merge object with verdict/summary/findings passing the
+//   strict merged-report validator (no loose seat-cap acceptance).
+function validateRescuedShape(v: unknown, shape: TailShape): string | null {
   if (!v || typeof v !== "object" || Array.isArray(v)) return "rescued JSON is not an object";
   const findings = (v as { findings?: unknown }).findings;
   if (!Array.isArray(findings)) return "rescued JSON missing findings array";
   const cleaned = normalizeFindings(findings);
   if (cleaned.length === 0 && findings.length > 0) return "no findings survived normalization";
+  if (shape === "merge") {
+    const summary = (v as { summary?: unknown }).summary;
+    const summaryStr = typeof summary === "string" ? summary : "";
+    return validateMerged(cleaned, summaryStr);
+  }
   return validateSeatReport(cleaned);
 }
