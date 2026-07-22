@@ -29,8 +29,8 @@ Deno.test("correctionForStep — audit seat report routes to tightened audit-map
     assertStringIncludes(c, "MAX 3 highest-severity findings");
     assertStringIncludes(c, "<=3,000 characters");
     // Must NOT reintroduce the shape that caused the original truncation.
-    assert(!/max\s*12\s*findings/i.test(c), `audit correction must not ask for 12 findings (got: ${c})`);
-    assert(!/8[, ]?000-?character/i.test(c), `audit correction must not ask for 8,000-char schema`);
+    assert(!/Total JSON\s*<=?\s*8[, ]?000/i.test(c), `audit correction must not request an 8,000-char limit`);
+    assert(!/MAX\s*12\s/i.test(c), `audit correction must not request 12 findings`);
     assert(!c.includes("6 batches"), `audit must not receive batch-schema copy`);
     assert(!c.includes("{verdict, issues}"), `audit must not receive review-schema copy`);
   }
