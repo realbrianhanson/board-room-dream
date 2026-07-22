@@ -3,10 +3,12 @@
 // and the pure helpers that read candidate documents out of step history.
 // No step queuing here; the only I/O is the consensus-threshold lookup.
 
+import { evaluateChairMergeCandidate } from "../_shared/audit-findings.ts";
 
 export const SEATS = ["chair", "strategist", "contrarian", "inspector"] as const;
 
 export type Seat = typeof SEATS[number];
+
 
 
 export const SEAT_LABEL: Record<Seat, string> = {
@@ -277,8 +279,19 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
     }
     return null;
   }
+  if (stepKey === "audit_chair_merge") {
+    // AUDIT-FINALIZATION-R2: run the full normalize → dedupe → downgrade →
+    // validateMerged pipeline BEFORE marking the step completed. A merge-cap
+    // violation (finding count, title/description/evidence length, summary,
+    // serialized payload) surfaces here so the existing single correction
+    // pass runs; finalizeAudit is now defense in depth against the same
+    // caps rather than the first line of defense.
+    const evaluation = evaluateChairMergeCandidate(parsed);
+    return evaluation.error;
+  }
   return null;
 }
+
 
 
 // ============================== Structured correction routing ==============================
@@ -294,10 +307,14 @@ export function correctionForStep(stepKey: string): string {
     return "Your review JSON was truncated. Return ONLY {verdict, issues}; max 8 issues; each issue.text 10-280 characters; total JSON <=4,500 characters. Preserve every blocking issue, merge duplicates, no prose.";
   }
   if (key === "audit_chair_merge") {
-    // AUDIT-MERGE-BOUNDED-R3: never restate the 30/18,000 shape that caused
-    // the original truncation. Ask for a materially smaller, compact merge.
-    return "Your prior audit merge JSON was invalid or truncated. Emit ONLY compact one-line valid JSON with keys verdict, summary, findings (and fix_prompt_md if any supported P0/P1 remains). HARD MAX 8 highest-severity findings; total JSON <=6,000 characters; summary <=360 characters; each finding description <=240 characters; each finding evidence <=140 characters (concrete short quote or exact construct — never speculative). Drop the lowest-severity duplicates first; keep every supported P0/P1. If evidence for a finding is uncertain, OMIT the finding rather than expand or guess. Do NOT emit 30 findings or an 18,000-character schema — that limit caused the original truncation.";
+    // AUDIT-MERGE-BOUNDED-R3 + AUDIT-FINALIZATION-R2: never restate the
+    // 30/18,000 shape that caused the original truncation, and require the
+    // exact QUOTE/WHY evidence marker within the existing 140-char correction
+    // evidence cap. Serious findings without a verbatim quote get downgraded
+    // by the shared validator; correction should not solicit paraphrases.
+    return "Your prior audit merge JSON was invalid or truncated. Emit ONLY compact one-line valid JSON with keys verdict, summary, findings (and fix_prompt_md if any supported P0/P1 remains). HARD MAX 8 highest-severity findings; total JSON <=6,000 characters; summary <=360 characters; each finding description <=240 characters; each finding evidence <=140 characters. For every P0/P1 the evidence MUST use the exact marker form 'QUOTE: <short exact excerpt from the cited file> | WHY: <short reason it proves the issue>' — a paraphrase without a verbatim quote will be downgraded to P2. Drop the lowest-severity duplicates first; keep every supported P0/P1. If evidence for a finding is uncertain, OMIT the finding rather than expand or guess. Do NOT emit 30 findings or an 18,000-character schema — that limit caused the original truncation.";
   }
+
   if (/^audit_(chair|strategist|contrarian|inspector|reserve)(_c\d+)?$/.test(key)) {
     // Materially smaller correction than the base map schema. Never asks
     // for the 12/8000 shape that caused the original truncation.

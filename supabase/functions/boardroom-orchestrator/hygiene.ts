@@ -9,6 +9,8 @@
 //    a step is never resurrected under a terminal parent.
 //  - failRun is FIRST-TERMINAL-WINS: two concurrent failure paths cannot
 //    overwrite each other's error/audit-row/sibling state.
+import { nextStatusAfterZeroBatchFailure } from "../_shared/zero-batch-recovery.ts";
+
 
 export const TERMINAL_RUN_STATUSES = [
   "failed",
@@ -87,12 +89,46 @@ export async function failRun(
       .from("audits")
       .update({ status: "failed", completed_at: new Date().toISOString() })
       .eq("id", auditId);
+
+    // AUDIT-FINALIZATION-R2: audit-runner sets projects.status='auditing'
+    // when a final audit starts. Without reconciliation a failed final
+    // audit leaves the imported project stuck at 'auditing', which the
+    // Dashboard misreads. Restore the safest truthful pre-build status —
+    // 'locked' (safe plan), else 'imported' (import), else 'validated'.
+    // Guarded by .eq("status","auditing") so we never clobber a project
+    // that advanced to another non-auditing status concurrently.
+    if (run?.project_id) {
+      try {
+        const { data: safePlan } = await admin
+          .from("plan_versions")
+          .select("id")
+          .eq("project_id", run.project_id)
+          .eq("kind", "plan")
+          .eq("is_build_safe", true)
+          .limit(1)
+          .maybeSingle();
+        const { data: project } = await admin
+          .from("projects")
+          .select("is_import")
+          .eq("id", run.project_id)
+          .maybeSingle();
+        const nextStatus = nextStatusAfterZeroBatchFailure({
+          hasSafePlan: !!safePlan,
+          isImport: !!project?.is_import,
+        });
+        await admin
+          .from("projects")
+          .update({ status: nextStatus })
+          .eq("id", run.project_id)
+          .eq("status", "auditing");
+      } catch { /* best-effort reconciliation */ }
+    }
   }
 
   // Zero-batch failure reconciliation: a failed 'batches' run that produced
   // no batches would leave projects.status='auditing' or similar, which
   // the Dashboard would misread as "Review findings". Reset to a truthful
-  // state: 'locked' when a build-safe plan exists, 'imported' otherwise.
+  // state via the shared pure selector.
   if (run?.kind === "batches" && run?.project_id) {
     try {
       const { count: batchCount } = await admin
@@ -113,7 +149,10 @@ export async function failRun(
           .select("is_import")
           .eq("id", run.project_id)
           .maybeSingle();
-        const nextStatus = safePlan ? "locked" : (project?.is_import ? "imported" : "validated");
+        const nextStatus = nextStatusAfterZeroBatchFailure({
+          hasSafePlan: !!safePlan,
+          isImport: !!project?.is_import,
+        });
         await admin
           .from("projects")
           .update({ status: nextStatus, current_batch_no: 1 })
@@ -124,6 +163,7 @@ export async function failRun(
 
   return "won";
 }
+
 
 
 // Legacy/pre-migration orphans: rows stuck in status='running' with a NULL

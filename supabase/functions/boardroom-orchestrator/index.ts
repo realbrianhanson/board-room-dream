@@ -100,7 +100,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-28.audit-truthfulness.r1";
+const BUILD_VERSION = "2026-07-28.audit-finalization-r2";
 
 import {
   failRun,
@@ -957,34 +957,29 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
     return;
   }
 
-  // Normalize → dedupe → downgrade unsupported P0/P1. Validators live in
-  // _shared/audit-findings.ts; we always end up with schema-clean rows.
-  const { normalizeFindings, dedupeFindings, downgradeUnsupported, validateMerged } =
-    await import("../_shared/audit-findings.ts");
-  const rawFindings = Array.isArray(parsed?.findings) ? parsed.findings : [];
-  const normalized = normalizeFindings(rawFindings);
-  const deduped = dedupeFindings(normalized);
-  const { findings, downgrades } = downgradeUnsupported(deduped);
-
-  // Hard validator gate. If model produced structurally impossible data
-  // (too many, oversize, bad lines) after normalization, treat as merge
-  // failure — audit ends failed, no partial findings, no fix batch.
-  const vErr = validateMerged(findings, String(parsed?.summary ?? ""));
-  if (vErr) {
+  // Normalize → dedupe → downgrade unsupported P0/P1, then re-validate
+  // caps. validateStepJson("audit_chair_merge", …) already ran the same
+  // pipeline before the step was marked completed (AUDIT-FINALIZATION-R2),
+  // so a violation here means someone bypassed the step path or a schema
+  // drifted — we still fail closed rather than persist an oversized report.
+  const { evaluateChairMergeCandidate } = await import("../_shared/audit-findings.ts");
+  const evaluation = evaluateChairMergeCandidate(parsed);
+  const { findings, downgrades, summary: mergedSummaryText } = evaluation;
+  if (evaluation.error) {
     await admin
       .from("audits")
-      .update({ status: "failed", completed_at: new Date().toISOString(), summary: { error: `merge_validation_failed: ${vErr}` } })
+      .update({ status: "failed", completed_at: new Date().toISOString(), summary: { error: `merge_validation_failed: ${evaluation.error}` } })
       .eq("id", auditId);
-    await failRun(admin, run, `audit_chair_merge failed validation: ${vErr}`);
+    await failRun(admin, run, `audit_chair_merge failed validation: ${evaluation.error}`);
     return;
   }
 
-  const verdict = parsed?.verdict === "clean" || findings.length === 0 ? "clean" : "findings";
+  const verdict = evaluation.verdict;
   const filesAnalyzed = Number(run.consensus?.files_analyzed ?? 0) || null;
 
   const summary = {
     verdict,
-    text: String(parsed?.summary ?? ""),
+    text: mergedSummaryText,
     counts: {
       P0: findings.filter((f) => f.severity === "P0").length,
       P1: findings.filter((f) => f.severity === "P1").length,
@@ -993,6 +988,7 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
     },
     validation_downgrades: downgrades,
   };
+
 
   const isFinal = audit.kind === "final_az";
 

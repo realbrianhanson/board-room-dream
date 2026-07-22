@@ -38,14 +38,14 @@ Deno.test("FINDING_SCHEMA_DOC locks the same anti-false-positive markers", () =>
   ], "FINDING_SCHEMA_DOC");
 });
 
-Deno.test("Strategist audit seat prompt covers buyer/offer/activation/wow/positioning", async () => {
+Deno.test("Strategist audit seat prompt covers buyer/offer/activation/wow/positioning and gates backend-only chunks", async () => {
   const src = await Deno.readTextFile(
     new URL("../audit-runner/index.ts", import.meta.url),
   );
   // The Strategist branch is the final `return` inside seatPrompt.
   const start = src.indexOf("You are the Strategist.");
   assert(start > 0, "Strategist branch not found in audit-runner seatPrompt");
-  const window = src.slice(start, start + 1200);
+  const window = src.slice(start, start + 2000);
   assertContainsAll(window, [
     "buyer reachability",
     "paid offer",
@@ -54,8 +54,16 @@ Deno.test("Strategist audit seat prompt covers buyer/offer/activation/wow/positi
     "first-90-second activation",
     "wow moment",
     "Unlike X",
+    // AUDIT-FINALIZATION-R2: must NOT force UX claims on every chunk.
+    "backend-only chunk",
+    "evidence for",
   ], "Strategist seatPrompt");
+  assert(
+    !/explicitly cover on every chunk/i.test(window),
+    "Strategist prompt must not force UX coverage on every chunk (regressed to false P1s on backend-only chunks)",
+  );
 });
+
 
 Deno.test("Chair merge system prompt locks QUOTE/WHY, cumulative, cross-file, client-role", async () => {
   const src = await Deno.readTextFile(

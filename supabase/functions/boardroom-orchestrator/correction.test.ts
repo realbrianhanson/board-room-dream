@@ -36,7 +36,7 @@ Deno.test("correctionForStep — audit seat report routes to tightened audit-map
   }
 });
 
-Deno.test("correctionForStep — audit merge routes to bounded R3 merge copy (never 30/18,000)", () => {
+Deno.test("correctionForStep — audit merge routes to bounded R3 merge copy with exact QUOTE/WHY marker (never 30/18,000)", () => {
   const c = correctionForStep("audit_chair_merge");
   assertStringIncludes(c, "audit merge");
   assertStringIncludes(c, "HARD MAX 8");
@@ -44,9 +44,14 @@ Deno.test("correctionForStep — audit merge routes to bounded R3 merge copy (ne
   assertStringIncludes(c, "summary <=360");
   assertStringIncludes(c, "description <=240");
   assertStringIncludes(c, "evidence <=140");
+  // AUDIT-FINALIZATION-R2: correction must require the exact evidence marker
+  // format so the shared downgrader does not P2-demote every retried finding.
+  assertStringIncludes(c, "QUOTE:");
+  assertStringIncludes(c, "WHY:");
   assert(!/\b30\s+deduplicated\s+findings\b/i.test(c), "must not restate 30-findings shape");
   assert(!/<=?\s*18[, ]?000\s*characters/i.test(c), "must not restate 18,000-char shape");
 });
+
 
 Deno.test("correctionForStep — unknown steps route to generic copy", () => {
   for (const k of ["r2_exam_strategist", "r4_vote_chair_loop1", "cr_verdict_chair", "", "totally_new_step"]) {
@@ -89,3 +94,71 @@ Deno.test("validateStepJson — batches_review_ enforces 0-8, severities, batch_
   const oversize = { verdict: "revise", issues: Array.from({ length: 8 }, () => ({ batch_no: 1, severity: "minor", text: "y".repeat(600) })) };
   assertStringIncludes(String(validateStepJson("batches_review_inspector", oversize)), "4,500");
 });
+
+// AUDIT-FINALIZATION-R2: live run a9e89958 emitted parseable Chair JSON with
+// evidence >200 chars but was marked completed because validateStepJson had
+// no audit_chair_merge branch. finalizeAudit then failed the whole run. The
+// shared merge evaluator must reject cap violations at the step boundary so
+// the existing single correction pass runs.
+Deno.test("validateStepJson — audit_chair_merge rejects evidence over cap and routes to merge correction", () => {
+  const badEvidence = {
+    verdict: "findings",
+    summary: "Live-shape audit merge",
+    findings: [{
+      severity: "P0",
+      file_path: "src/foo.ts",
+      title: "Concrete P0",
+      description: "Something concrete is broken.",
+      // Over the 200-char mergeEvidenceMax, exactly the live failure shape.
+      evidence: "QUOTE: " + "x".repeat(220) + " | WHY: it proves the issue",
+      confidence: "high",
+      line_start: 10,
+      line_end: 20,
+    }],
+  };
+  const err = validateStepJson("audit_chair_merge", badEvidence);
+  assert(err && /evidence/.test(err) && /200/.test(err), `expected evidence-over-200 error, got: ${err}`);
+  // And the routed correction must be the merge contract, not seat/map copy.
+  const c = correctionForStep("audit_chair_merge");
+  assertStringIncludes(c, "audit merge");
+  assertStringIncludes(c, "QUOTE:");
+});
+
+Deno.test("validateStepJson — audit_chair_merge accepts a within-cap correction response", () => {
+  const good = {
+    verdict: "findings",
+    summary: "Within-cap merge",
+    findings: [{
+      severity: "P0",
+      file_path: "src/foo.ts",
+      title: "Concrete P0",
+      description: "Something concrete is broken.",
+      evidence: "QUOTE: leaked_secret = 'sk_live_xxx' | WHY: hardcoded secret in repo",
+      confidence: "high",
+      line_start: 10,
+      line_end: 20,
+    }],
+  };
+  assertEquals(validateStepJson("audit_chair_merge", good), null);
+});
+
+Deno.test("validateStepJson — audit_chair_merge catches over-9,000 serialized payload before finalization", () => {
+  // 12 findings at merge per-field caps (title 120, description 320,
+  // evidence 200) pushes serialized findings JSON past 9,000 chars while
+  // every individual finding still passes the per-field validator.
+  const findings = Array.from({ length: 12 }, (_, i) => ({
+    severity: "P2",
+    file_path: `src/some/deep/path/file_number_${i}.ts`,
+    title: "T".repeat(120),
+    description: "d".repeat(320),
+    evidence: "e".repeat(200),
+    confidence: "medium",
+    line_start: 1,
+    line_end: 2,
+  }));
+  const oversize = { verdict: "findings", summary: "big", findings };
+  const err = validateStepJson("audit_chair_merge", oversize);
+  assert(err && /9[, ]?000/.test(err), `expected serialized-size violation, got: ${err}`);
+});
+
+
