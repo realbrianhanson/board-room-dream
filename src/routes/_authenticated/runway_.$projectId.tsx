@@ -155,6 +155,7 @@ function RunwayPage() {
 
   const [urlEdit, setUrlEdit] = useState("");
   const [showRollback, setShowRollback] = useState(false);
+  const [extraBudgetUsd, setExtraBudgetUsd] = useState("2.00");
   const [showSkipConfirm, setShowSkipConfirm] = useState<Batch | null>(null);
   const [audits, setAudits] = useState<AuditRow[]>([]);
   const [findings, setFindings] = useState<FindingRow[]>([]);
