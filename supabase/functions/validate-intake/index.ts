@@ -124,7 +124,7 @@ Deno.serve(async (req) => {
         // drops the plugin so a search hiccup never blocks validation.
         { json: true, temperature: 0.3, projectId: intake.project_id, online: attempt === 0, maxTokens: 3500 },
       );
-      verdict = parseVerdict(res.content);
+      verdict = parseVerdict(res.content, intake.answers);
       if (!verdict) lastErr = { status: 200, body: "unparseable" };
     } catch (e) {
       if (e instanceof NoUserKey) return j(200, { status: "no_key" });
