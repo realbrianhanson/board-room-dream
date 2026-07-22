@@ -389,8 +389,12 @@ export function findUnauthorizedHighImpact(
       const lineEnd = line + 1 < lineStarts.length ? lineStarts[line + 1] : text.length;
       const ownLine = text.slice(lineStart, lineEnd);
       // Sentence-scope: negation/preservation only silences the individual
-      // match if it occurs in the same sentence/clause as the match.
-      const sentence = sentenceForMatch(ownLine, start - lineStart);
+      // match if it occurs in the same sentence/clause. We anchor on the
+      // END of the match so a greedy match like `add Stripe; add Stripe
+      // checkout for $49` is judged in the sentence containing the actual
+      // noun (`checkout`/`$49`), not the earlier `Do not add Stripe`.
+      const endOff = Math.min(ownLine.length - 1, Math.max(0, (start - lineStart) + m[0].length - 1));
+      const sentence = sentenceForMatch(ownLine, endOff);
       if (NEGATION_OR_PRESERVE.test(sentence)) continue;
       if (rule.category === "monetary_amount" && /(?:\$|€|£|¥)\s*0(?![.,]?\d)/i.test(m[0])) continue;
       const directiveEntities = extractDirectiveEntities(rule.category, m[0]);
