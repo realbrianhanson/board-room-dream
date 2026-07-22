@@ -44,6 +44,7 @@ export function GitHubRepoCard({
   onLinked?: (fullName: string) => void;
 }) {
   const [gh, setGh] = useState<GhStatus | null>(null);
+  const [ghError, setGhError] = useState<string | null>(null);
   const [repo, setRepo] = useState<string | null>(null);
   const [showGuide, setShowGuide] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
@@ -51,17 +52,27 @@ export function GitHubRepoCard({
   const [q, setQ] = useState("");
   const [head, setHead] = useState<Head | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [statusTick, setStatusTick] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       try {
         const s = (await ghInvoke("status", {}, "github-oauth")) as GhStatus;
+        if (cancelled) return;
         setGh(s);
-      } catch { /* silent */ }
+        setGhError(null);
+      } catch (e) {
+        if (cancelled) return;
+        setGh({ configured: false, connected: false, status: null });
+        setGhError((e as Error).message ?? "Couldn't reach GitHub connector.");
+      }
       const { data } = await supabase.from("projects").select("github_repo").eq("id", projectId).maybeSingle();
+      if (cancelled) return;
       setRepo((data as { github_repo: string | null } | null)?.github_repo ?? null);
     })();
-  }, [projectId]);
+    return () => { cancelled = true; };
+  }, [projectId, statusTick]);
 
   async function loadHead() {
     if (!repo) return;
