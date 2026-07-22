@@ -150,7 +150,10 @@ function AuditCenterPage() {
       const payload: Record<string, unknown> = { action: "start_final_audit", project_id: projectId, source };
       if (source === "paste") payload.pasted_code = pasted;
       const { data, error } = await supabase.functions.invoke("audit-runner", { body: payload });
-      if (error) throw new Error(error.message);
+      if (error) {
+        const msg = await extractFunctionsErrorMessage(error);
+        throw new Error(msg);
+      }
       if ((data as any)?.error) throw new Error((data as any).error);
       toast.success("The board is reading your code.");
       setShowPaste(false);
