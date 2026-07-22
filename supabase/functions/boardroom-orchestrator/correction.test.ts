@@ -77,6 +77,6 @@ Deno.test("validateStepJson — batches_review_ enforces 0-8, severities, batch_
   const tooLong = { verdict: "revise", issues: [{ batch_no: 1, severity: "minor", text: "x".repeat(281) }] };
   assertStringIncludes(String(validateStepJson("batches_review_inspector", tooLong)), "10-280");
 
-  const oversize = { verdict: "revise", issues: Array.from({ length: 8 }, () => ({ batch_no: 1, severity: "minor", text: "y".repeat(270) })) };
+  const oversize = { verdict: "revise", issues: Array.from({ length: 8 }, () => ({ batch_no: 1, severity: "minor", text: "y".repeat(600) })) };
   assertStringIncludes(String(validateStepJson("batches_review_inspector", oversize)), "4,500");
 });
