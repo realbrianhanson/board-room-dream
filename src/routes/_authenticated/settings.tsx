@@ -933,7 +933,7 @@ function FlywheelPanel() {
         </p>
         <button
           onClick={mine}
-          disabled={mining}
+          disabled={mining || (!!loadError && proposals === null)}
           className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
         >
           {mining ? "The Chair is reading the history…" : "Mine recent findings"}
@@ -948,7 +948,22 @@ function FlywheelPanel() {
         </div>
       )}
 
-      {proposals === null ? (
+      {loadError ? (
+        <div
+          role="alert"
+          className="mt-4 rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive"
+        >
+          <p className="font-medium">Couldn't load the field manual.</p>
+          <p className="mt-1 break-words text-destructive/80">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="mt-3 inline-flex rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+          >
+            Retry
+          </button>
+        </div>
+      ) : proposals === null ? (
         <div className="mt-4 h-16 animate-pulse rounded-lg bg-surface-2" />
       ) : proposals.length === 0 ? (
         <p className="mt-4 text-sm text-muted-foreground">No pending proposals. Mine after a batch of audits lands.</p>
