@@ -144,6 +144,9 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
   }
 
   // phase === "ready" — values is non-null here.
+  const readyValues = values as ImportStrategyInput;
+  const { filled, total } = strategyCompleteness(readyValues);
+
 
 
   async function save() {
