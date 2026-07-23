@@ -63,13 +63,22 @@ function CohortProjectPage() {
   const [batches, setBatches] = useState<BatchRow[]>([]);
   const [findings, setFindings] = useState<FindingRow[]>([]);
   const [tab, setTab] = useState<"plan" | "design" | "batches" | "audits">("plan");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    const { data: p } = await supabase
+    setLoading(true);
+    setLoadError(null);
+    const { data: p, error: pErr } = await supabase
       .from("projects")
       .select("id, name, status, user_id, is_import, github_repo, current_batch_no, created_at")
       .eq("id", projectId)
       .maybeSingle();
+    if (pErr) {
+      setLoadError(pErr.message);
+      setLoading(false);
+      return;
+    }
     setProject((p as any) ?? null);
     if (p) {
       const { data: prof } = await supabase.from("profiles").select("display_name").eq("id", (p as any).user_id).maybeSingle();
@@ -89,13 +98,42 @@ function CohortProjectPage() {
       .in("status", ["open", "fix_drafted"])
       .order("severity");
     setFindings((fs ?? []) as any);
+    setLoading(false);
   }, [projectId]);
 
   useEffect(() => { void load(); }, [load]);
 
-  if (!project) {
+  if (loadError) {
+    return (
+      <div className="mx-auto max-w-4xl px-6 py-10">
+        <div
+          role="alert"
+          className="flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-6 text-sm text-destructive"
+        >
+          <div className="min-w-0 flex-1">
+            <p className="font-medium">Couldn't load this project.</p>
+            <p className="mt-1 break-words text-destructive/80">{loadError}</p>
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="mt-3 inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading) {
     return <div className="mx-auto max-w-4xl px-6 py-10 text-sm text-muted-foreground">Loading…</div>;
   }
+
+  if (!project) {
+    return <div className="mx-auto max-w-4xl px-6 py-10 text-sm text-muted-foreground">Project not found.</div>;
+  }
+
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-8">
