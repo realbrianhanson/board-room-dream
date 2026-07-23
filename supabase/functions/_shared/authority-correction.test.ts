@@ -256,3 +256,21 @@ Deno.test("static — boardroom-orchestrator finalize paths route through the co
   assert(src.includes("absorbCorrectionStep("), "afterStepComplete must absorb completed correction steps");
   assert(src.includes("findAwaitedCorrectionStep("), "afterStepComplete must detect awaited correction steps");
 });
+
+Deno.test("nextCorrectionRound — floors below the protocol-safe minimum", async () => {
+  const { nextCorrectionRound } = await import("./authority-correction.ts");
+  assertEquals(nextCorrectionRound(null), 7);
+  assertEquals(nextCorrectionRound(0), 7);
+  assertEquals(nextCorrectionRound(5), 7);
+});
+
+Deno.test("nextCorrectionRound — monotonic above the floor (attempt 2 sorts after attempt 1)", async () => {
+  const { nextCorrectionRound } = await import("./authority-correction.ts");
+  const r1 = nextCorrectionRound(6);          // attempt 1 lands at 7
+  assertEquals(r1, 7);
+  const r2 = nextCorrectionRound(r1);         // attempt 2 must land at 8
+  assertEquals(r2, 8);
+  assert(r2 > r1);
+  // Corrections queued after a later protocol round still monotonic.
+  assertEquals(nextCorrectionRound(12), 13);
+});

@@ -349,7 +349,7 @@ function PlanWorkspacePage() {
             The plan is locked · {new Date(current.locked_at).toLocaleDateString()}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="rounded-full border border-border bg-surface-2 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
             v{current.version}
           </span>
@@ -359,6 +359,18 @@ function PlanWorkspacePage() {
               Chair ruled
             </span>
           )}
+          {/*
+            Locked plan → next step is Design Council, not Runway. Runway
+            requires a locked design first; skipping straight there dead-ends
+            students at the "no build-safe design" empty state.
+          */}
+          <Link
+            to="/design/$projectId"
+            params={{ projectId }}
+            className="inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-primary hover:border-primary/60"
+          >
+            Next · Design Council →
+          </Link>
         </div>
       </div>
 

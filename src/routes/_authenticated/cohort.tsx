@@ -4,13 +4,47 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { AlertTriangle, ArrowRight, Bell, CheckCircle2, Clock, DollarSign, Users2 } from "lucide-react";
 
+function CohortLoadError({ error, reset }: { error: Error; reset: () => void }) {
+  return (
+    <div className="mx-auto max-w-3xl px-6 py-14">
+      <div role="alert" className="rounded-xl border border-destructive/40 bg-destructive/10 px-6 py-6 text-sm text-destructive">
+        <p className="font-medium">Couldn't verify instructor access.</p>
+        <p className="mt-1 break-words text-destructive/80">{error.message}</p>
+        <p className="mt-2 text-xs text-destructive/70">
+          RLS is still the true authority here. This is a transient lookup failure — retry, or return to the dashboard.
+        </p>
+        <div className="mt-4 flex gap-2">
+          <button
+            type="button"
+            onClick={reset}
+            className="inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/20"
+          >
+            Retry
+          </button>
+          <Link
+            to="/dashboard"
+            className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+          >
+            Dashboard
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export const Route = createFileRoute("/_authenticated/cohort")({
   beforeLoad: async () => {
     // Route gate uses the canonical user_roles / has_role authority instead
     // of the legacy profiles.role field. RLS remains the true data
     // boundary; this gate is a UX defense to avoid rendering a page the
-    // caller cannot read. Handle auth / role lookup errors explicitly so a
-    // transient failure doesn't silently redirect an authorized user.
+    // caller cannot read.
+    //
+    // Auth failure => redirect to dashboard (unauthenticated cannot see this).
+    // RPC lookup failure for an authenticated user MUST throw a real error
+    // instead of silently ejecting: a transient has_role outage would
+    // otherwise look identical to "you are not an instructor" and quietly
+    // strip access from a legitimate instructor.
     const { data: userData, error: userErr } = await supabase.auth.getUser();
     if (userErr || !userData?.user) throw redirect({ to: "/dashboard" });
     const uid = userData.user.id;
@@ -18,10 +52,15 @@ export const Route = createFileRoute("/_authenticated/cohort")({
       (supabase.rpc as any)("has_role", { _user_id: uid, _role: "admin" }),
       (supabase.rpc as any)("has_role", { _user_id: uid, _role: "instructor" }),
     ]);
-    if (aErr || iErr) throw redirect({ to: "/dashboard" });
+    if (aErr || iErr) {
+      throw new Error(
+        `Couldn't verify instructor role — ${(aErr ?? iErr)?.message ?? "unknown error"}`,
+      );
+    }
     if (!isAdmin && !isInstructor) throw redirect({ to: "/dashboard" });
   },
   component: CohortPage,
+  errorComponent: CohortLoadError,
 });
 
 type CohortRow = { id: string; name: string; daily_cap_usd: number | null; consensus_threshold: number | null; instructor_id: string | null };
@@ -88,9 +127,10 @@ function CohortPage() {
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
-    const { data: userRes } = await supabase.auth.getUser();
+    const { data: userRes, error: userErr } = await supabase.auth.getUser();
+    if (userErr) { setLoadError(userErr.message); setLoading(false); return; }
     const uid = userRes.user?.id;
-    if (!uid) return;
+    if (!uid) { setLoading(false); return; }
 
     // Cohorts the instructor teaches (RLS also permits admin-wide reads).
     // Query failures MUST propagate — silently returning empty arrays would
@@ -158,7 +198,7 @@ function CohortPage() {
 
     // Health metrics — the numbers that say whether protocol changes help.
     if (memberIds.length) {
-      const [{ data: runRows }, { data: auditRows }] = await Promise.all([
+      const [runsRes, auditsRes] = await Promise.all([
         supabase
           .from("boardroom_runs")
           .select("kind, status, loop_no")
@@ -169,6 +209,10 @@ function CohortPage() {
           .in("user_id", memberIds)
           .not("summary", "is", null),
       ]);
+      if (runsRes.error) { setLoadError(runsRes.error.message); setLoading(false); return; }
+      if (auditsRes.error) { setLoadError(auditsRes.error.message); setLoading(false); return; }
+      const runRows = runsRes.data;
+      const auditRows = auditsRes.data;
       const deliberations = (runRows ?? []).filter(
         (r: any) => ["plan", "design"].includes(r.kind) && ["consensus", "chair_ruled"].includes(r.status),
       );

@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { BoardroomSession, PLAN_RUBRIC } from "@/components/boardroom-session";
 import { ArrowRight } from "lucide-react";
-import { ProjectJourney } from "@/components/project-journey";
+import { ProjectJourneyStrip } from "@/components/project-journey";
 import { useProjectJourney } from "@/hooks/use-project-journey";
 import { computeBoardroomGate, IMPORT_AUDIT_GATE_MESSAGE } from "@/lib/boardroom-gate";
 
@@ -104,11 +104,9 @@ function BoardroomProjectPage() {
           ← Dashboard
         </Link>
         <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">{projectName}</h1>
-        {journey && (
-          <div className="mt-4 mb-2">
-            <ProjectJourney stages={journey} />
-          </div>
-        )}
+        <div className="mt-4 mb-2">
+          <ProjectJourneyStrip result={journey} />
+        </div>
       </div>
       <BoardroomSession
         projectId={projectId}

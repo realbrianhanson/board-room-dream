@@ -8,7 +8,7 @@ import { GitHubRepoCard } from "@/components/github-repo-card";
 import { computeSkipSuffixIds } from "@/lib/runway-skip";
 import { startGithubConnect } from "@/lib/github-connect";
 import { selectDisplayedRun } from "@/lib/run-selection";
-import { ProjectJourney } from "@/components/project-journey";
+import { ProjectJourneyStrip } from "@/components/project-journey";
 import { useProjectJourney } from "@/hooks/use-project-journey";
 import {
   AlertTriangle,
@@ -156,6 +156,7 @@ function RunwayPage() {
   const [run, setRun] = useState<Run | null>(null);
   const [generating, setGenerating] = useState(false);
   const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [urlEdit, setUrlEdit] = useState("");
   const [showRollback, setShowRollback] = useState(false);
@@ -174,7 +175,7 @@ function RunwayPage() {
   const [compiling, setCompiling] = useState(false);
 
   const loadAll = useCallback(async () => {
-    const [{ data: p }, { data: pv }, { data: dv }, { data: bs }, { data: rs }, { data: au }] = await Promise.all([
+    const [pRes, pvRes, dvRes, bsRes, rsRes, auRes] = await Promise.all([
       supabase.from("projects").select("id, name, user_id, status, lovable_project_url, current_batch_no, github_repo, is_import").eq("id", projectId).maybeSingle(),
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "plan").eq("is_build_safe", true).limit(1),
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "design").eq("is_build_safe", true).limit(1),
@@ -182,6 +183,47 @@ function RunwayPage() {
       supabase.from("boardroom_runs").select("id, kind, status, error, spent_usd, budget_usd, created_at").eq("project_id", projectId).eq("kind", "batches").in("status", ["queued","running","paused","paused_budget","failed","completed","consensus","chair_ruled"]).order("created_at", { ascending: false }).limit(10),
       supabase.from("audits").select("id, batch_id, kind, status, loop_no, source, head_sha, files_analyzed, summary, created_at").eq("project_id", projectId).order("created_at", { ascending: false }),
     ]);
+    // Capture the first meaningful error across the six parallel queries.
+    // A failure MUST NOT be coerced into an empty state — that would render
+    // "no plan / no batches" for a real backend outage.
+    const firstErr =
+      pRes.error?.message ||
+      pvRes.error?.message ||
+      dvRes.error?.message ||
+      bsRes.error?.message ||
+      rsRes.error?.message ||
+      auRes.error?.message ||
+      null;
+    if (firstErr) {
+      setLoadError(firstErr);
+      return;
+    }
+    const p = pRes.data;
+    const pv = pvRes.data;
+    const dv = dvRes.data;
+    const bs = bsRes.data;
+    const rs = rsRes.data;
+    const au = auRes.data;
+    const auditRows = (au ?? []) as AuditRow[];
+    // Scope findings to THIS project's audit ids only.
+    const auditIds = auditRows.map((a) => a.id);
+    let findingRows: FindingRow[] = [];
+    if (auditIds.length > 0) {
+      const { data: fi, error: fiErr } = await supabase
+        .from("audit_findings")
+        .select("id, audit_id, severity, file_path, title, status")
+        .in("audit_id", auditIds)
+        .order("severity", { ascending: true });
+      if (fiErr) {
+        setLoadError(fiErr.message);
+        return;
+      }
+      findingRows = (fi ?? []) as FindingRow[];
+    }
+
+    // Only commit state once every query succeeded — never publish partial
+    // truth from a half-failed load.
+    setLoadError(null);
     setProject((p as Project) ?? null);
     setGhRepo((p as { github_repo: string | null } | null)?.github_repo ?? null);
     setHasPlan(((pv ?? []).length ?? 0) > 0);
@@ -191,21 +233,8 @@ function RunwayPage() {
       const runList = (rs ?? []) as Run[];
       setRun(selectDisplayedRun(runList));
     }
-
-    const auditRows = (au ?? []) as AuditRow[];
     setAudits(auditRows);
-    // Scope findings to THIS project's audit ids only.
-    const auditIds = auditRows.map((a) => a.id);
-    if (auditIds.length === 0) {
-      setFindings([]);
-    } else {
-      const { data: fi } = await supabase
-        .from("audit_findings")
-        .select("id, audit_id, severity, file_path, title, status")
-        .in("audit_id", auditIds)
-        .order("severity", { ascending: true });
-      setFindings((fi ?? []) as FindingRow[]);
-    }
+    setFindings(findingRows);
     if (p && !urlEdit) setUrlEdit((p as Project).lovable_project_url ?? "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
@@ -484,6 +513,23 @@ function RunwayPage() {
     }
   }
 
+  if (loadError) {
+    return (
+      <div className="mx-auto max-w-6xl px-6 py-14">
+        <div role="alert" className="rounded-xl border border-destructive/40 bg-destructive/10 px-6 py-6 text-sm text-destructive">
+          <p className="font-medium">Couldn't load the Build Runway.</p>
+          <p className="mt-1 break-words text-destructive/80">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => { setLoadError(null); void loadAll(); }}
+            className="mt-4 inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (!project || hasPlan === null || batches === null) {
     return <div className="mx-auto max-w-6xl px-6 py-14"><div className="h-32 animate-pulse rounded-xl bg-surface-1" /></div>;
   }
@@ -497,11 +543,9 @@ function RunwayPage() {
           </Link>
           <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">Build Runway</h1>
           <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">{project.name}</p>
-          {journey && (
-            <div className="mt-4 mb-2">
-              <ProjectJourney stages={journey} />
-            </div>
-          )}
+          <div className="mt-4 mb-2">
+            <ProjectJourneyStrip result={journey} />
+          </div>
         </div>
         {total > 0 && (
           <div className="flex items-center gap-3 rounded-xl border border-border bg-surface-1 px-4 py-2">

@@ -28,6 +28,21 @@ export type { OwnerAuthority };
 
 export const AUTHORITY_CORRECTION_MAX = 2;
 
+// The correction step must sort AFTER every prior step in the run so
+// attempt 2 lands after attempt 1 and neither collides with earlier
+// protocol rounds (plan/design consensus, dissent capture, etc). Pure
+// helper: given the max existing round on the run and a protocol-safe
+// minimum, return the next round. Callers pass max=null when the max
+// query returns nothing or fails; the minSafe floor keeps the correction
+// after the original 3-loop consensus protocol rounds.
+export function nextCorrectionRound(currentMaxRound: number | null, minSafe = 7): number {
+  const base = typeof currentMaxRound === "number" && Number.isFinite(currentMaxRound)
+    ? currentMaxRound
+    : minSafe - 1;
+  const next = base + 1;
+  return next < minSafe ? minSafe : next;
+}
+
 export type AuthorityPhase =
   | "pre_lock_plan"
   | "pre_finalize_blueprint"
@@ -237,11 +252,30 @@ export async function enforceAuthorityOrCorrect(
     phase: ctx.phase,
   });
 
+  // Query the current max round on the run so correction attempt N always
+  // sorts after attempt N-1 (and after any newly-added protocol rounds).
+  // Fall back to the protocol-safe minimum on any query failure — test
+  // doubles / transient errors must not silently collapse attempts to the
+  // same round.
+  let currentMax: number | null = null;
+  try {
+    const res: any = await ctx.admin
+      .from("run_steps")
+      .select("round")
+      .eq("run_id", ctx.run.id)
+      .order("round", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const r = res?.data?.round;
+    currentMax = typeof r === "number" ? r : null;
+  } catch { /* fall through to minSafe */ }
+  const roundNo = nextCorrectionRound(currentMax);
+
   await ctx.admin.from("run_steps").insert({
     run_id: ctx.run.id,
     user_id: ctx.run.user_id,
     step_key: stepKey,
-    round: 7,
+    round: roundNo,
     seat: "chair",
     status: "queued",
     request: {
