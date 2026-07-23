@@ -44,7 +44,7 @@ import {
   RepoContractUnavailable,
 } from "./queues.ts";
 import { BatchContextTooLarge, MarkdownCompactionImpossible, buildValidationRetryRequest } from "../_shared/batch-context.ts";
-import { tryCloseJsonTail } from "../_shared/audit-findings.ts";
+import { tryCloseJsonTail, tryRecoverTrailingRedundantCloser } from "../_shared/audit-findings.ts";
 import {
   finalizeChangeRequestAuthorityError,
   finalizePlanAuthorityError,
@@ -426,7 +426,19 @@ async function executeStep(admin: any, run: any, step: any) {
     if (jsonMode) {
       let candidate: any = null;
       let tailClosed: string | null = null;
+      let recoveryMode: string | null = null;
       try { candidate = JSON.parse(content); } catch { candidate = null; }
+      if (!candidate) {
+        // AUDIT-JSON-RECOVERY-R5: valid top-level JSON followed only by
+        // whitespace and redundant same-kind closers (e.g. extra "}" after
+        // an object) is machine-recoverable without repair. Runs strictly
+        // after JSON.parse and before the tail-closer rescue.
+        const rec = tryRecoverTrailingRedundantCloser(content);
+        if (rec.ok) {
+          candidate = rec.value;
+          recoveryMode = "trailing_redundant_closer";
+        }
+      }
       if (!candidate) {
         // Conservative tail-closure rescue: the audit-map path repeatedly
         // truncates one token short of the outer "]}" (run e2c5faf3). The
@@ -478,12 +490,13 @@ async function executeStep(admin: any, run: any, step: any) {
         return;
       }
       let parsed: any = candidate;
-      if (fallbackMeta || tailClosed) {
+      if (fallbackMeta || tailClosed || recoveryMode) {
         if (!parsed || typeof parsed !== "object") parsed = {};
         parsed._meta = {
           ...(parsed._meta ?? {}),
           ...(fallbackMeta ? { fallback: fallbackMeta } : {}),
           ...(tailClosed ? { tail_closed: tailClosed } : {}),
+          ...(recoveryMode ? { recovery_mode: recoveryMode } : {}),
         };
       }
       await admin
