@@ -128,7 +128,10 @@ export async function failRun(
   // Zero-batch failure reconciliation: a failed 'batches' run that produced
   // no batches would leave projects.status='auditing' or similar, which
   // the Dashboard would misread as "Review findings". Reset to a truthful
-  // state via the shared pure selector.
+  // state via the shared pure selector — but guard against clobbering a
+  // project that concurrently advanced past the pre-build lifecycle. A
+  // 'batches' run only executes while status is 'locked' (or 'imported'
+  // for the import-improvement path), so restrict compare-and-set to those.
   if (run?.kind === "batches" && run?.project_id) {
     try {
       const { count: batchCount } = await admin
@@ -156,7 +159,8 @@ export async function failRun(
         await admin
           .from("projects")
           .update({ status: nextStatus, current_batch_no: 1 })
-          .eq("id", run.project_id);
+          .eq("id", run.project_id)
+          .in("status", ["locked", "imported", "auditing"]);
       }
     } catch { /* best-effort reconciliation */ }
   }
