@@ -624,84 +624,28 @@ export function evaluateChairMergeCandidate(parsed: unknown): ChairMergeEvaluati
   return { error, findings: published, downgrades, summary, verdict };
 }
 
-// R3/R6 — audit-summary reconciliation. Given the Chair's raw summary text
-// and the POST-downgrade severity counts persisted alongside it, guarantee
-// the persisted summary text never asserts a severity class that the counts
-// do not support and never cites a rejected finding by title.
+// AUDIT-SUMMARY-DETERMINISTIC — the persisted summary.text MUST be built
+// deterministically from the validated post-downgrade / post-rejection
+// counts. We NEVER preserve model-authored prose in summary.text, even
+// when its severity/count claims happen to match the counts: the risk of
+// leaking a rejected finding title, a bogus "critical" adjective, or a
+// stale count-word into published summaries is not worth the marginal
+// narrative value. validation_downgrades (a separate structured field)
+// stays as it was.
 //
-// Live regressions:
-//   - audit 2d953efb: counts.P0 === 0 but the summary text said "P0".
-//   - audit cef4de90: counts.P0 === 0 / P1 === 2 but the summary said
-//     "critical flaw" and named an owner-authority finding that had been
-//     rescored/rejected away.
-//
-// Deterministic policy:
-//   - Build a forbidden-word set from the counts: any severity class with
-//     count 0 forbids its own token ("P0"/"P1"/…) and, when P0===0, the
-//     word "critical"; when both P0 and P1 are 0, the words
-//     "high-severity"/"high severity"/"serious" as well.
-//   - Any rejected-finding title (case-insensitive substring match) is
-//     forbidden too — the summary must not name a finding that isn't
-//     published.
-//   - If any forbidden token appears in the raw text, DROP the raw text
-//     entirely and persist just the derived counts sentence.
-//   - Otherwise prefix the raw text with the counts sentence and cap length.
+// Callers still pass the raw text (and any rejected titles) so the shape
+// of the function is backwards compatible, but both inputs are ignored.
 export type AuditCounts = { P0: number; P1: number; P2: number; P3: number };
 export function reconcileAuditSummaryText(
-  rawText: string,
+  _rawText: string,
   counts: AuditCounts,
-  rejectedTitles: string[] = [],
+  _rejectedTitles: string[] = [],
 ): string {
-  const text = String(rawText ?? "").trim();
   const countsSentence =
     `Validated counts: P0=${counts.P0}, P1=${counts.P1}, P2=${counts.P2}, P3=${counts.P3}.`;
-  const forbiddenPatterns: RegExp[] = [];
-  if (counts.P0 === 0) {
-    forbiddenPatterns.push(/\bP0\b/i);
-    forbiddenPatterns.push(/\bcritical\b/i);
-  }
-  if (counts.P1 === 0) {
-    forbiddenPatterns.push(/\bP1\b/i);
-  }
-  if (counts.P0 === 0 && counts.P1 === 0) {
-    forbiddenPatterns.push(/\bhigh[- ]severity\b/i);
-    forbiddenPatterns.push(/\bserious\b/i);
-  }
-  const rejectedHit = rejectedTitles.some((title) => {
-    const t = String(title ?? "").trim();
-    if (t.length < 6) return false;
-    return text.toLowerCase().includes(t.toLowerCase());
-  });
-  const forbiddenHit = forbiddenPatterns.some((rx) => rx.test(text));
-  // R7 — count-claim reconciliation. A model-authored sentence like
-  // "Three P1 issues" or "2 P0 blockers" must NOT be persisted when the
-  // named number contradicts the validated post-downgrade counts. This
-  // catches the class where a narrative survives forbidden-word filters
-  // because the class is nonzero but the stated count is wrong.
-  const numberWords: Record<string, number> = {
-    one: 1, two: 2, three: 3, four: 4, five: 5,
-    six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
-  };
-  const countMismatch = (() => {
-    const rx = /\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+P([0-3])\b/gi;
-    let m: RegExpExecArray | null;
-    while ((m = rx.exec(text)) !== null) {
-      const raw = m[1].toLowerCase();
-      const claimed = /^\d+$/.test(raw) ? parseInt(raw, 10) : (numberWords[raw] ?? -1);
-      const sev = `P${m[2]}` as keyof AuditCounts;
-      if (claimed >= 0 && claimed !== counts[sev]) return true;
-    }
-    return false;
-  })();
-  if (rejectedHit || forbiddenHit || countMismatch) {
-    // Refuse to persist the stale narrative — counts sentence alone.
-    return countsSentence.slice(0, CAPS.mergeSummaryMax);
-  }
-  const combined = text ? `${countsSentence} ${text}` : countsSentence;
-  return combined.length > CAPS.mergeSummaryMax
-    ? combined.slice(0, CAPS.mergeSummaryMax - 1) + "…"
-    : combined;
+  return countsSentence.slice(0, CAPS.mergeSummaryMax);
 }
+
 
 export function validateSeatReport(findings: CleanFinding[]): string | null {
   if (findings.length > CAPS.seatFindingsMax) {
