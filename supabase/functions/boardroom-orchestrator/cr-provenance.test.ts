@@ -19,10 +19,10 @@ Deno.test("ensureAuthority reads CR status and branches on it", () => {
 Deno.test("ensureAuthority uses approved_change_request only for approved status", () => {
   const idx = src.indexOf("async function ensureAuthority");
   const body = src.slice(idx, idx + 3000);
-  const approvedIdx = body.indexOf("approved_change_request:");
-  const proposedIdx = body.indexOf("proposed_change_request:");
   const statusCheckIdx = body.indexOf('status === "approved"');
   assert(statusCheckIdx > -1, "status check missing");
+  const approvedIdx = body.indexOf("approved_change_request:", statusCheckIdx);
+  const proposedIdx = body.indexOf("proposed_change_request:", statusCheckIdx);
   assert(approvedIdx > statusCheckIdx, "approved label must be gated by the status check");
   assert(proposedIdx > statusCheckIdx, "proposed label must be gated by the status check");
 });
