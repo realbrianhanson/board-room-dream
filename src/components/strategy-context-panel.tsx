@@ -223,7 +223,7 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
                 <span className="text-xs text-muted-foreground">{meta.label}</span>
                 <input
                   type="text"
-                  value={values[k]}
+                  value={readyValues[k]}
                   onChange={(e) =>
                     setValues((prev) => ({ ...(prev as ImportStrategyInput), [k]: e.target.value }))
                   }
