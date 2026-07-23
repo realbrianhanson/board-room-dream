@@ -36,7 +36,8 @@ function DesignStudioPage() {
   const [locked, setLocked] = useState<PlanVersion | null>(null);
   const [uid, setUid] = useState<string | null>(null);
   const [reconvening, setReconvening] = useState(false);
-  
+  const [loadError, setLoadError] = useState<string | null>(null);
+
 
   const loadLocked = useCallback(async () => {
     const { data } = await supabase
@@ -51,28 +52,29 @@ function DesignStudioPage() {
     setLocked((data as PlanVersion) ?? null);
   }, [projectId]);
 
-
-  useEffect(() => {
-    (async () => {
-      const { data: u } = await supabase.auth.getUser();
-      setUid(u.user?.id ?? null);
-      const { data: p } = await supabase
-        .from("projects")
-        .select("id, name, user_id, status, is_import, github_repo")
-        .eq("id", projectId)
-        .maybeSingle();
-      setProject((p as Project) ?? null);
-      const { count } = await supabase
-        .from("plan_versions")
-        .select("id", { count: "exact", head: true })
-        .eq("project_id", projectId)
-        .eq("kind", "plan")
-        .eq("is_build_safe", true);
-      setHasPlan((count ?? 0) > 0);
-
-      await loadLocked();
-    })();
+  const load = useCallback(async () => {
+    setLoadError(null);
+    const { data: u } = await supabase.auth.getUser();
+    setUid(u.user?.id ?? null);
+    const projRes = await supabase
+      .from("projects")
+      .select("id, name, user_id, status, is_import, github_repo")
+      .eq("id", projectId)
+      .maybeSingle();
+    if (projRes.error) { setLoadError(projRes.error.message); return; }
+    setProject((projRes.data as Project) ?? null);
+    const planRes = await supabase
+      .from("plan_versions")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", projectId)
+      .eq("kind", "plan")
+      .eq("is_build_safe", true);
+    if (planRes.error) { setLoadError(planRes.error.message); return; }
+    setHasPlan((planRes.count ?? 0) > 0);
+    await loadLocked();
   }, [projectId, loadLocked]);
+
+  useEffect(() => { void load(); }, [load]);
 
   // Live-update locked design when a design run finalizes.
   useEffect(() => {
