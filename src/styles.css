@@ -83,6 +83,15 @@
   --success-foreground: 220 15% 8%;
   --destructive: 8 60% 45%;
   --destructive-foreground: 40 30% 94%;
+  /*
+   * Warning uses the same brass hue as --primary so warning chips read as
+   * "attention" without introducing a second accent. Info is a calm slate
+   * that pairs with the dark surface without competing with brass.
+   */
+  --warning: 38 65% 55%;
+  --warning-foreground: 220 15% 8%;
+  --info: 210 20% 62%;
+  --info-foreground: 220 15% 8%;
   --border: 40 15% 24%;
   --radius: 0.75rem;
 }
