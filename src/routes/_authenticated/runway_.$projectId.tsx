@@ -1053,7 +1053,8 @@ function CompileModal({
         </div>
 
         {source === "paste" && (
-          <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={5_000_000} />
+          <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={MAX_PASTE_BYTES} />
+
         )}
 
         <div className="mt-5 flex justify-end gap-2">
