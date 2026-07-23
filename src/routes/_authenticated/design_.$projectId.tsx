@@ -6,7 +6,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { BoardroomSession, DESIGN_RUBRIC } from "@/components/boardroom-session";
 import { toast } from "sonner";
 import { ArrowRight, Download, Palette, Upload, X } from "lucide-react";
-import { ProjectJourney } from "@/components/project-journey";
+import { ProjectJourneyStrip } from "@/components/project-journey";
 import { useProjectJourney } from "@/hooks/use-project-journey";
 import { DesignLightbox } from "@/components/design-lightbox";
 
