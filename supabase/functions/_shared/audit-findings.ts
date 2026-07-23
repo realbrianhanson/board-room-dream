@@ -355,9 +355,29 @@ export function looksLikeClientSurfaceSecurityClaim(
 // concerns. These are legitimate product-quality findings but must not carry
 // P0/P1 severity without an OWNER_CONTRACT (verbatim owner/PRD requirement)
 // or a RUNTIME_FAILURE marker.
+//
+// R6 — deterministic path exclusion. The default-P2 rule targets real
+// product recommendations, NOT backend security/authority/parser/
+// orchestration code that merely mentions buyer/payment/price-like words in
+// its evidence. Any finding whose file_path lives under a backend infra
+// path (supabase/functions/**, supabase/migrations/**, supabase/tests/**) is
+// excluded from product-strategy classification and follows the normal
+// severity gates instead.
 const PRODUCT_STRATEGY_RX =
   /\b(copy|wording|tone|positioning|value\s+prop(?:osition)?|acquisition|pricing|price\s+anchor|monetiz(?:e|ation|ing)|paid\s+offer|upgrade\s+trigger|onboarding|activation|first[- ]?90|wow\s+moment|buyer|hero\s+section|landing\s+(?:page|copy|hero)|CTA|call[- ]to[- ]action|cohort[- ]first|marketing)\b/i;
-export function looksLikeProductStrategyClaim(title: string, description: string): boolean {
+export function isBackendInfraPath(fp: string | null): boolean {
+  const t = String(fp ?? "").trim().toLowerCase().replace(/^\.?\/+/, "");
+  if (!t) return false;
+  return t.startsWith("supabase/functions/")
+    || t.startsWith("supabase/migrations/")
+    || t.startsWith("supabase/tests/");
+}
+export function looksLikeProductStrategyClaim(
+  title: string,
+  description: string,
+  filePath?: string | null,
+): boolean {
+  if (filePath !== undefined && isBackendInfraPath(filePath)) return false;
   const t = `${title}\n${description}`;
   return PRODUCT_STRATEGY_RX.test(t);
 }
