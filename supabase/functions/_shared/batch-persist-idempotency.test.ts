@@ -72,7 +72,7 @@ Deno.test("isUniqueViolation recognises pg 23505 and message-shaped variants", (
   assert(!isUniqueViolation("boom"));
 });
 
-Deno.test("isSafePreExecution requires pending+uncompiled+unsent+no outcome", () => {
+Deno.test("isSafePreExecution requires pending+uncompiled+unsent+no compile artifacts+no outcome", () => {
   assert(isSafePreExecution(existing(1)));
   assert(!isSafePreExecution(existing(1, { status: "sent" })));
   assert(!isSafePreExecution(existing(1, { sent_at: "2026-07-23T00:00:00Z" })));
@@ -80,6 +80,14 @@ Deno.test("isSafePreExecution requires pending+uncompiled+unsent+no outcome", ()
   assert(!isSafePreExecution(existing(1, { compiled_at: "2026-07-23T00:00:00Z" })));
   assert(!isSafePreExecution(existing(1, { outcome_md: "shipped" })));
   assert(!isSafePreExecution(existing(1, { is_fix: true })));
+  // Compile artifacts: any one populated (even without compiled_at) means
+  // the batch-compiler has already touched this row and we must not
+  // silently accept the duplicate.
+  assert(!isSafePreExecution(existing(1, { compiled_prompt_md: "# compiled" })));
+  assert(!isSafePreExecution(existing(1, { compiled_verification_prompt_md: "# verify" })));
+  assert(!isSafePreExecution(existing(1, { compile_meta: { status: "partial" } })));
+  // Empty-object compile_meta is treated as unset (no artifact recorded).
+  assert(isSafePreExecution(existing(1, { compile_meta: {} })));
 });
 
 Deno.test("identical duplicate finalization is accepted (idempotent success)", () => {
