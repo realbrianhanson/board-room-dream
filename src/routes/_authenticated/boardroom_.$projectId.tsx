@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { BoardroomSession, PLAN_RUBRIC } from "@/components/boardroom-session";
 import { ArrowRight } from "lucide-react";
-import { ProjectJourney } from "@/components/project-journey";
+import { ProjectJourneyStrip } from "@/components/project-journey";
 import { useProjectJourney } from "@/hooks/use-project-journey";
 import { computeBoardroomGate, IMPORT_AUDIT_GATE_MESSAGE } from "@/lib/boardroom-gate";
 
