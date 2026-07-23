@@ -201,12 +201,20 @@ export function dedupeFindings(findings: CleanFinding[]): CleanFinding[] {
 
 // Downgrade unsupported serious findings. Returns the downgraded findings
 // plus a reason ledger for audits.summary.validation_downgrades.
+export type DowngradeDisposition = "rescored" | "rejected_unsupported";
 export type DowngradeRecord = {
   title: string;
   file_path: string | null;
   from: Severity;
   to: Severity;
   reason: string;
+  // AUDIT-PUBLISH-TRUST-R4: "rescored" = finding is still published at the
+  // reduced severity; "rejected_unsupported" = the finding failed a
+  // deterministic factual-proof gate and is OMITTED from published findings
+  // (kept in this ledger only for observability). Counts, verdict, and
+  // fix_batch generation are based only on published findings.
+  disposition: DowngradeDisposition;
+  published: boolean;
 };
 
 // A supported P0/P1 needs (a) a concrete repo-relative file_path — non-empty,
