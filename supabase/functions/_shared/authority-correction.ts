@@ -252,11 +252,30 @@ export async function enforceAuthorityOrCorrect(
     phase: ctx.phase,
   });
 
+  // Query the current max round on the run so correction attempt N always
+  // sorts after attempt N-1 (and after any newly-added protocol rounds).
+  // Fall back to the protocol-safe minimum on any query failure — test
+  // doubles / transient errors must not silently collapse attempts to the
+  // same round.
+  let currentMax: number | null = null;
+  try {
+    const res: any = await ctx.admin
+      .from("run_steps")
+      .select("round")
+      .eq("run_id", ctx.run.id)
+      .order("round", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const r = res?.data?.round;
+    currentMax = typeof r === "number" ? r : null;
+  } catch { /* fall through to minSafe */ }
+  const roundNo = nextCorrectionRound(currentMax);
+
   await ctx.admin.from("run_steps").insert({
     run_id: ctx.run.id,
     user_id: ctx.run.user_id,
     step_key: stepKey,
-    round: 7,
+    round: roundNo,
     seat: "chair",
     status: "queued",
     request: {
