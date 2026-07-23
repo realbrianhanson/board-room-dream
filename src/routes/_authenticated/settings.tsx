@@ -260,13 +260,17 @@ function GitHubCard({ isAdmin }: { isAdmin: boolean }) {
   const [state, setState] = useState<GhStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [iframeNotice, setIframeNotice] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   async function refresh() {
+    setLoadError(null);
     try {
       const data = (await callGh("status")) as GhStatus;
       setState(data);
     } catch (e) {
-      toast.error((e as Error).message);
+      const msg = (e as Error).message ?? "Failed to load GitHub status";
+      setLoadError(msg);
+      toast.error(msg);
     }
   }
   useEffect(() => { refresh(); }, []);
