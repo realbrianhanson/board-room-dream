@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from "vitest";
-import { render, fireEvent, screen, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { render, fireEvent, screen, cleanup, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { DeleteProjectDialog } from "@/components/delete-project-dialog";
 
 const projectName = "My Cool Project";
+
+afterEach(cleanup);
 
 describe("DeleteProjectDialog", () => {
   it("cancel closes without calling onConfirm", () => {

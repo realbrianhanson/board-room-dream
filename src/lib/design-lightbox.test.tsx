@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from "vitest";
-import { render, fireEvent, screen } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { render, fireEvent, screen, cleanup } from "@testing-library/react";
 import React from "react";
 
 /**
@@ -40,6 +40,8 @@ function Lightbox({ onClose }: { onClose: () => void }) {
     </div>
   );
 }
+
+afterEach(cleanup);
 
 describe("design lightbox close semantics", () => {
   it("clicking the image does NOT close the lightbox (stopPropagation)", () => {
