@@ -13,10 +13,20 @@
  *   - "Batch audit · <date>" — fallback when no batch_no is available
  */
 
+export type GroupingAuditStatus = "running" | "clean" | "findings" | "failed" | string;
+
 export type GroupingAudit = {
   id: string;
   batch_id: string | null;
   kind: "batch" | "final_az";
+  /**
+   * Terminal status of the audit. "Current final audit" must only be
+   * chosen from a successful terminal final ("clean" | "findings"); a
+   * running/queued/failed/cancelled final never displaces the latest
+   * successful one. Optional so legacy callers that omit status still
+   * behave sanely (treated as non-terminal for the "current" choice).
+   */
+  status?: GroupingAuditStatus | null;
   created_at: string;
   head_sha?: string | null;
 };
@@ -44,6 +54,11 @@ function shortSha(sha: string | null | undefined): string | null {
   if (!sha) return null;
   const trimmed = sha.trim();
   return trimmed.length >= 7 ? trimmed.slice(0, 7) : trimmed || null;
+}
+
+/** A final audit that actually produced published results. */
+function isSuccessfulFinal(a: GroupingAudit): boolean {
+  return a.kind === "final_az" && (a.status === "clean" || a.status === "findings");
 }
 
 export function labelForAudit(
@@ -74,10 +89,12 @@ export function groupOpenFindingsByAudit<F extends GroupingFinding>(
   const byId = new Map<string, GroupingAudit>();
   for (const a of audits) byId.set(a.id, a);
 
-  // Current final = latest by created_at with kind === "final_az".
+  // Current final = latest by created_at among SUCCESSFUL terminal final
+  // audits only. A newer running/queued/failed/cancelled final must not
+  // displace the latest successful one.
   let currentFinal: GroupingAudit | null = null;
   for (const a of audits) {
-    if (a.kind !== "final_az") continue;
+    if (!isSuccessfulFinal(a)) continue;
     if (!currentFinal || a.created_at > currentFinal.created_at) currentFinal = a;
   }
 
