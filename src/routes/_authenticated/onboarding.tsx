@@ -1,7 +1,8 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Lightbulb, Package } from "lucide-react";
+import { markCohortSkipped, clearCohortSkipped } from "@/lib/onboarding";
 
 export const Route = createFileRoute("/_authenticated/onboarding")({
   component: OnboardingPage,
@@ -27,7 +28,7 @@ function OnboardingPage() {
           rpcErr.message.replace(/^.*Invalid cohort code.*$/i, "That code doesn't match a cohort."),
         );
       }
-      localStorage.removeItem("boardroom.cohort_skipped");
+      clearCohortSkipped(localStorage);
       navigate({ to: "/dashboard" });
     } catch (err) {
       setError((err as Error).message);
@@ -36,42 +37,59 @@ function OnboardingPage() {
     }
   }
 
-  function startBlueprint() {
-    // Preserve the existing skip behavior so we don't nag users again.
-    localStorage.setItem("boardroom.cohort_skipped", "1");
-    navigate({ to: "/dashboard" });
+  function go(mode: "idea" | "import") {
+    // Preserve skip marker so the onboarding never re-nags.
+    markCohortSkipped(localStorage);
+    navigate({ to: "/dashboard", search: { new: mode } });
   }
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-2xl flex-col justify-center px-6 py-16">
+    <div className="mx-auto flex min-h-screen w-full max-w-3xl flex-col justify-center px-6 py-16">
       <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
         Welcome to App Blueprint
       </span>
       <h1 className="mt-4 font-display text-4xl leading-tight text-foreground md:text-5xl">
-        Turn your idea into a build you can trust.
+        Pick where to start.
       </h1>
       <p className="mt-4 max-w-xl text-sm leading-relaxed text-muted-foreground md:text-base">
-        Bring a new idea or an existing Lovable app. The Boardroom — a council of
-        specialist models — challenges assumptions against the real code and
-        produces an evidence-backed Blueprint plus safer step-by-step prompts to
-        paste back into Lovable.
+        Bring code the Boardroom can read, or an idea it can pressure-test. Either way
+        you leave with an evidence-backed Blueprint and safer step-by-step Lovable prompts.
       </p>
 
-      <div className="mt-8">
+      <div className="mt-8 grid gap-4 md:grid-cols-2">
         <button
           type="button"
-          onClick={startBlueprint}
-          className="inline-flex items-center gap-2 rounded-md bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
+          onClick={() => go("import")}
+          className="group flex h-full flex-col items-start rounded-xl border border-border bg-surface-1 p-6 text-left transition-colors hover:border-primary/50"
+          data-testid="onboarding-audit-existing"
         >
-          Start my App Blueprint
-          <ArrowRight className="h-4 w-4" />
+          <Package className="mb-3 h-5 w-5 text-primary" />
+          <h2 className="font-display text-xl text-foreground">Audit an existing app</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Link the repo. The board reads real code first, then helps you decide what to fix or build next.
+          </p>
+          <span className="mt-5 inline-flex items-center gap-1.5 text-sm text-foreground/85 group-hover:text-primary">
+            Import a project <ArrowRight className="h-3.5 w-3.5" />
+          </span>
         </button>
-        <p className="mt-3 text-xs text-muted-foreground">
-          You'll land on your dashboard — start a new idea or import an existing app there.
-        </p>
+        <button
+          type="button"
+          onClick={() => go("idea")}
+          className="group flex h-full flex-col items-start rounded-xl border border-border bg-surface-1 p-6 text-left transition-colors hover:border-primary/50"
+          data-testid="onboarding-blueprint-idea"
+        >
+          <Lightbulb className="mb-3 h-5 w-5 text-primary" />
+          <h2 className="font-display text-xl text-foreground">Blueprint a new idea</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Answer five short prompts. The board scores it, debates it, and locks a plan you can build.
+          </p>
+          <span className="mt-5 inline-flex items-center gap-1.5 text-sm text-foreground/85 group-hover:text-primary">
+            Start the intake <ArrowRight className="h-3.5 w-3.5" />
+          </span>
+        </button>
       </div>
 
-      <div className="mt-12 border-t border-border/60 pt-6">
+      <div className="mt-10 border-t border-border/60 pt-6">
         {!showCohort ? (
           <button
             type="button"
@@ -124,6 +142,9 @@ function OnboardingPage() {
             </div>
           </form>
         )}
+        <p className="mt-6 text-xs text-muted-foreground">
+          Not sure yet? <Link to="/dashboard" className="underline hover:text-foreground">Go straight to your dashboard</Link>.
+        </p>
       </div>
     </div>
   );
