@@ -72,7 +72,7 @@ Deno.test("marker citing a proposed_change_request source is rejected", async ()
   const markers = extractProvenanceMarkers(modelOutput, auth);
   // No marker may validate — the proposed source is NOT in `allowed`.
   assert(!markers.some((m) => m.ok), "no marker should validate against a proposed source");
-  const unauthorized = findUnauthorizedHighImpact(modelOutput, auth, markers);
+  const unauthorized = findUnauthorizedHighImpact(modelOutput, auth);
   assert(
     unauthorized.length > 0,
     "proposed_change_request must not authorize a $49/Stripe directive",
