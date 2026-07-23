@@ -9,6 +9,7 @@ import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.t
 import {
   downgradeUnsupported,
   evaluateChairMergeCandidate,
+  hasAffirmativeMonetizationOwnerContract,
   looksLikeUnauthorizedMonetizationClaim,
   type AuditOwnerContract,
   type CleanFinding,
@@ -68,6 +69,25 @@ Deno.test("severity gate — REGRESSION caps 'no concrete money path' from P1 to
   assert(downgrades.some((d) => /blocked-by-owner-decision/.test(d.reason)));
 });
 
+Deno.test("severity gate — LIVE REGRESSION caps OWNER_CONTRACT evidence that merely says price is not set", () => {
+  const ownerContract: AuditOwnerContract = { priceAnchorUnset: true, upgradeTriggerUnset: false };
+  const evidence =
+    "OWNER_CONTRACT: “Price anchor: Not set by owner” | " +
+    "QUOTE: <a href=\"/auth\">Sign in</a> | WHY: Landing page has no concrete money path.";
+  assert(!hasAffirmativeMonetizationOwnerContract(evidence));
+
+  const evalResult = evaluateChairMergeCandidate({
+    summary: "One issue found.",
+    verdict: "findings",
+    findings: [baseFinding({ severity: "P1", evidence })],
+  }, ownerContract);
+
+  assertEquals(evalResult.findings.length, 1);
+  assertEquals(evalResult.findings[0].severity, "P2");
+  assert(evalResult.downgrades.some((d) => /blocked-by-owner-decision/.test(d.reason)));
+  assertEquals(evalResult.findings.filter((f) => f.severity === "P0" || f.severity === "P1").length, 0);
+});
+
 Deno.test("severity gate — caps P0 too when either monetization decision is unset", () => {
   for (const oc of [
     { priceAnchorUnset: true, upgradeTriggerUnset: false },
@@ -94,11 +114,12 @@ Deno.test("severity gate — DOES NOT cap when owner has authorized both price a
   assertEquals(findings[0].severity, "P1");
 });
 
-Deno.test("severity gate — DOES NOT cap when OWNER_CONTRACT marker is present (broken existing authorized flow)", () => {
+Deno.test("severity gate — DOES NOT cap when affirmative OWNER_CONTRACT marker proves broken existing authorized flow", () => {
   const ownerContract: AuditOwnerContract = { priceAnchorUnset: true, upgradeTriggerUnset: true };
   const evidence =
     "OWNER_CONTRACT: intake.paid_offer='$29/mo subscription' | " +
     "QUOTE: <button onClick={checkout}>Buy</button> | WHY: onClick handler references undefined checkout fn.";
+  assert(hasAffirmativeMonetizationOwnerContract(evidence));
   const { findings } = downgradeUnsupported(
     [baseFinding({ severity: "P1", evidence })],
     ownerContract,

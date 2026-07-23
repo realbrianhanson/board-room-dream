@@ -1187,7 +1187,8 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
   const { evaluateChairMergeCandidate } = await import("../_shared/audit-findings.ts");
   // OWNER-AUTHORITY monetization gate: load the project's most recent
   // intake answers to detect whether price_anchor / upgrade_trigger were
-  // left unset (blank OR the canonical "Board should recommend" placeholder).
+  // left unset/deferred (blank, canonical placeholder, or legacy unapproved
+  // owner-decision wording).
   // When unset, generic "no money path / pricing CTA / checkout / upgrade
   // path" findings are deterministically capped to P2 in the publication
   // path so they never enter a fix batch. Real broken owner-authorized
@@ -1201,17 +1202,17 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    const { isRecommendPlaceholder } = await import("../_shared/import-strategy.ts");
+    const { isMonetizationOwnerInputUnset } = await import("../_shared/import-strategy.ts");
     const ans = (intakeRow?.answers ?? {}) as Record<string, unknown>;
     const priceAnchor = typeof ans.price_anchor === "string" ? ans.price_anchor.trim() : "";
     const upgradeTrigger = typeof ans.upgrade_trigger === "string" ? ans.upgrade_trigger.trim() : "";
     ownerContract = {
-      priceAnchorUnset: priceAnchor.length === 0 || isRecommendPlaceholder(priceAnchor),
-      upgradeTriggerUnset: upgradeTrigger.length === 0 || isRecommendPlaceholder(upgradeTrigger),
+      priceAnchorUnset: isMonetizationOwnerInputUnset(priceAnchor),
+      upgradeTriggerUnset: isMonetizationOwnerInputUnset(upgradeTrigger),
     };
   } catch {
-    // Fail-open on lookup: absence of intake data means we cannot prove
-    // the owner authorized monetization, so treat both as unset (safer).
+    // Fail-closed / safety-first on lookup: absence of intake data means we
+    // cannot prove the owner authorized monetization, so treat both as unset.
     ownerContract = { priceAnchorUnset: true, upgradeTriggerUnset: true };
   }
   const evaluation = evaluateChairMergeCandidate(parsed, ownerContract);

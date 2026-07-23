@@ -7,6 +7,7 @@ import {
   missingStrategyFields,
   normalizeStrategyForPersist,
   strategyCompleteness,
+  isMonetizationOwnerInputUnset,
   isRecommendPlaceholder,
   RECOMMEND_PLACEHOLDER,
   REQUIRED_STRATEGY_FIELDS,
@@ -151,6 +152,29 @@ describe("recommend placeholder helper", () => {
     expect(isRecommendPlaceholder("  " + RECOMMEND_PLACEHOLDER + "  ")).toBe(true);
     expect(isRecommendPlaceholder("$29/mo")).toBe(false);
     expect(isRecommendPlaceholder("")).toBe(false);
+  });
+});
+
+describe("monetization owner-input unset helper", () => {
+  it("recognizes canonical and legacy owner-decision phrases without treating real values as unset", () => {
+    const legacyPrice = "Not set by owner — the Board must recommend a price and clearly label the recommendation as an assumption.";
+    const legacyUpgrade = "Not set by owner — the Board must recommend a clear project- or usage-based upgrade trigger and label it as an assumption.";
+    for (const v of [
+      "",
+      RECOMMEND_PLACEHOLDER,
+      legacyPrice,
+      legacyUpgrade,
+      "Not supplied by owner",
+      "[OWNER DECISION REQUIRED] choose later",
+      "proposal_requires_owner_approval",
+      "Board should recommend",
+    ]) {
+      expect(isMonetizationOwnerInputUnset(v)).toBe(true);
+      expect(isFieldValid("price_anchor", v)).toBe(true);
+      expect(isFieldValid("upgrade_trigger", v)).toBe(true);
+    }
+    expect(isMonetizationOwnerInputUnset("$29/month")).toBe(false);
+    expect(isMonetizationOwnerInputUnset("Upgrade after second project")).toBe(false);
   });
 });
 
