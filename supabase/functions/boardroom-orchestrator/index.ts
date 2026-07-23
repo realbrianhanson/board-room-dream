@@ -1109,6 +1109,16 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
         .maybeSingle();
       if (!proj?.is_import) {
         await admin.from("projects").update({ status: "done" }).eq("id", audit.project_id);
+      } else {
+        // Import: restore prior status so it doesn't stay stuck at 'auditing'.
+        const prev = audit.previous_project_status
+          ?? (run?.consensus as any)?.previous_project_status
+          ?? "imported";
+        await admin
+          .from("projects")
+          .update({ status: prev })
+          .eq("id", audit.project_id)
+          .eq("status", "auditing");
       }
     }
 
