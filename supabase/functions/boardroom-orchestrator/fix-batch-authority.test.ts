@@ -46,6 +46,9 @@ Deno.test("insertModelAuthoredBatchOrAlert loads owner-authority before insertin
   const end = SRC.indexOf("\n}\n", idx);
   const body = SRC.slice(idx, end === -1 ? SRC.length : end);
   assert(body.includes("loadOwnerAuthority"), "helper must call loadOwnerAuthority");
-  assert(body.includes("preLockAuthorityError"), "helper must call preLockAuthorityError");
+  assert(
+    body.includes("preLockAuthorityError") || body.includes("computeAuthorityViolationError"),
+    "helper must run the owner-authority pre-lock check (preLockAuthorityError or the R6 computeAuthorityViolationError passthrough)",
+  );
   assert(body.includes("owner_authority_violation"), "helper must emit an alert on gate failure");
 });
