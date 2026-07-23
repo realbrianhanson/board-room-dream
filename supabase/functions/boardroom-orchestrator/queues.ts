@@ -962,6 +962,7 @@ Constraints: ${batchRangeText} batches, unique ascending integer batch_no starti
       json_output: true,
       reasoning_effort: "high",
       max_tokens: 8000,
+      _is_import: isImport,
 
       messages: [
         { role: "system", content: system },
