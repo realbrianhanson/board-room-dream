@@ -594,33 +594,43 @@ function DefaultDailyCapEditor() {
       </div>
     );
   }
+  if (state.kind === "unset") {
+    return (
+      <div role="status" className="rounded-lg border border-border bg-surface-2 p-5 text-sm">
+        <p className="font-medium text-foreground">Default daily cap isn't configured yet.</p>
+        <p className="mt-1 text-muted-foreground">
+          No runtime value is set in <span className="font-mono text-xs">app_settings.default_daily_cap_usd</span>.
+          This row is created by the admin/deployment bootstrap, not from this screen. Once the
+          bootstrap has seeded a real value, use Retry to load it and then adjust it here.
+        </p>
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="mt-3 inline-flex rounded-md border border-border bg-surface-1 px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-3"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
   const canSave =
-    state.kind === "ready"
-      ? Number.isFinite(Number(draft)) && Number(draft) > 0 && !saving
-      : false;
+    Number.isFinite(Number(draft)) && Number(draft) > 0 && !saving;
   const draftNum = Number(draft);
   const draftValid = Number.isFinite(draftNum) && draftNum > 0;
   return (
     <div className="rounded-lg border border-border bg-surface-2 p-5">
       <label className="mb-2 block text-xs text-muted-foreground">Default daily cap ($ USD)</label>
-      {state.kind === "unset" && (
-        <p className="mb-3 text-xs text-muted-foreground">
-          No value configured yet in runtime app_settings. Enter a value to seed it.
-        </p>
-      )}
       <div className="flex flex-wrap items-center gap-3">
         <input
           type="number"
           step="0.01"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder={state.kind === "unset" ? "e.g. 150.00" : ""}
           className="w-40 rounded-md border border-border bg-surface-1 px-3 py-2 font-mono text-sm text-foreground outline-none focus:border-primary"
         />
         <button
           onClick={save}
-          disabled={!draftValid || saving || state.kind !== "ready"}
-          title={state.kind !== "ready" ? "Load the current value before saving." : undefined}
+          disabled={!draftValid || saving}
           className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
         >
           {saving ? "Saving…" : canSave ? "Save default" : "Save default"}

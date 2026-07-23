@@ -116,6 +116,11 @@ describe("legacy isImportStrategyReady (strict)", () => {
   it("false when anything blank", () => {
     expect(isImportStrategyReady({ ...full, positioning: "" })).toBe(false);
   });
+  it("false for obvious filler that field-level validation rejects", () => {
+    // Strict gate must agree with isFieldValid — no "xxxx" / "test" escape hatch.
+    expect(isImportStrategyReady({ ...full, buyer: "xxxx" })).toBe(false);
+    expect(isImportStrategyReady({ ...full, positioning: "test" })).toBe(false);
+  });
 });
 
 import { isFieldValid, validateImportStrategy } from "./import-strategy";

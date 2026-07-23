@@ -7,7 +7,7 @@
 //
 // Reviewed against official Lovable documentation.
 
-export const LOVABLE_CONTRACT_REVIEWED_AT = "2026-07-27";
+export const LOVABLE_CONTRACT_REVIEWED_AT = "2026-07-23";
 // Curated, versioned, static — NOT fetched at runtime. Update this file when
 // docs change; the reviewed_at above is the single source of truth on
 // currency. Cohort-approved addenda land through app_settings, not here.
