@@ -1250,21 +1250,17 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
       .limit(1)
       .maybeSingle();
     const nextNo = Math.floor(Number(last?.batch_no ?? 0)) + 1;
-    const { data: inserted } = await admin
-      .from("batches")
-      .insert({
-        project_id: audit.project_id,
-        user_id: audit.user_id,
-        batch_no: nextNo,
-        title: "Fix — Final A-Z Audit",
-        channel: "lovable",
-        prompt_md: fixPrompt,
-        status: "pending",
-        is_fix: true,
-      })
-      .select("id")
-      .single();
-    fixBatchId = inserted?.id ?? null;
+    const gated = await insertModelAuthoredBatchOrAlert(admin, run, audit, {
+      project_id: audit.project_id,
+      user_id: audit.user_id,
+      batch_no: nextNo,
+      title: "Fix — Final A-Z Audit",
+      channel: "lovable",
+      prompt_md: fixPrompt,
+      status: "pending",
+      is_fix: true,
+    });
+    fixBatchId = gated.inserted?.id ?? null;
   }
 
   if (findings.length) {
