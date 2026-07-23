@@ -16,7 +16,7 @@ function requestBlockFor(stepKey: string): string {
   assert(idx >= 0, `step_key ${stepKey} not found in queues.ts`);
   const reqIdx = queuesSrc.indexOf("request:", idx);
   assert(reqIdx > idx, `request block after ${stepKey} not found`);
-  return queuesSrc.slice(reqIdx, reqIdx + 600);
+  return queuesSrc.slice(reqIdx, reqIdx + 1600);
 }
 
 Deno.test("queues.ts — batches_revise_chair uses low reasoning (bounded review/merge, not deliberative draft)", () => {
