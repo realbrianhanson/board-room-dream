@@ -627,6 +627,19 @@ async function beginAudit(params: {
     filesAnalyzed = 1;
   }
 
+  // Capture pre-audit project status so terminal transitions
+  // (finalizeAudit / failRun) can restore it truthfully instead of
+  // guessing from safe-plan presence.
+  let previousProjectStatus: string | null = null;
+  if (isFinal) {
+    const { data: preProj } = await admin
+      .from("projects")
+      .select("status")
+      .eq("id", project.id)
+      .maybeSingle();
+    previousProjectStatus = preProj?.status ?? null;
+  }
+
   const { data: audit, error: auErr } = await admin
     .from("audits")
     .insert({
@@ -640,6 +653,7 @@ async function beginAudit(params: {
       head_sha: headSha,
       files_analyzed: filesAnalyzed,
       status: "running",
+      previous_project_status: previousProjectStatus,
     })
     .select("*")
     .single();
@@ -653,6 +667,9 @@ async function beginAudit(params: {
   if (isFinal && auditContractMode) {
     consensus.audit_contract_mode = auditContractMode;
     consensus.included_batch_ids = includedBatchIds;
+  }
+  if (isFinal && previousProjectStatus) {
+    consensus.previous_project_status = previousProjectStatus;
   }
 
   const { data: run, error: rErr } = await admin
