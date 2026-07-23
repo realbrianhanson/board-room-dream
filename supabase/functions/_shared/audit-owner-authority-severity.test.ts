@@ -79,10 +79,18 @@ Deno.test("severity gate — caps P0 too when either monetization decision is un
   }
 });
 
-Deno.test("severity gate — DOES NOT cap when owner has authorized both price and upgrade", () => {
+Deno.test("severity gate — DOES NOT cap when owner has authorized both price and upgrade AND finding carries OWNER_CONTRACT proof", () => {
   const ownerContract: AuditOwnerContract = { priceAnchorUnset: false, upgradeTriggerUnset: false };
-  // Baseline finding still needs QUOTE/WHY etc — provide them.
-  const { findings } = downgradeUnsupported([baseFinding({ severity: "P1" })], ownerContract);
+  // Real broken owner-authorized flow — evidence carries the OWNER_CONTRACT
+  // marker so Rule 4c also stands down; this is exactly the "real broken
+  // EXISTING owner-authorized payment flow" case the gate must preserve.
+  const evidence =
+    "IMPACT: build_failure | OWNER_CONTRACT: intake.paid_offer='$29/mo subscription' | " +
+    "QUOTE: <button onClick={checkout}>Buy</button> | WHY: onClick handler references undefined checkout fn.";
+  const { findings } = downgradeUnsupported(
+    [baseFinding({ severity: "P1", evidence })],
+    ownerContract,
+  );
   assertEquals(findings[0].severity, "P1");
 });
 
