@@ -83,12 +83,22 @@ function AuditCenterPage() {
   const [showRetry, setShowRetry] = useState(false);
 
   const load = useCallback(async () => {
-    const [{ data: p }, { data: au }, { data: bs }, { data: userData }] = await Promise.all([
+    setLoadError(null);
+    const [pr, ar, br, userData] = await Promise.all([
       supabase.from("projects").select("user_id, name, is_import, github_repo").eq("id", projectId).maybeSingle(),
       supabase.from("audits").select("*").eq("project_id", projectId).order("created_at", { ascending: false }),
       supabase.from("batches").select("id, batch_no, title, status").eq("project_id", projectId).order("batch_no", { ascending: true }),
       supabase.auth.getUser(),
     ]);
+    const firstErr = pr.error?.message ?? ar.error?.message ?? br.error?.message ?? null;
+    if (firstErr) {
+      setLoadError(firstErr);
+      setLoading(false);
+      return;
+    }
+    const { data: p } = pr;
+    const { data: au } = ar;
+    const { data: bs } = br;
     const proj = p as { user_id?: string; name?: string; is_import?: boolean; github_repo?: string | null } | null;
     setProjectName(proj?.name ?? "");
     setIsImport(!!proj?.is_import);
