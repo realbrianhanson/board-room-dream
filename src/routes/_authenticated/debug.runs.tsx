@@ -202,7 +202,7 @@ function DebugRunsPage() {
           </select>
           <button
             onClick={startTestRun}
-            className="rounded-md bg-[hsl(38_65%_55%)] px-4 py-2 text-sm font-medium text-[hsl(220_15%_8%)] hover:bg-[hsl(38_70%_62%)]"
+            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:brightness-110"
           >
             Start test run
           </button>
@@ -270,7 +270,7 @@ function DebugRunsPage() {
                     <td className="px-4 py-3 text-muted-foreground">{r.round_no}</td>
                     <td className="px-4 py-3 text-muted-foreground">
                       ${Number(r.spent_usd).toFixed(4)} / ${Number(r.budget_usd).toFixed(2)}
-                      {r.budget_warning && <span className="ml-2 text-[hsl(38_65%_70%)]">⚠</span>}
+                      {r.budget_warning && <span className="ml-2 text-primary">⚠</span>}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">
                       {new Date(r.created_at).toLocaleString()}
@@ -278,7 +278,7 @@ function DebugRunsPage() {
                     <td className="px-4 py-3 text-right">
                       <button
                         onClick={() => toggleExpand(r.id)}
-                        className="text-[hsl(38_65%_70%)] hover:underline"
+                        className="text-primary hover:underline"
                       >
                         {expanded[r.id] ? "hide" : "steps"}
                       </button>
@@ -288,7 +288,7 @@ function DebugRunsPage() {
                     <tr className="bg-surface-2/40">
                       <td colSpan={7} className="px-4 py-3">
                         {r.error && (
-                          <div className="mb-2 text-[hsl(8_60%_65%)]">error: {r.error}</div>
+                          <div className="mb-2 text-destructive">error: {r.error}</div>
                         )}
                         <div className="space-y-2">
                           {(steps[r.id] ?? []).length === 0 && (
@@ -311,7 +311,7 @@ function DebugRunsPage() {
                                 </div>
                               </div>
                               {s.error && (
-                                <div className="mt-2 text-[hsl(8_60%_65%)]">{s.error}</div>
+                                <div className="mt-2 text-destructive">{s.error}</div>
                               )}
                               {s.response_text && (
                                 <details className="mt-2">
