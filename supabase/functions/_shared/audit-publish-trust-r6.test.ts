@@ -230,3 +230,76 @@ Deno.test("R6 downgradeUnsupported: P2 product-strategy claim is NOT rejected by
   assertEquals(findings[0].severity, "P2");
   assertEquals(downgrades.filter((d) => d.disposition === "rejected_unsupported").length, 0);
 });
+
+// ---------- 4. Constitution parity — OWNER_CONTRACT preserves product-strategy P1 ----------
+
+Deno.test("R6 constitution — product-strategy P1 with OWNER_CONTRACT marker is preserved", () => {
+  const finding = f({
+    severity: "P1",
+    file_path: "src/routes/_authenticated/onboarding.tsx",
+    title: "Activation deprioritizes buyer flow",
+    description: "Onboarding leads with cohort code instead of the promised buyer activation flow.",
+    evidence:
+      "QUOTE: <h2>Cohort code</h2> | WHY: buyer activation is hidden below fold. OWNER_CONTRACT: 'Founder must reach first flagged risk in 90 seconds' (intake wow_moment).",
+  });
+  const { findings: published } = evaluateChairMergeCandidate({
+    verdict: "findings",
+    summary: "",
+    findings: [finding],
+  });
+  assertEquals(published.length, 1);
+  assertEquals(published[0].severity, "P1");
+});
+
+Deno.test("R6 constitution — product-strategy P1 without OWNER_CONTRACT nor RUNTIME_FAILURE caps to P2", () => {
+  const finding = f({
+    severity: "P1",
+    file_path: "src/routes/index.tsx",
+    title: "Pricing page uses weak positioning",
+    description: "Landing lacks a decisive positioning line for the buyer segment.",
+    evidence: "QUOTE: <h1>App</h1> | WHY: no differentiator statement.",
+  });
+  const { findings: published } = evaluateChairMergeCandidate({
+    verdict: "findings",
+    summary: "",
+    findings: [finding],
+  });
+  // With no marker + speculative-free evidence, it's rescored to P2 and published.
+  assertEquals(published.length, 1);
+  assertEquals(published[0].severity, "P2");
+});
+
+Deno.test("R6 constitution — product-strategy P1 with RUNTIME_FAILURE marker is preserved", () => {
+  const finding = f({
+    severity: "P1",
+    file_path: "src/routes/index.tsx",
+    title: "Buyer activation flow throws",
+    description: "Landing CTA to onboarding raises at runtime.",
+    evidence:
+      "QUOTE: throw new Error('missing route') | WHY: CTA route missing. RUNTIME_FAILURE: TypeError at /onboarding start.",
+  });
+  const { findings: published } = evaluateChairMergeCandidate({
+    verdict: "findings",
+    summary: "",
+    findings: [finding],
+  });
+  assertEquals(published.length, 1);
+  assertEquals(published[0].severity, "P1");
+});
+
+// ---------- 5. Summary count-mismatch reconciliation ----------
+
+Deno.test("R7 reconcile — 'Three P1 issues' with counts.P1=1 is replaced with deterministic sentence", () => {
+  const text = "Three P1 issues need attention before ship.";
+  const out = reconcileAuditSummaryText(text, { P0: 0, P1: 1, P2: 10, P3: 0 });
+  assert(out.startsWith("Validated counts:"));
+  assert(!/three\s+P1/i.test(out), `output must drop contradictory count claim: ${out}`);
+  assert(out.includes("P1=1"));
+});
+
+Deno.test("R7 reconcile — matching '2 P1' with counts.P1=2 is preserved", () => {
+  const text = "2 P1 findings are open.";
+  const out = reconcileAuditSummaryText(text, { P0: 0, P1: 2, P2: 0, P3: 0 });
+  assert(out.includes("P1=2"));
+  assert(out.includes("2 P1 findings"));
+});
