@@ -240,9 +240,24 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
                   placeholder={meta.placeholder}
                   className="mt-1 w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
                 />
+                {RECOMMENDABLE_FIELDS.includes(k) && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setValues((prev) => ({
+                        ...(prev as ImportStrategyInput),
+                        [k]: RECOMMEND_PLACEHOLDER,
+                      }))
+                    }
+                    className="mt-1.5 text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+                  >
+                    Not decided — Board should recommend
+                  </button>
+                )}
               </label>
             );
           })}
+
           {error && (
             <p className="text-xs text-destructive" role="alert">
               {error}
