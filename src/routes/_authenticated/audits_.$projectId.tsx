@@ -222,6 +222,30 @@ function AuditCenterPage() {
     [findings],
   );
 
+  // Group open findings by originating audit so each source is labeled
+  // truthfully (current final / previous final / batch N). See
+  // src/lib/audit-findings-grouping.ts for the pure grouping logic.
+  const openFindingGroups = useMemo(
+    () => groupOpenFindingsByAudit(
+      audits.map((a) => ({
+        id: a.id,
+        batch_id: a.batch_id,
+        kind: a.kind,
+        created_at: a.created_at,
+        head_sha: a.head_sha,
+      })),
+      openFindings.map((f) => ({ id: f.id, audit_id: f.audit_id, status: f.status })),
+      batches.map((b) => ({ id: b.id, batch_no: b.batch_no })),
+    ),
+    [audits, openFindings, batches],
+  );
+  const findingById = useMemo(() => {
+    const m = new Map<string, Finding>();
+    for (const f of openFindings) m.set(f.id, f);
+    return m;
+  }, [openFindings]);
+
+
   async function dismiss(f: Finding) {
     if (f.severity !== "P2" && f.severity !== "P3") {
       toast.error("P0/P1 findings resolve only through re-audit.");
