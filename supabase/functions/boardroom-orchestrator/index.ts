@@ -46,11 +46,13 @@ import {
 import { BatchContextTooLarge, MarkdownCompactionImpossible, buildValidationRetryRequest } from "../_shared/batch-context.ts";
 import { tryCloseJsonTail, tryRecoverTrailingRedundantCloser } from "../_shared/audit-findings.ts";
 import {
-  finalizeChangeRequestAuthorityError,
-  finalizePlanAuthorityError,
+  absorbCorrectionStep,
+  type Artifact,
+  computeAuthorityViolationError,
+  enforceAuthorityOrCorrect,
+  findAwaitedCorrectionStep,
   loadOwnerAuthority,
-  preLockAuthorityError,
-} from "../_shared/owner-authority.ts";
+} from "../_shared/authority-correction.ts";
 
 
 
