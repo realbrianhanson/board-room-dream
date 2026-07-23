@@ -89,7 +89,7 @@ Deno.serve(async (req) => {
     if (action === "store" || action === "rotate") {
       const key: string = String(body?.key ?? "").trim();
       if (!key || key.length < 16) return j(400, { error: "Key too short" });
-      const encrypted = await encrypt(key);
+      const encrypted = await encryptSecret(key);
       const last4 = key.slice(-4);
       let status: "unverified" | "valid" | "invalid" = "unverified";
       if (provider === "openrouter") {
@@ -118,7 +118,7 @@ Deno.serve(async (req) => {
         .maybeSingle();
       if (error) throw error;
       if (!data) return j(404, { error: "No key stored" });
-      const key = await decrypt(data.encrypted_key);
+      const key = await decryptSecret(data.encrypted_key);
       let status: "unverified" | "valid" | "invalid" = "unverified";
       if (provider === "openrouter") {
         status = (await verifyOpenRouter(key)) ? "valid" : "invalid";
