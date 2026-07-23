@@ -1003,6 +1003,14 @@ export type Database = {
         Args: { p_new_error: string; p_new_request: Json; p_step_id: string }
         Returns: string
       }
+      set_batch_status: {
+        Args: { p_batch_id: string; p_next: string; p_outcome?: string }
+        Returns: {
+          batch_id: string
+          next_status: string
+          updated_ids: string[]
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never
