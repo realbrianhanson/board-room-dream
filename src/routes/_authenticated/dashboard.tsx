@@ -735,12 +735,13 @@ async function resume(
 function ProjectCard({
   project,
   onOpen,
-  onDelete,
+  onDeleted,
 }: {
   project: Project;
   onOpen: (id: string) => void;
-  onDelete: (id: string) => void;
+  onDeleted: (id: string) => void;
 }) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
   return (
     <div
       role="button"
@@ -775,7 +776,7 @@ function ProjectCard({
             aria-label="Delete project"
             onClick={(e) => {
               e.stopPropagation();
-              onDelete(project.id);
+              setConfirmOpen(true);
             }}
             className="rounded-md border border-transparent p-1.5 text-muted-foreground opacity-0 transition-all hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive focus:opacity-100 group-hover:opacity-100"
           >
@@ -793,6 +794,21 @@ function ProjectCard({
         Next: {nextActionLabel(project)}
         <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
       </span>
+      {/* Confirmation dialog is a sibling to the card content so clicks
+          inside it never bubble to the card's open handler. */}
+      <div onClick={(e) => e.stopPropagation()}>
+        <DeleteProjectDialog
+          projectName={project.name}
+          open={confirmOpen}
+          onOpenChange={setConfirmOpen}
+          onConfirm={async () => {
+            const { error } = await supabase.from("projects").delete().eq("id", project.id);
+            if (error) throw new Error(error.message);
+            toast.success("Project deleted.");
+            onDeleted(project.id);
+          }}
+        />
+      </div>
     </div>
   );
 }
