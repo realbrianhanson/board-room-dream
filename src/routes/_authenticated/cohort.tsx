@@ -83,25 +83,35 @@ function CohortPage() {
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [stats, setStats] = useState<CohortStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     const { data: userRes } = await supabase.auth.getUser();
     const uid = userRes.user?.id;
     if (!uid) return;
 
     // Cohorts the instructor teaches (RLS also permits admin-wide reads).
-    const { data: cohortsData } = await supabase.from("cohorts").select("id, name, daily_cap_usd, consensus_threshold, instructor_id").order("name");
+    // Query failures MUST propagate — silently returning empty arrays would
+    // render "No members yet" / "Nobody is stuck" for a real backend outage.
+    const { data: cohortsData, error: cohortsErr } = await supabase.from("cohorts").select("id, name, daily_cap_usd, consensus_threshold, instructor_id").order("name");
+    if (cohortsErr) {
+      setLoadError(cohortsErr.message);
+      setLoading(false);
+      return;
+    }
     setCohorts((cohortsData ?? []) as CohortRow[]);
 
     // Members in those cohorts.
     const cohortIds = (cohortsData ?? []).map((c: any) => c.id);
     let profileRows: any[] = [];
     if (cohortIds.length) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("profiles")
         .select("id, display_name, cohort_id")
         .in("cohort_id", cohortIds);
+      if (error) { setLoadError(error.message); setLoading(false); return; }
       profileRows = data ?? [];
     }
 
@@ -121,27 +131,25 @@ function CohortPage() {
     const projectIds = projectRows.map((p) => p.id);
     let lockedByProject = new Set<string>();
     if (projectIds.length) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("plan_versions")
         .select("project_id")
         .eq("kind", "plan")
         .eq("is_build_safe", true)
         .in("project_id", projectIds);
+      if (error) { setLoadError(error.message); setLoading(false); return; }
       lockedByProject = new Set((data ?? []).map((r: any) => r.project_id));
     }
 
-    // Open alert counts per user. Defense-in-depth: even though RLS restricts
-    // alert visibility to cohorts this instructor teaches, we also scope the
-    // query to the cohort ids we just loaded so a policy regression or admin
-    // context switch can never widen the count beyond the visible cohorts.
     const openAlertsByUser: Record<string, number> = {};
     if (memberIds.length && cohortIds.length) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("alerts")
         .select("user_id")
         .in("user_id", memberIds)
         .in("cohort_id", cohortIds)
         .eq("status", "open");
+      if (error) { setLoadError(error.message); setLoading(false); return; }
       for (const r of data ?? []) {
         openAlertsByUser[(r as any).user_id] = (openAlertsByUser[(r as any).user_id] ?? 0) + 1;
       }
