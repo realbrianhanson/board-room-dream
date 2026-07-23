@@ -117,3 +117,42 @@ describe("legacy isImportStrategyReady (strict)", () => {
     expect(isImportStrategyReady({ ...full, positioning: "" })).toBe(false);
   });
 });
+
+import { isFieldValid, validateImportStrategy } from "./import-strategy";
+
+describe("field-level validation", () => {
+  it("rejects single-character filler on non-price fields", () => {
+    expect(isFieldValid("buyer", "x")).toBe(false);
+    expect(isFieldValid("buyer", "xxxx")).toBe(true);
+  });
+  it("accepts short but meaningful price anchor values", () => {
+    expect(isFieldValid("price_anchor", "$0")).toBe(true);
+    expect(isFieldValid("price_anchor", "£9")).toBe(true);
+    expect(isFieldValid("price_anchor", "$")).toBe(false);
+  });
+  it("accepts placeholder only on recommendable fields", () => {
+    expect(isFieldValid("price_anchor", RECOMMEND_PLACEHOLDER)).toBe(true);
+    expect(isFieldValid("upgrade_trigger", RECOMMEND_PLACEHOLDER)).toBe(true);
+    expect(isFieldValid("buyer", RECOMMEND_PLACEHOLDER)).toBe(false);
+  });
+  it("validateImportStrategy reports missing / too-short / bad-placeholder", () => {
+    const issues = validateImportStrategy({
+      ...full,
+      buyer: "",
+      wow_moment: "x",
+      positioning: RECOMMEND_PLACEHOLDER,
+    });
+    const map = Object.fromEntries(issues.map((i) => [i.field, i.reason]));
+    expect(map.buyer).toBe("missing");
+    expect(map.wow_moment).toMatch(/too-short/);
+    expect(map.positioning).toBe("placeholder-not-allowed");
+  });
+  it("isImportReady uses field validator (rejects 'x')", () => {
+    expect(
+      isImportReady({
+        name: "App", description: "x", goals: ["code_audit"],
+        strategy: { ...full, buyer: "x" },
+      }),
+    ).toBe(false);
+  });
+});
