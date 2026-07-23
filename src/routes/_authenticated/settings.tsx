@@ -57,16 +57,20 @@ function OpenRouterCard() {
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   async function refresh() {
     setLoading(true);
+    setLoadError(null);
     try {
       const data = (await callVault("list")) as { keys: KeyRow[] };
       const r = data.keys.find((k) => k.provider === "openrouter") ?? null;
       setRow(r);
       setShowForm(!r);
     } catch (e) {
-      toast.error((e as Error).message);
+      const msg = (e as Error).message ?? "Failed to load key status";
+      setLoadError(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
