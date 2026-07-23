@@ -6,13 +6,46 @@
 // Contract:
 //   1. If the response body parses as JSON with { error: "..." }, return that.
 //   2. If the body is non-JSON (HTML SSR error page, empty, garbage) we do
-//      NOT return raw bytes — instead we return a stable message that
-//      includes the HTTP status when we know it, and log the raw body to
-//      the console for debugging (so a correlation path exists without
-//      leaking HTML into the UI).
+//      NOT return raw bytes AND we do NOT log raw bytes. Non-JSON bodies can
+//      contain sensitive upstream/debug content (stack traces, tokens echoed
+//      by a reverse proxy, HTML fragments). Instead we log only safe metadata
+//      from the Response — HTTP status/statusText, URL origin+path, content
+//      type, and any upstream request-ID header (x-request-id, cf-ray, etc.).
+//      If none of those exist, we mint a client-side correlation token so a
+//      support user can still tie the console log to the returned UI message.
 //   3. If we can't reach the Response at all, fall back to `err.message`.
 
 const GENERIC = "Request failed";
+
+// Header names commonly used by reverse proxies and edge platforms to expose a
+// stable request identifier. Values are treated as opaque IDs and are safe to
+// log — never bodies.
+const REQUEST_ID_HEADERS = [
+  "x-request-id",
+  "x-amzn-requestid",
+  "x-amz-request-id",
+  "cf-ray",
+  "fly-request-id",
+  "sb-request-id",
+  "x-supabase-request-id",
+];
+
+function newCorrelationToken(): string {
+  const rand = Math.random().toString(36).slice(2, 10);
+  return `cli-${Date.now().toString(36)}-${rand}`;
+}
+
+function safeUrlPath(raw: string | undefined | null): string | null {
+  if (!raw || typeof raw !== "string") return null;
+  try {
+    const u = new URL(raw);
+    // origin + pathname only — never search params or hash, which sometimes
+    // carry tokens or IDs the browser console shouldn't retain.
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return null;
+  }
+}
 
 export function stableStatusMessage(status: number | null | undefined): string {
   if (typeof status !== "number" || !Number.isFinite(status)) return GENERIC;
@@ -23,6 +56,40 @@ export function stableStatusMessage(status: number | null | undefined): string {
   return GENERIC;
 }
 
+// Exported for tests. Builds the metadata object we may hand to console.error;
+// never reads or includes the body.
+export function buildSafeErrorMeta(
+  ctx: {
+    status?: number;
+    statusText?: string;
+    url?: string;
+    headers?: { get?: (name: string) => string | null };
+  } | undefined,
+): Record<string, string | number | undefined> {
+  const meta: Record<string, string | number | undefined> = {};
+  if (typeof ctx?.status === "number") meta.status = ctx.status;
+  if (typeof ctx?.statusText === "string" && ctx.statusText) meta.statusText = ctx.statusText;
+  const path = safeUrlPath(ctx?.url);
+  if (path) meta.url = path;
+  const getHeader = ctx?.headers?.get;
+  if (typeof getHeader === "function") {
+    const ct = getHeader.call(ctx?.headers, "content-type");
+    if (ct) meta.contentType = ct;
+    for (const name of REQUEST_ID_HEADERS) {
+      const v = getHeader.call(ctx?.headers, name);
+      if (v) {
+        meta.requestId = v;
+        meta.requestIdSource = name;
+        break;
+      }
+    }
+  }
+  if (!meta.requestId) {
+    meta.correlationToken = newCorrelationToken();
+  }
+  return meta;
+}
+
 export async function extractFunctionsErrorMessage(err: unknown): Promise<string> {
   if (!err || typeof err !== "object") return GENERIC;
   const anyErr = err as { message?: string; context?: unknown };
@@ -31,7 +98,7 @@ export async function extractFunctionsErrorMessage(err: unknown): Promise<string
     : GENERIC;
 
   const ctx = anyErr.context as
-    | { json?: () => Promise<unknown>; clone?: () => Response; status?: number; text?: () => Promise<string> }
+    | (Response & { json?: () => Promise<unknown>; clone?: () => Response; status?: number })
     | undefined;
   if (!ctx || typeof ctx !== "object") return fallback;
 
@@ -49,15 +116,17 @@ export async function extractFunctionsErrorMessage(err: unknown): Promise<string
       if (typeof msg === "string" && msg.trim()) return msg;
     }
   } catch {
-    // Non-JSON body (HTML error page, empty, etc.).
-    // Log for debugging so a correlation trail exists, then return a
-    // stable, non-leaking message. Never surface raw HTML in the UI.
+    // Non-JSON body — DO NOT read or log the body. Log only safe metadata so
+    // support can still correlate a report with a server log entry.
     try {
-      if (typeof ctx.clone === "function" && typeof ctx.text === "function") {
-        const body = await (ctx as unknown as Response).clone().text();
-        // eslint-disable-next-line no-console
-        console.error("[functions-error] non-JSON body", { status, body: body.slice(0, 500) });
-      }
+      const meta = buildSafeErrorMeta({
+        status: ctx.status,
+        statusText: (ctx as Response).statusText,
+        url: (ctx as Response).url,
+        headers: (ctx as Response).headers,
+      });
+      // eslint-disable-next-line no-console
+      console.error("[functions-error] non-JSON body", meta);
     } catch {
       /* swallow — logging is best-effort */
     }

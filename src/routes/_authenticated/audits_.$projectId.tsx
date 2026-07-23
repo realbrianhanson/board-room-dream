@@ -115,12 +115,20 @@ function AuditCenterPage() {
     if (auditIds.length === 0) {
       setFindings([]);
     } else {
-      const { data: fi } = await supabase
+      const fr = await supabase
         .from("audit_findings")
         .select("*")
         .in("audit_id", auditIds)
         .order("severity", { ascending: true });
-      setFindings((fi ?? []) as Finding[]);
+      if (fr.error) {
+        // A failed findings query must reach the visible error+Retry branch —
+        // silently rendering zero findings would mislead the user into thinking
+        // the audit is clean.
+        setLoadError(fr.error.message);
+        setLoading(false);
+        return;
+      }
+      setFindings((fr.data ?? []) as Finding[]);
     }
     // Pull run errors for any failed audit so the card can explain what went wrong.
     const runIds = Array.from(new Set(auditRows.map((a) => a.run_id).filter((x): x is string => !!x)));
