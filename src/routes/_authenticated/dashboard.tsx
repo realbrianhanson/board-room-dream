@@ -890,11 +890,15 @@ function ImportStrategyField({
   value,
   onChange,
   placeholder,
+  recommendable,
+  onRecommend,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   placeholder: string;
+  recommendable?: boolean;
+  onRecommend?: () => void;
 }) {
   return (
     <label className="block">
@@ -906,6 +910,15 @@ function ImportStrategyField({
         placeholder={placeholder}
         className="mt-1 w-full rounded-md border border-border bg-surface-1 px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
       />
+      {recommendable && onRecommend && (
+        <button
+          type="button"
+          onClick={onRecommend}
+          className="mt-1.5 rounded-full border border-border bg-surface-2 px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+        >
+          Board should recommend
+        </button>
+      )}
     </label>
   );
 }
