@@ -76,7 +76,24 @@ function AuditsIndex() {
             <p className="mt-2 text-sm text-muted-foreground">
               Import an existing app to run the A–Z audit on its real code, or start a new idea and the board reads each batch you ship.
             </p>
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+              <Link
+                to="/dashboard"
+                search={{ new: "import" as const }}
+                className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              >
+                Audit an existing app <ArrowRight className="h-3.5 w-3.5" />
+              </Link>
+              <Link
+                to="/dashboard"
+                search={{ new: "idea" as const }}
+                className="inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground transition-colors hover:border-primary/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              >
+                Blueprint a new idea <ArrowRight className="h-3.5 w-3.5" />
+              </Link>
+            </div>
           </div>
+
         ) : (
           <div className="grid gap-3">
             {projects.map((p) => {
