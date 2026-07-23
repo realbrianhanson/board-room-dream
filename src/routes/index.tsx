@@ -48,7 +48,7 @@ function Landing() {
       <section className="relative z-10 mx-auto flex max-w-3xl flex-col items-start px-8 pb-24 pt-32">
         <span className="mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-surface-1 px-3 py-1 text-xs uppercase tracking-[0.2em] text-muted-foreground">
           <span className="h-1.5 w-1.5 rounded-full bg-primary" />
-          Private access
+          Private beta
         </span>
         <h1 className="font-display text-5xl leading-[1.05] text-foreground md:text-6xl">
           The quality layer between your idea and Lovable.
@@ -64,10 +64,10 @@ function Landing() {
             to="/auth"
             className="inline-flex items-center justify-center rounded-md bg-primary px-6 py-3 text-sm font-medium text-primary-foreground shadow-lg shadow-black/30 transition-all hover:brightness-110"
           >
-            Sign in
+            Get started or sign in
           </Link>
           <span className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
-            Currently invite-only
+            Private beta · create an account or sign in
           </span>
         </div>
       </section>
