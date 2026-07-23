@@ -44,7 +44,7 @@ import {
   RepoContractUnavailable,
 } from "./queues.ts";
 import { BatchContextTooLarge, MarkdownCompactionImpossible, buildValidationRetryRequest } from "../_shared/batch-context.ts";
-import { tryCloseJsonTail } from "../_shared/audit-findings.ts";
+import { tryCloseJsonTail, tryRecoverTrailingRedundantCloser } from "../_shared/audit-findings.ts";
 import {
   finalizeChangeRequestAuthorityError,
   finalizePlanAuthorityError,
