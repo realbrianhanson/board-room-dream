@@ -120,7 +120,20 @@ export function missingImportFields(
   input: Partial<ImportStrategyInput>,
 ): StrategyField[] {
   return STRATEGY_FIELDS.filter((k) => !isFieldValid(k, input[k]));
+
+/**
+ * Trim every strategy field, preserving empty strings so downstream code can
+ * treat blanks as explicit "missing owner input" rather than fabricated data.
+ * Recommendable fields keep the placeholder verbatim.
+ */
+export function normalizeStrategyForPersist(
+  input: Partial<ImportStrategyInput>,
+): ImportStrategyInput {
+  const out = {} as ImportStrategyInput;
+  for (const k of STRATEGY_FIELDS) out[k] = t(input[k]);
+  return out;
 }
+
 
 /**
  * Field-level validation rules used everywhere strategy context is gated.
