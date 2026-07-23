@@ -261,7 +261,39 @@ function AuditCenterPage() {
           <ProjectJourney stages={journey} />
         </div>
       )}
-      {isImport && <StrategyContextPanel projectId={projectId} isOwner={isOwner} />}
+      {isImport && (
+        <StrategyContextPanel
+          ref={strategyPanelRef}
+          projectId={projectId}
+          isOwner={isOwner}
+          onValidityChange={setStrategyValidity}
+        />
+      )}
+      {isImport && isOwner && strategyGateBlocked && strategyValidity && (
+        <div
+          role="status"
+          className="mt-3 rounded-md border border-primary/30 bg-primary/[0.06] p-3 text-xs text-foreground/85"
+          data-testid="strategy-gate-notice"
+        >
+          <p>
+            The A–Z audit is blocked until your strategy context is complete.
+            {strategyValidity.missingLabels.length > 0 && (
+              <>
+                {" "}Still needed:{" "}
+                <span className="font-medium">{strategyValidity.missingLabels.join(", ")}</span>.
+              </>
+            )}
+          </p>
+          <button
+            type="button"
+            onClick={() => strategyPanelRef.current?.focus()}
+            className="mt-2 inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs text-foreground hover:border-primary/60"
+          >
+            Fill in strategy context
+          </button>
+        </div>
+      )}
+
 
       {/* Open findings */}
       <section className="mt-10">
