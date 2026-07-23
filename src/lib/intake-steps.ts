@@ -43,10 +43,13 @@ export function canProceedFromIntakeStep(kind: IntakeStepKind, a: IntakeAnswers)
     case "pain":
       return t(a.pain).length > 3;
     case "money":
+      // price_anchor is deliberately optional. An owner may leave it unset
+      // when they want the Board to recommend one. Blank pricing here is
+      // intentional, not invalid — the App Blueprint itself never invents
+      // a price for the customer's product.
       return (
         !!a.money &&
         t(a.paid_offer).length >= MIN_STRATEGY_CHARS &&
-        t(a.price_anchor).length > 0 &&
         t(a.upgrade_trigger).length >= MIN_STRATEGY_CHARS
       );
     case "inspiration":
