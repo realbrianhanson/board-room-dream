@@ -51,7 +51,6 @@ import {
   type ExistingBatchRow,
   type PlannedBatchRow,
 } from "../_shared/batch-persist-idempotency.ts";
-import { TERMINAL_RUN_STATUSES as TERMINAL_STATUSES_FOR_CAS } from "./hygiene.ts";
 import {
   absorbCorrectionStep,
   type Artifact,
