@@ -1120,8 +1120,16 @@ Constraints: ${batchRangeText} batches, unique ascending integer batch_no starti
     status: "queued",
     request: {
       json_output: true,
-      reasoning_effort: "high",
+      // BATCH-REVISE-LOW-REASONING-R1: live run 7bb72f5a truncated
+      // batches_revise_chair with reasoning_effort=high + max_tokens=8000
+      // (tokens_out 7,986; response only 3,102 chars, ended mid-string in a
+      // quoted prompt_md). This step is a bounded review/merge, not a
+      // deliberative draft — low reasoning leaves the entire 8k output
+      // budget for the concise JSON that the <=24,000-char contract requires.
+      // The initial draft (batches_chair) keeps its "high" reasoning.
+      reasoning_effort: "low",
       max_tokens: 8000,
+      _is_import: isImport,
 
       messages: [
         { role: "system", content: system },
