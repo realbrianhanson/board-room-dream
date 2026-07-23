@@ -39,24 +39,51 @@ export function auditRowGuidance(input: {
 function AuditsIndex() {
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [auditedIds, setAuditedIds] = useState<Set<string>>(new Set());
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      const { data: rows } = await supabase
+      setLoadError(null);
+      const { data: rows, error: projErr } = await supabase
         .from("projects")
         .select("id, name, status, created_at, is_import")
         .order("created_at", { ascending: false });
+      if (cancelled) return;
+      if (projErr) {
+        // A failed projects query is a REAL error, never a legitimate empty
+        // state. Surfacing "No projects yet." here would hide a retryable
+        // network/RLS problem.
+        setLoadError(projErr.message);
+        setProjects(null);
+        return;
+      }
       const projs = (rows ?? []) as Project[];
-      setProjects(projs);
       if (projs.length) {
-        const { data: au } = await supabase
+        const { data: au, error: auErr } = await supabase
           .from("audits")
           .select("project_id")
           .in("project_id", projs.map((p) => p.id));
+        if (cancelled) return;
+        if (auErr) {
+          // A failed audits query cannot be allowed to render "Audit ledger
+          // still empty" — that would be a lie. Show the error and let the
+          // user retry the whole page.
+          setLoadError(auErr.message);
+          setProjects(null);
+          return;
+        }
         setAuditedIds(new Set((au ?? []).map((r: { project_id: string }) => r.project_id)));
+      } else {
+        setAuditedIds(new Set());
       }
+      setProjects(projs);
     })();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [attempt]);
 
   return (
     <div className="mx-auto w-full max-w-4xl px-6 py-12 md:py-16">
@@ -67,7 +94,23 @@ function AuditsIndex() {
       </p>
 
       <div className="mt-10">
-        {projects === null ? (
+        {loadError ? (
+          <div
+            role="alert"
+            aria-live="polite"
+            className="rounded-xl border border-destructive/40 bg-destructive/10 px-6 py-8 text-center"
+          >
+            <p className="font-display text-lg text-foreground">The Audit Center didn't load.</p>
+            <p className="mt-2 text-sm text-muted-foreground">{loadError}</p>
+            <button
+              type="button"
+              onClick={() => setAttempt((n) => n + 1)}
+              className="mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
+            >
+              Retry
+            </button>
+          </div>
+        ) : projects === null ? (
           <div className="h-32 animate-pulse rounded-xl bg-surface-1" />
         ) : projects.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border bg-surface-1/40 px-8 py-16 text-center">
