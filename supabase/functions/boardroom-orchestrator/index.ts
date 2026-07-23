@@ -447,7 +447,16 @@ async function executeStep(admin: any, run: any, step: any) {
         // helper appends ONLY the missing "}"/"]" needed to balance and re-
         // parses; refuses on unterminated strings, dangling commas, or any
         // other ambiguity. Rescued output must still pass validateStepJson.
-        const rescued = tryCloseJsonTail(content, { shape: step.step_key === "audit_chair_merge" ? "merge" : "map" });
+        // Shape selection: audit merge → strict "merge"; audit seat maps →
+        // "map"; every other JSON step (Round-4 vote, cr_exam_*, batches_*,
+        // etc.) → "generic". Generic still bounds the appended-closer count
+        // and passes the rescued value through validateStepJson downstream.
+        const rescueShape = step.step_key === "audit_chair_merge"
+          ? "merge"
+          : /^audit_(chair|strategist|contrarian|inspector|reserve)(_c\d+)?$/.test(step.step_key)
+            ? "map"
+            : "generic";
+        const rescued = tryCloseJsonTail(content, { shape: rescueShape });
         if (rescued.ok) {
           candidate = rescued.value;
           tailClosed = rescued.closed;
