@@ -343,14 +343,11 @@ export async function absorbCorrectionStep(
   return { phase: state.phase, ok: true, error: null };
 }
 
-// Locate a completed correction step this run is waiting on. Returns null if
-// no correction is awaited or the awaited step has not completed yet.
+// Locate the correction step this run is waiting on (any status). Returns
+// null when no correction is awaited.
 export function findAwaitedCorrectionStep(run: any, steps: any[]): any | null {
   const state: AuthorityCorrectionState | null =
     run?.consensus?.authority_correction ?? null;
   if (!state?.awaiting_step_key) return null;
-  return steps.find(
-    (s: any) =>
-      s.step_key === state.awaiting_step_key && s.status === "completed",
-  ) ?? null;
+  return steps.find((s: any) => s.step_key === state.awaiting_step_key) ?? null;
 }
