@@ -46,6 +46,13 @@ import {
 import { BatchContextTooLarge, MarkdownCompactionImpossible, buildValidationRetryRequest } from "../_shared/batch-context.ts";
 import { tryCloseJsonTail, tryRecoverTrailingRedundantCloser } from "../_shared/audit-findings.ts";
 import {
+  decideConflictOutcome,
+  isUniqueViolation,
+  type ExistingBatchRow,
+  type PlannedBatchRow,
+} from "../_shared/batch-persist-idempotency.ts";
+import { TERMINAL_RUN_STATUSES as TERMINAL_STATUSES_FOR_CAS } from "./hygiene.ts";
+import {
   absorbCorrectionStep,
   type Artifact,
   computeAuthorityViolationError,
