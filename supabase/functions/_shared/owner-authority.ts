@@ -488,9 +488,16 @@ function dedupe(items: Unauthorized[]): Unauthorized[] {
   for (const cat of ["payment_provider_or_checkout", "monetary_amount"] as const) {
     for (const s of snippetsByCat.get(cat) ?? []) specific.add(s);
   }
-  const filtered = items.filter((it) =>
-    !(it.category === "monetization_scope" && specific.has(normalize(it.snippet)))
-  );
+  const filtered = items.filter((it) => {
+    if (it.category !== "monetization_scope") return true;
+    const ns = normalize(it.snippet);
+    // Drop when the same or an overlapping snippet is already reported by
+    // a more specific category (payment provider or monetary amount).
+    for (const s of specific) {
+      if (s === ns || ns.includes(s) || s.includes(ns)) return false;
+    }
+    return true;
+  });
   const seen = new Set<string>();
   const out: Unauthorized[] = [];
   for (const it of filtered) {
