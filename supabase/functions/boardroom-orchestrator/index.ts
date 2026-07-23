@@ -615,6 +615,7 @@ async function lockPlanAndQueueBlueprint(
         detail: { run_id: run.id, mode, phase: "pre_lock", excerpt: err.slice(0, 800) },
       });
     },
+    restartMeta: { original_mode: mode },
   });
   if (enforceRes.status === "failed_terminal") return;
   if (enforceRes.status === "pending") return;
