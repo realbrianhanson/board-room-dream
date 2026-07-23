@@ -47,10 +47,13 @@ export function batchPromptPolicy(isImport: boolean): BatchPromptPolicy {
 // and imports so the Chair never invents pricing, activation, or positioning
 // facts the owner did not supply.
 export function productStrategyContract(): string {
-  return `The document MUST contain a "## Product strategy" H2 section (place it after the concept/user sections, before Data model) with these concrete decisions in bullet form — one bullet per point. For imported apps the owner's supplied intake answers are AUTHORITY: use them verbatim and NEVER silently replace them; label any missing item "owner-unknown assumption: <what you assume and why>":
-- Reachable buyer + concrete acquisition channel (name the channel; do not say "growth marketing").
-- Paid offer, price anchor, and upgrade trigger (or a clearly labeled owner-unknown assumption for each).
-- First-90-second activation moment — what the new user sees and does in the first ninety seconds.
-- Screenshot-worthy wow moment — the one moment worth posting a picture of.
-- Positioning line completing "Unlike <named alternative>, this app <one clear differentiator>" (do not invent competitors).`;
+  return `The document MUST contain a "## Product strategy" H2 section (place it after the concept/user sections, before Data model) with these concrete decisions in bullet form — one bullet per point. For imported apps the owner's supplied intake answers are AUTHORITY: use them verbatim and NEVER silently replace them. Where an owner input is missing, do NOT invent or assume the missing value and do NOT emit a generic catch-all "assume the missing item" directive — instead follow the per-field rules below (aligned with supabase/functions/_shared/import-contract.ts):
+
+- Reachable buyer + concrete acquisition channel (name the channel; do not say "growth marketing"). If buyer or acquisition channel is not supplied by the owner, explicitly state the context is missing and EXCLUDE any dependent claims, positioning bullets, or executable scope until the owner supplies it — do not invent a segment or channel.
+- Paid offer — if not supplied by the owner, explicitly state the context is missing and do not assert a paid product; EXCLUDE monetization scope until the owner supplies it.
+- Price anchor — if not supplied by the owner, the Board MAY offer an advisory recommendation ONLY when it is prefixed with "[OWNER DECISION REQUIRED]", marked "proposal_requires_owner_approval", never presented as owner fact, never carries an "OWNER-AUTHORIZED" marker, and is EXCLUDED from any locked plan, executable batch, compiled implementation prompt, checkout flow, pricing CTA, or monetization scope until the owner explicitly approves it.
+- Upgrade trigger — same advisory rule as price anchor: only allowed as an "[OWNER DECISION REQUIRED]" / "proposal_requires_owner_approval" recommendation, excluded from locked plans, executable batches, CTAs, checkout, and monetization implementation until the owner approves it.
+- First-90-second activation moment — what the new user sees and does in the first ninety seconds. If not supplied by the owner, state the context is missing (assess from code only if visible) and do not invent one.
+- Screenshot-worthy wow moment — the one moment worth posting a picture of. If not supplied by the owner, state the context is missing and do not invent one.
+- Positioning line completing "Unlike <named alternative>, this app <one clear differentiator>" (do not invent competitors). If positioning is not supplied by the owner, state the context is missing and EXCLUDE positioning claims until the owner supplies it.`;
 }

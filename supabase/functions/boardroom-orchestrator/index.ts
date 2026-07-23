@@ -1359,10 +1359,45 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
   }
 
   let fixBatchId: string | null = null;
-  const fixPrompt = String(parsed?.fix_prompt_md ?? "").trim();
+  const rawFixPrompt = String(parsed?.fix_prompt_md ?? "").trim();
   // Only SUPPORTED (post-downgrade) P0/P1 can trigger a fix batch.
   const supportedSerious = findings.filter((f) => f.severity === "P0" || f.severity === "P1");
   const hasSupportedSerious = supportedSerious.length > 0;
+
+  // FIX-BATCH-SANITIZE: the Chair's raw fix_prompt_md can still cite
+  // rejected/unpublished downgrade findings. Filter to items tied to the
+  // post-validation supported P0/P1 only, drop rejected/unmatched items,
+  // and rebuild numbering + acceptance checks. Same sanitized prompt is
+  // used for BOTH per-batch and final-audit fix batches, before
+  // owner-authority gating and insertion.
+  const { sanitizeFixPrompt } = await import("../_shared/fix-batch-sanitize.ts");
+  const rejectedFindingRefs = (downgrades ?? [])
+    .filter((d: any) => d?.disposition === "rejected_unsupported" || d?.published === false)
+    .map((d: any) => ({ title: String(d?.title ?? ""), file_path: String(d?.file_path ?? "") }));
+  const sanitized = rawFixPrompt && hasSupportedSerious
+    ? sanitizeFixPrompt(
+        rawFixPrompt,
+        supportedSerious.map((f) => ({ title: f.title, file_path: f.file_path })),
+        rejectedFindingRefs,
+      )
+    : { prompt: null, reason: "empty_input" as const, keptItemCount: 0, droppedRejected: 0, droppedUnmatched: 0 };
+  const fixPrompt = sanitized.prompt ?? "";
+
+  if (rawFixPrompt && hasSupportedSerious && !fixPrompt) {
+    await insertAlert(admin, {
+      user_id: audit.user_id,
+      project_id: audit.project_id,
+      kind: "fix_batch_sanitize_empty",
+      detail: {
+        audit_id: auditId,
+        run_id: run.id,
+        reason: sanitized.reason,
+        dropped_rejected: sanitized.droppedRejected,
+        dropped_unmatched: sanitized.droppedUnmatched,
+        supported_count: supportedSerious.length,
+      },
+    });
+  }
 
   if (!isFinal && audit.batch_id && hasSupportedSerious && fixPrompt) {
     const { data: parent } = await admin
