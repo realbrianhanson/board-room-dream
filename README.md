@@ -42,7 +42,7 @@ improvement plan.
 - **Design Council** — same protocol, distinct rubric, produces a design
   brief in `plan_versions.kind='design'`. Screenshots live in the private
   `design-screenshots` bucket, owner-scoped, signed URLs only.
-- **Batches & Runway** — the `batches` run kind emits 6-14 numbered build
+- **Batches & Runway** — the `batches` run kind emits 3-8 numbered build
   batches (Lovable / Supabase / Human). The Chair's draft is adversarially
   reviewed (Inspector: coverage + dependency order; Contrarian: scope +
   security) and revised once if anything blocking surfaces, before batches
