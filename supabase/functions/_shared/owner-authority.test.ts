@@ -457,3 +457,49 @@ Deno.test("post-approval stability: compiler sees the same approved_change_reque
   assertEquals(ownerAuthorityError(promptMd, compileTime), null);
 });
 
+
+// ==================== APP-RELIABILITY-FINDINGS-R1 / task 3 ====================
+// Clause-scoped negation: a preserve/negation in one clause of the same
+// sentence must not silence a genuine directive in another clause.
+
+Deno.test("R1: 'Preserve auth, then DROP TABLE projects' fires on the DROP clause", () => {
+  const a = auth([{ source: "intake", text: "code audit only" }]);
+  const issues = findUnauthorizedHighImpact("Preserve auth, then DROP TABLE projects.", a);
+  assert(
+    issues.some((i) => i.category === "destructive_sql"),
+    `expected destructive_sql on clause 2, got: ${JSON.stringify(issues)}`,
+  );
+});
+
+Deno.test("R1: 'do not change X but charge $99' fires on the charge clause", () => {
+  const a = auth([]);
+  const issues = findUnauthorizedHighImpact("do not change X but charge $99 via Stripe.", a);
+  assert(
+    issues.some((i) => i.category === "monetary_amount"),
+    `expected monetary_amount on the 'but charge' clause, got: ${JSON.stringify(issues)}`,
+  );
+});
+
+Deno.test("R1: 'Do not drop table X' remains allowed (single clause negation)", () => {
+  const a = auth([{ source: "intake", text: "code audit only" }]);
+  assertEquals(ownerAuthorityError("Do not drop table X.", a), null);
+});
+
+Deno.test("R1: 'never charge users' remains allowed", () => {
+  const a = auth([{ source: "intake", text: "improvements only" }]);
+  assertEquals(ownerAuthorityError("Never charge users $49.", a), null);
+});
+
+Deno.test("R1: 'preserve pricing' remains allowed", () => {
+  const a = auth([{ source: "intake", text: "improvements only" }]);
+  assertEquals(ownerAuthorityError("Preserve pricing at $29/mo.", a), null);
+});
+
+Deno.test("R1: 'Preserve X however integrate Sentry' fires on the second clause", () => {
+  const a = auth([]);
+  const issues = findUnauthorizedHighImpact("Preserve existing setup however integrate Sentry for tracking.", a);
+  assert(
+    issues.some((i) => i.category === "new_external_integration"),
+    `expected new_external_integration on the 'however' clause, got: ${JSON.stringify(issues)}`,
+  );
+});
