@@ -6,16 +6,35 @@
 // (project_id, batch_no) unique constraint and the naive error handler then
 // overwrites "completed" with "failed".
 //
-// The fix decomposes into two decisions we want to unit-test independently:
+// A second live pattern (observed 2026-07-21..23 on the same project) is
+// distinct: the founder revises the locked plan/design and starts a FRESH
+// batches run, whose freshly-drafted set collides with an OLDER batch set
+// that is still sitting untouched (never pasted into Lovable, never built,
+// never compiled). That set carries the PRIOR plan_version_id, so it is not
+// even visible to a readback scoped by the new plan_version_id — it must be
+// detected and, if genuinely untouched, safely replaced. Silently keeping
+// the stale set would hand the founder a build sequence for a plan they no
+// longer have locked; silently overwriting a set the founder has already
+// acted on would destroy real progress. Both must be judged explicitly.
+//
+// The fix decomposes into decisions we want to unit-test independently:
 //   1. Given a duplicate-key conflict, do the currently persisted rows
 //      exactly match the set this worker intended to write, AND are they
 //      still in the safe pre-execution state (pending, uncompiled, unsent)?
-//      If so it is safe to treat the conflict as success. Any mismatch —
-//      content, plan, user, batch numbers, progressed status, compile
-//      metadata — must fail loudly.
-//   2. Terminal status writes on boardroom_runs must be compare-and-set
+//      If so it is safe to treat the conflict as success (accept_existing).
+//   2. If not an exact match, but EVERY existing row for this project is
+//      still in the safe pre-execution state (regardless of which plan
+//      revision drafted it), the existing set is a stale, never-acted-on
+//      draft — supersede it with the freshly-drafted set (supersede_stale).
+//   3. If any existing row shows real progress (sent/built/compiled/outcome)
+//      or belongs to a different project/user, never touch it — reject with
+//      the most specific reason available.
+//   4. Terminal status writes on boardroom_runs must be compare-and-set
 //      against the non-terminal set so a late error path can never
 //      downgrade "completed" to "failed".
+//   5. projects.status only advances to "building" from the pre-build
+//      set (locked/imported/auditing/validated) — a project that raced
+//      further along the lifecycle is left alone.
 //
 // This module is pure (no supabase/deno imports) so it runs under both
 // deno test and vitest without a runtime.
@@ -58,6 +77,7 @@ export type ExistingBatchRow = {
 
 export type IdempotencyDecision =
   | { kind: "accept_existing"; count: number }
+  | { kind: "supersede_stale"; replaced: number }
   | { kind: "reject"; reason: string };
 
 // Rows are considered safe pre-execution when they carry the exact
@@ -83,6 +103,18 @@ export function isSafePreExecution(row: ExistingBatchRow): boolean {
     (row.outcome_md === null || row.outcome_md === "");
 }
 
+function exactMatchReason(p: PlannedBatchRow, e: ExistingBatchRow): string | null {
+  if (e.project_id !== p.project_id) return `project_mismatch_batch_${p.batch_no}`;
+  if (e.user_id !== p.user_id) return `user_mismatch_batch_${p.batch_no}`;
+  if ((e.plan_version_id ?? null) !== (p.plan_version_id ?? null)) {
+    return `plan_version_mismatch_batch_${p.batch_no}`;
+  }
+  if (e.title !== p.title) return `title_mismatch_batch_${p.batch_no}`;
+  if (e.channel !== p.channel) return `channel_mismatch_batch_${p.batch_no}`;
+  if (e.prompt_md !== p.prompt_md) return `prompt_md_mismatch_batch_${p.batch_no}`;
+  return null;
+}
+
 export function decideConflictOutcome(
   planned: PlannedBatchRow[],
   existing: ExistingBatchRow[],
@@ -90,43 +122,64 @@ export function decideConflictOutcome(
   if (!planned.length) {
     return { kind: "reject", reason: "planned_batch_set_empty" };
   }
+
+  // Path 1 — exact idempotent retry: same count, every existing row still
+  // safe-pre-execution AND byte-identical to what this worker intended to
+  // write. This is the original "two workers finished the same job" case.
+  if (planned.length === existing.length) {
+    const byNo = new Map<number, ExistingBatchRow>();
+    for (const r of existing) byNo.set(Number(r.batch_no), r);
+    let allExactSafe = true;
+    for (const p of planned) {
+      const e = byNo.get(Number(p.batch_no));
+      if (!e || !isSafePreExecution(e) || exactMatchReason(p, e)) {
+        allExactSafe = false;
+        break;
+      }
+    }
+    if (allExactSafe) return { kind: "accept_existing", count: existing.length };
+  }
+
+  // Path 2 — stale untouched draft: the existing set differs from the fresh
+  // draft (different plan revision, different count, different wording —
+  // any of these), but EVERY existing row is still in the safe
+  // pre-execution shape and belongs to the SAME project + user the new
+  // draft targets. Nothing real was ever built on it, so replacing it loses
+  // no founder progress. This is what makes "revise the plan, then
+  // regenerate the build sequence" self-heal without manual intervention.
+  const sameOwner = existing.length > 0 && existing.every((e) =>
+    e.project_id === planned[0].project_id && e.user_id === planned[0].user_id
+  );
+  if (sameOwner && existing.every(isSafePreExecution)) {
+    return { kind: "supersede_stale", replaced: existing.length };
+  }
+
+  // Path 3 — at least one existing row has real progress, or the existing
+  // set belongs to a different project/user, or there is no existing set at
+  // all (readback raced or was scoped wrong upstream). Never silently touch
+  // it — report the most specific reason available for debugging.
+  if (!existing.length) {
+    return { kind: "reject", reason: "no_existing_rows_found_on_readback" };
+  }
   if (planned.length !== existing.length) {
     return {
       kind: "reject",
-      reason: `batch_count_mismatch: planned=${planned.length} existing=${existing.length}`,
+      reason: `batch_count_mismatch_with_progressed_rows: planned=${planned.length} existing=${existing.length}`,
     };
   }
   const byNo = new Map<number, ExistingBatchRow>();
   for (const r of existing) byNo.set(Number(r.batch_no), r);
   for (const p of planned) {
     const e = byNo.get(Number(p.batch_no));
-    if (!e) {
-      return { kind: "reject", reason: `missing_batch_no:${p.batch_no}` };
-    }
+    if (!e) return { kind: "reject", reason: `missing_batch_no:${p.batch_no}` };
     if (!isSafePreExecution(e)) {
       return {
         kind: "reject",
         reason: `batch_no_${p.batch_no}_already_progressed:status=${e.status}`,
       };
     }
-    if (e.project_id !== p.project_id) {
-      return { kind: "reject", reason: `project_mismatch_batch_${p.batch_no}` };
-    }
-    if (e.user_id !== p.user_id) {
-      return { kind: "reject", reason: `user_mismatch_batch_${p.batch_no}` };
-    }
-    if ((e.plan_version_id ?? null) !== (p.plan_version_id ?? null)) {
-      return { kind: "reject", reason: `plan_version_mismatch_batch_${p.batch_no}` };
-    }
-    if (e.title !== p.title) {
-      return { kind: "reject", reason: `title_mismatch_batch_${p.batch_no}` };
-    }
-    if (e.channel !== p.channel) {
-      return { kind: "reject", reason: `channel_mismatch_batch_${p.batch_no}` };
-    }
-    if (e.prompt_md !== p.prompt_md) {
-      return { kind: "reject", reason: `prompt_md_mismatch_batch_${p.batch_no}` };
-    }
+    const mismatch = exactMatchReason(p, e);
+    if (mismatch) return { kind: "reject", reason: mismatch };
   }
   return { kind: "accept_existing", count: existing.length };
 }
