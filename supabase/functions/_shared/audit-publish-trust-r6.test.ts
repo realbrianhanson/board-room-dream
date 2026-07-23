@@ -160,43 +160,41 @@ Deno.test("R6 owner-authority P1 with concrete QUOTE/WHY + IMPACT remains P1 and
 
 // ---------- 3. Summary derived from published truth ----------
 
-Deno.test("R6 reconcile — 'critical flaw' with P0=0 is stripped and replaced with counts", () => {
+Deno.test("R6 reconcile — 'critical flaw' with P0=0 is replaced entirely", () => {
   const text = "One critical flaw in owner-authority: DROP TABLE bypass.";
   const out = reconcileAuditSummaryText(text, { P0: 0, P1: 2, P2: 3, P3: 0 });
-  assert(!/critical/i.test(out), `output must not say critical: ${out}`);
-  assert(out.includes("P0=0"));
-  assert(out.includes("P1=2"));
+  assertEquals(out, "Validated counts: P0=0, P1=2, P2=3, P3=0.");
 });
 
-Deno.test("R6 reconcile — mentions rejected title with P0=0 is replaced", () => {
+Deno.test("R6 reconcile — rejected title never leaks into summary text", () => {
   const text = "The masked DROP TABLE / payment directive is critical.";
   const out = reconcileAuditSummaryText(
     text,
     { P0: 0, P1: 0, P2: 1, P3: 0 },
     ["Masked DROP TABLE / payment directive slips owner-authority gate"],
   );
-  assert(!/DROP TABLE/i.test(out), `output must not cite rejected title: ${out}`);
-  assert(out.startsWith("Validated counts:"));
+  assertEquals(out, "Validated counts: P0=0, P1=0, P2=1, P3=0.");
 });
 
-Deno.test("R6 reconcile — 'high-severity' with P0=P1=0 is stripped", () => {
+Deno.test("R6 reconcile — 'high-severity' with P0=P1=0 is replaced", () => {
   const text = "Multiple high-severity issues noted.";
   const out = reconcileAuditSummaryText(text, { P0: 0, P1: 0, P2: 2, P3: 0 });
-  assert(!/high[- ]severity/i.test(out));
+  assertEquals(out, "Validated counts: P0=0, P1=0, P2=2, P3=0.");
 });
 
-Deno.test("R6 reconcile — 'serious' with P0=P1=0 is stripped", () => {
+Deno.test("R6 reconcile — 'serious' with P0=P1=0 is replaced", () => {
   const text = "Two serious problems found.";
   const out = reconcileAuditSummaryText(text, { P0: 0, P1: 0, P2: 2, P3: 0 });
-  assert(!/\bserious\b/i.test(out));
+  assertEquals(out, "Validated counts: P0=0, P1=0, P2=2, P3=0.");
 });
 
-Deno.test("R6 reconcile — supported P1 mention with counts.P1>0 is preserved", () => {
+Deno.test("R6 reconcile — matching model prose is ALSO replaced (deterministic policy)", () => {
   const text = "Two P1 findings should be resolved.";
   const out = reconcileAuditSummaryText(text, { P0: 0, P1: 2, P2: 0, P3: 0 });
-  assert(out.includes("P1=2"));
-  assert(out.includes("Two P1 findings"));
+  assertEquals(out, "Validated counts: P0=0, P1=2, P2=0, P3=0.");
+  assert(!/Two P1 findings/.test(out));
 });
+
 
 Deno.test("R6 evaluateChairMergeCandidate — verdict is clean iff published.length===0", () => {
   const rejectedP2 = f({
