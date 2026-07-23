@@ -39,7 +39,7 @@ Deno.test("generic — recovers missing outer ]}", () => {
 Deno.test("generic — rejects dangling empty container", () => {
   const r = tryCloseJsonTail('{"a":[', { shape: "generic" });
   // A dangling "[" with no value is ambiguous; recovery should refuse.
-  if (r.ok) assert(r.closed.length <= 2);
+  assertEquals(r.ok, false);
 });
 
 Deno.test("generic — braces inside escaped strings are ignored", () => {
