@@ -83,25 +83,35 @@ function CohortPage() {
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [stats, setStats] = useState<CohortStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     const { data: userRes } = await supabase.auth.getUser();
     const uid = userRes.user?.id;
     if (!uid) return;
 
     // Cohorts the instructor teaches (RLS also permits admin-wide reads).
-    const { data: cohortsData } = await supabase.from("cohorts").select("id, name, daily_cap_usd, consensus_threshold, instructor_id").order("name");
+    // Query failures MUST propagate — silently returning empty arrays would
+    // render "No members yet" / "Nobody is stuck" for a real backend outage.
+    const { data: cohortsData, error: cohortsErr } = await supabase.from("cohorts").select("id, name, daily_cap_usd, consensus_threshold, instructor_id").order("name");
+    if (cohortsErr) {
+      setLoadError(cohortsErr.message);
+      setLoading(false);
+      return;
+    }
     setCohorts((cohortsData ?? []) as CohortRow[]);
 
     // Members in those cohorts.
     const cohortIds = (cohortsData ?? []).map((c: any) => c.id);
     let profileRows: any[] = [];
     if (cohortIds.length) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("profiles")
         .select("id, display_name, cohort_id")
         .in("cohort_id", cohortIds);
+      if (error) { setLoadError(error.message); setLoading(false); return; }
       profileRows = data ?? [];
     }
 
@@ -109,11 +119,12 @@ function CohortPage() {
     const memberIds = profileRows.map((p) => p.id);
     let projectRows: any[] = [];
     if (memberIds.length) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("projects")
         .select("id, name, status, user_id, current_batch_no, created_at")
         .in("user_id", memberIds)
         .order("created_at", { ascending: false });
+      if (error) { setLoadError(error.message); setLoading(false); return; }
       projectRows = data ?? [];
     }
 
@@ -121,27 +132,25 @@ function CohortPage() {
     const projectIds = projectRows.map((p) => p.id);
     let lockedByProject = new Set<string>();
     if (projectIds.length) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("plan_versions")
         .select("project_id")
         .eq("kind", "plan")
         .eq("is_build_safe", true)
         .in("project_id", projectIds);
+      if (error) { setLoadError(error.message); setLoading(false); return; }
       lockedByProject = new Set((data ?? []).map((r: any) => r.project_id));
     }
 
-    // Open alert counts per user. Defense-in-depth: even though RLS restricts
-    // alert visibility to cohorts this instructor teaches, we also scope the
-    // query to the cohort ids we just loaded so a policy regression or admin
-    // context switch can never widen the count beyond the visible cohorts.
     const openAlertsByUser: Record<string, number> = {};
     if (memberIds.length && cohortIds.length) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("alerts")
         .select("user_id")
         .in("user_id", memberIds)
         .in("cohort_id", cohortIds)
         .eq("status", "open");
+      if (error) { setLoadError(error.message); setLoading(false); return; }
       for (const r of data ?? []) {
         openAlertsByUser[(r as any).user_id] = (openAlertsByUser[(r as any).user_id] ?? 0) + 1;
       }
@@ -204,15 +213,18 @@ function CohortPage() {
     // Recent open alerts across cohorts. Defense-in-depth: scope to the
     // instructor's loaded cohort ids in addition to RLS. If they teach no
     // cohorts, do not query — an empty .in() list matches nothing anyway.
-    const alertRows = cohortIds.length
-      ? (await supabase
-          .from("alerts")
-          .select("id, kind, status, detail, created_at, project_id, user_id, cohort_id")
-          .in("cohort_id", cohortIds)
-          .eq("status", "open")
-          .order("created_at", { ascending: false })
-          .limit(30)).data
-      : [];
+    let alertRows: any[] = [];
+    if (cohortIds.length) {
+      const { data, error } = await supabase
+        .from("alerts")
+        .select("id, kind, status, detail, created_at, project_id, user_id, cohort_id")
+        .in("cohort_id", cohortIds)
+        .eq("status", "open")
+        .order("created_at", { ascending: false })
+        .limit(30);
+      if (error) { setLoadError(error.message); setLoading(false); return; }
+      alertRows = data ?? [];
+    }
     const alertIds = (alertRows ?? []) as AlertRow[];
     const projIds = Array.from(new Set(alertIds.map((a) => a.project_id).filter(Boolean))) as string[];
     const userIds = Array.from(new Set(alertIds.map((a) => a.user_id)));
@@ -284,7 +296,26 @@ function CohortPage() {
         )}
       </div>
 
+      {loadError && (
+        <div
+          role="alert"
+          className="mb-8 rounded-xl border border-destructive/40 bg-destructive/10 px-6 py-4 text-sm text-destructive"
+        >
+          <p className="font-medium">Couldn't load cohort data.</p>
+          <p className="mt-1 text-destructive/80">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => { void load(); }}
+            className="mt-3 inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/20"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {!loadError && (<>
       {/* Health strip — is the protocol actually working for this cohort? */}
+
       {stats && (
         <section className="mb-10">
           <h2 className="mb-3 font-mono text-[11px] uppercase tracking-[0.28em] text-muted-foreground">Health</h2>
@@ -443,6 +474,7 @@ function CohortPage() {
           </div>
         )}
       </section>
+      </>)}
     </div>
   );
 }

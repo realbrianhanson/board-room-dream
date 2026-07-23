@@ -9,7 +9,12 @@ import { classifyAudits, parseTimestamp } from "@/lib/audit-classification";
 import { projectStatusLine } from "@/lib/project-status-line";
 import {
   isImportReady,
+  missingImportFields,
   normalizeStrategyForPersist,
+  RECOMMEND_PLACEHOLDER,
+  STRATEGY_FIELD_LABELS,
+  type ImportStrategyInput,
+  type StrategyField,
 } from "@/lib/import-strategy";
 import { initialModeFromSearch } from "@/lib/dashboard-search";
 import { DeleteProjectDialog } from "@/components/delete-project-dialog";
@@ -327,10 +332,22 @@ function DashboardPage() {
     }
   }
 
+  const strategyValues: ImportStrategyInput = {
+    buyer: impBuyer,
+    acquisition_channel: impAcquisitionChannel,
+    paid_offer: impPaidOffer,
+    price_anchor: impPriceAnchor,
+    upgrade_trigger: impUpgradeTrigger,
+    activation_moment: impActivation,
+    wow_moment: impWow,
+    positioning: impPositioning,
+  };
+  const importMissingFields = missingImportFields(strategyValues);
   const importReady = isImportReady({
     name: impName,
     description: impDescription,
     goals: impGoals,
+    strategy: strategyValues,
   });
 
   async function createImport(e: React.FormEvent) {
@@ -566,16 +583,17 @@ function DashboardPage() {
               })}
             </div>
           </div>
-          <details className="rounded-lg border border-border bg-surface-2/40 p-4">
+          <details open className="rounded-lg border border-border bg-surface-2/40 p-4">
             <summary className="cursor-pointer list-none">
               <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
-                Help the Boardroom later (optional now)
+                Strategy context — required before the A–Z audit
               </span>
               <p className="mt-2 text-xs text-muted-foreground">
-                More context sharpens the plan. Leave anything you don't know
-                blank — the board treats blanks as missing owner input and
-                never invents an answer. You can fill these in from the Audit
-                Center anytime.
+                The board never invents strategy. All eight fields are
+                required so the audit reads your code against real owner
+                intent. For price and upgrade trigger you can tap
+                <span className="mx-1 font-mono text-foreground/80">Board should recommend</span>
+                if you'd rather have the board propose one.
               </p>
             </summary>
             <div className="mt-4 space-y-4">
@@ -601,13 +619,17 @@ function DashboardPage() {
                 label="Price anchor"
                 value={impPriceAnchor}
                 onChange={setImpPriceAnchor}
-                placeholder='$29/mo · or "not set — recommend one"'
+                placeholder='$29/mo'
+                recommendable
+                onRecommend={() => setImpPriceAnchor(RECOMMEND_PLACEHOLDER)}
               />
               <ImportStrategyField
                 label="Upgrade trigger — buy, renew, or move up"
                 value={impUpgradeTrigger}
                 onChange={setImpUpgradeTrigger}
                 placeholder="Monthly regulator update lands"
+                recommendable
+                onRecommend={() => setImpUpgradeTrigger(RECOMMEND_PLACEHOLDER)}
               />
               <ImportStrategyField
                 label="Activation moment — first 90 seconds"
@@ -629,6 +651,20 @@ function DashboardPage() {
               />
             </div>
           </details>
+          {!importReady && importMissingFields.length > 0 && (
+            <div
+              role="status"
+              className="rounded-md border border-border bg-surface-2/60 px-4 py-3 text-xs text-muted-foreground"
+            >
+              Still needed before the audit can start:{" "}
+              <span className="text-foreground">
+                {importMissingFields
+                  .map((f: StrategyField) => STRATEGY_FIELD_LABELS[f])
+                  .join(", ")}
+              </span>
+              .
+            </div>
+          )}
           <div className="flex gap-2">
             <button
               type="submit"
@@ -854,11 +890,15 @@ function ImportStrategyField({
   value,
   onChange,
   placeholder,
+  recommendable,
+  onRecommend,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   placeholder: string;
+  recommendable?: boolean;
+  onRecommend?: () => void;
 }) {
   return (
     <label className="block">
@@ -870,6 +910,15 @@ function ImportStrategyField({
         placeholder={placeholder}
         className="mt-1 w-full rounded-md border border-border bg-surface-1 px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
       />
+      {recommendable && onRecommend && (
+        <button
+          type="button"
+          onClick={onRecommend}
+          className="mt-1.5 rounded-full border border-border bg-surface-2 px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+        >
+          Board should recommend
+        </button>
+      )}
     </label>
   );
 }
