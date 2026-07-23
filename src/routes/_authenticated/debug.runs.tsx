@@ -200,6 +200,7 @@ function DebugRunsPage() {
 
 
 
+      {!loadError && (
       <div className="overflow-hidden rounded-xl border border-border bg-surface-1">
         <table className="w-full font-mono text-xs">
           <thead className="bg-surface-2 text-left text-[10px] uppercase tracking-widest text-muted-foreground">
