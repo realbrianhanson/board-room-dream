@@ -955,6 +955,67 @@ async function getRun(admin: any, runId: string) {
   return data;
 }
 
+// SUPPORTED-FINDINGS-R3 gate: every model-authored fix/QA prompt_md must
+// pass the owner-authority pre-lock check BEFORE being inserted as a
+// pending batch. A prompt that names an unauthorized pricing move, external
+// integration, destructive SQL, or feature-disable directive is dropped
+// (an alert is written for the owner) rather than silently promoted into
+// the build sequence. finalizeBatches already gates its own inserts.
+async function insertModelAuthoredBatchOrAlert(
+  admin: any,
+  run: any,
+  audit: any,
+  row: { title: string; prompt_md: string; [k: string]: any },
+): Promise<{ inserted: { id: string } | null; blocked: boolean; error: string | null }> {
+  try {
+    const authority = await loadOwnerAuthority(admin, {
+      projectId: audit.project_id,
+      founderNotes: run?.founder_notes ?? null,
+    });
+    const preErr = preLockAuthorityError(
+      [{ label: `fix_batch "${row.title}".prompt_md`, text: String(row.prompt_md ?? "") }],
+      authority,
+    );
+    if (preErr) {
+      await insertAlert(admin, {
+        user_id: audit.user_id,
+        project_id: audit.project_id,
+        kind: "owner_authority_violation",
+        detail: {
+          audit_id: audit.id,
+          run_id: run?.id ?? null,
+          phase: "pre_insert_fix_batch",
+          title: row.title,
+          excerpt: preErr.slice(0, 800),
+        },
+      });
+      return { inserted: null, blocked: true, error: preErr };
+    }
+  } catch (e) {
+    // Fail closed on authority-load errors — do not insert an ungated batch.
+    await insertAlert(admin, {
+      user_id: audit.user_id,
+      project_id: audit.project_id,
+      kind: "owner_authority_violation",
+      detail: {
+        audit_id: audit.id,
+        run_id: run?.id ?? null,
+        phase: "pre_insert_fix_batch_load_error",
+        title: row.title,
+        excerpt: String((e as Error)?.message ?? e).slice(0, 800),
+      },
+    });
+    return { inserted: null, blocked: true, error: String((e as Error)?.message ?? e) };
+  }
+  const { data: inserted, error } = await admin
+    .from("batches")
+    .insert(row)
+    .select("id")
+    .single();
+  if (error) return { inserted: null, blocked: false, error: error.message };
+  return { inserted: inserted as { id: string }, blocked: false, error: null };
+}
+
 
 async function finalizeAudit(admin: any, run: any, steps: any[]) {
   const chair = steps.find((x: any) => x.step_key === "audit_chair_merge");
