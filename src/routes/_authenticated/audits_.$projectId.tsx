@@ -87,6 +87,13 @@ function AuditCenterPage() {
   const [showPaste, setShowPaste] = useState(false);
   const [pasted, setPasted] = useState("");
   const [showRetry, setShowRetry] = useState(false);
+  const [strategyValidity, setStrategyValidity] = useState<StrategyPanelValidity | null>(null);
+  const strategyPanelRef = useRef<StrategyPanelHandle | null>(null);
+
+  // Only import projects require the strategy-context gate; greenfield
+  // projects never see the panel and are unblocked by default.
+  const strategyGateBlocked = isImport && (!strategyValidity || !strategyValidity.valid);
+
 
   const load = useCallback(async () => {
     setLoadError(null);
