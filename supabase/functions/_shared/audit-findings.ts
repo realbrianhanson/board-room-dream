@@ -334,12 +334,21 @@ export function looksLikeUniversalHelperClaim(title: string, description: string
   return UNIVERSAL_HELPER_RX.test(t) || UNIVERSAL_HELPER_RX_R3.test(t);
 }
 
-// R3 — client-surface security claim detector. Fires only when the file_path
-// is a frontend src/* file AND the title/description describes an
-// authorization / privilege / direct-SELECT bypass concern. A concrete server
-// bypass proof (SERVER_AUTH marker) must accompany the finding to keep P0/P1.
+// R3/R7 — client-surface security claim detector. Fires when the file_path
+// is a frontend src/* file AND the title/description alleges any of:
+//  - authorization / privilege / direct-SELECT bypass (original R3 scope)
+//  - browser code READS a sensitive / privileged / server-side field
+//    (e.g. run_steps.response_text, api_keys.encrypted_key)
+//  - browser code WRITES privileged lifecycle state (spend caps, cohort
+//    membership, audit finding lifecycle, project status)
+//  - a check/gate/enforcement described as UI-only / client-only / "only
+//    enforced in the UI" — trivially bypassable if unbacked by server auth
+// Any such finding requires a concrete SERVER_AUTH quote of the current
+// vulnerable server-side boundary (RLS policy, RPC, edge function,
+// security-definer function). Missing → deterministic REJECTION at any
+// severity (Rule 4b in downgradeUnsupported).
 const CLIENT_SURFACE_CONCERN_RX =
-  /\b(auth\s+bypass|admin\s+bypass|rls\s+bypass|privilege\s+escalation|unauthori[sz]ed\s+(?:access|read|write|query|select)|direct\s+select|direct\s+query|bypass(?:es|ed)?\s+(?:rls|auth|policy|policies|security)|admin\s+(?:only\s+)?(?:page|route|debug|panel|dashboard))\b/i;
+  /\b(auth\s+bypass|admin\s+bypass|rls\s+bypass|privilege\s+escalation|unauthori[sz]ed\s+(?:access|read|write|query|select|mutation|update)|direct\s+select|direct\s+query|bypass(?:es|ed)?\s+(?:rls|auth|policy|policies|security)|admin\s+(?:only\s+)?(?:page|route|debug|panel|dashboard)|client(?:[- ]side)?\s+(?:only|check|enforcement|writes?|reads?|updates?|mutation)|(?:only|solely)\s+enforced\s+(?:in|on|by)\s+(?:the\s+)?(?:ui|client|browser|frontend)|enforced\s+only\s+(?:in|on|by)\s+(?:the\s+)?(?:ui|client|browser|frontend)|ui[- ]only\s+(?:check|guard|gate|enforcement|validation)|browser\s+(?:can\s+)?(?:reads?|selects?|writes?|mutates?|updates?)|reads?\s+(?:sensitive|privileged|server|backend|response_text|response_json|encrypted_key|api_keys?)|writes?\s+(?:privileged|server|backend|spend|cap|cohort|finding|severity|dismissal))\b/i;
 export function looksLikeClientSurfaceSecurityClaim(
   title: string,
   description: string,
