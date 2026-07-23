@@ -2105,36 +2105,15 @@ async function handleRequest(req: Request): Promise<Response> {
       return j(200, { ok: true });
     }
     if (action === "resume") {
-      // Never trust arbitrary extra_budget_usd. A single resume addition
-      // is capped at $10; total run budget is capped at $30. The separate
-      // server-enforced daily cap ($125) is unchanged. Reject over-limit
-      // requests with a structured 400 so the UI can surface the reason —
-      // do NOT silently clamp.
-      const RESUME_ADD_MAX = 10;
-      const RUN_TOTAL_MAX = 30;
-      const raw = body?.extra_budget_usd;
-      const extra = raw == null ? 0 : Number(raw);
-      if (!Number.isFinite(extra)) {
-        return j(400, { error: "extra_budget_usd must be a finite number" });
-      }
-      if (extra < 0) {
-        return j(400, { error: "extra_budget_usd cannot be negative" });
-      }
-      if (extra > RESUME_ADD_MAX) {
-        return j(400, { error: `extra_budget_usd cannot exceed $${RESUME_ADD_MAX} per resume` });
-      }
-      const currentBudget = Number(run.budget_usd ?? 0);
-      const newTotal = currentBudget + extra;
-      if (newTotal > RUN_TOTAL_MAX) {
-        return j(400, {
-          error:
-            `Total run budget cannot exceed $${RUN_TOTAL_MAX} ` +
-            `(current $${currentBudget.toFixed(2)} + requested $${extra.toFixed(2)} = ` +
-            `$${newTotal.toFixed(2)}).`,
-        });
-      }
+      // Never trust arbitrary extra_budget_usd. Shared validator caps a
+      // single addition at $10 and total run budget at $30. The separate
+      // server-enforced daily cap ($125) is unchanged. Rejects with
+      // structured 400 — do NOT silently clamp.
+      const { validateResumeBudget } = await import("../_shared/resume-budget.ts");
+      const check = validateResumeBudget(body?.extra_budget_usd, Number(run.budget_usd ?? 0));
+      if (!check.ok) return j(400, { error: check.error });
       const patch: any = { status: "queued", error: null };
-      if (extra > 0) patch.budget_usd = newTotal;
+      if (check.extra > 0) patch.budget_usd = check.newTotal;
       await admin.from("boardroom_runs").update(patch).eq("id", runId);
       fireSelfTick();
       return j(200, { ok: true });
