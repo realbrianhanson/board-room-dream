@@ -569,12 +569,17 @@ export function evaluateChairMergeCandidate(parsed: unknown): ChairMergeEvaluati
   const summary = typeof obj.summary === "string" ? obj.summary : "";
   const normalized = normalizeFindings(rawFindings);
   const deduped = dedupeFindings(normalized);
-  const { findings, downgrades } = downgradeUnsupported(deduped);
-  const error = validateMerged(findings, summary);
+  const { findings: downgraded, downgrades, rejectedIndices } = downgradeUnsupported(deduped);
+  // AUDIT-PUBLISH-TRUST-R4: omit findings whose downgrade disposition marks
+  // them as factually unsupported. The full ledger (rescored + rejected)
+  // remains on the audit summary for observability, but counts/verdict/
+  // fix_prompt are based only on the published (kept) findings.
+  const published = downgraded.filter((_, i) => !rejectedIndices.has(i));
+  const error = validateMerged(published, summary);
   const verdictClaim = obj.verdict === "clean" ? "clean" : "findings";
   const verdict: "clean" | "findings" =
-    verdictClaim === "clean" || findings.length === 0 ? "clean" : "findings";
-  return { error, findings, downgrades, summary, verdict };
+    verdictClaim === "clean" || published.length === 0 ? "clean" : "findings";
+  return { error, findings: published, downgrades, summary, verdict };
 }
 
 // R3 — audit-summary reconciliation. Given the Chair's raw summary text and
