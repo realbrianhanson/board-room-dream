@@ -6,8 +6,18 @@ import { Plus, ArrowRight, Lightbulb, Package, Trash2 } from "lucide-react";
 import { ProjectJourney } from "@/components/project-journey";
 import { buildJourney } from "@/lib/project-journey";
 import { projectStatusLine } from "@/lib/project-status-line";
+import {
+  isImportReady,
+  normalizeStrategyForPersist,
+} from "@/lib/import-strategy";
+import { initialModeFromSearch } from "@/lib/dashboard-search";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
+  // Lightweight validator — tolerate any value; the pure helper below decides
+  // whether it actually opens a form. Never throws on unknown input.
+  validateSearch: (raw: Record<string, unknown>): { new?: string } => ({
+    new: typeof raw.new === "string" ? raw.new : undefined,
+  }),
   component: DashboardPage,
 });
 
@@ -42,12 +52,10 @@ const NEXT_ACTION: Record<string, string> = {
 };
 
 function nextActionLabel(p: Project): string {
-  // Imports get their own action ladder.
   if (p.is_import) {
     if (!p.github_repo) return "Link your repo so the board can read the code";
     if (!p.has_final_audit) return "Run the A–Z audit";
     if (!p.has_locked_plan) return "Convene the improvement board";
-    // fall through to the standard ladder for later stages.
   }
   if (p.status === "locked" && !p.has_design) return "Convene the Design Council";
   if (p.status === "locked" && p.has_design && !p.has_batches) return "Generate your build sequence";
@@ -119,18 +127,31 @@ const IMPORT_GOAL_OPTIONS = [
 
 function DashboardPage() {
   const navigate = useNavigate();
+  const search = Route.useSearch();
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [creating, setCreating] = useState(false);
-  const [mode, setMode] = useState<NewMode>(null);
+  const [mode, setMode] = useState<NewMode>(() => initialModeFromSearch(search.new));
+
+  // Auto-open the form when arriving from Onboarding, then clear the search
+  // param so a browser refresh does not re-open the form.
+  useEffect(() => {
+    const initial = initialModeFromSearch(search.new);
+    if (initial) {
+      setMode(initial);
+      navigate({ to: "/dashboard", search: {}, replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // "New idea" form
   const [name, setName] = useState("");
 
-  // "Existing app" form
+  // "Existing app" form — core identity
   const [impName, setImpName] = useState("");
   const [impDescription, setImpDescription] = useState("");
   const [impUrl, setImpUrl] = useState("");
   const [impGoals, setImpGoals] = useState<string[]>(["code_audit"]);
+  // "Existing app" form — optional strategy
   const [impBuyer, setImpBuyer] = useState("");
   const [impAcquisitionChannel, setImpAcquisitionChannel] = useState("");
   const [impPaidOffer, setImpPaidOffer] = useState("");
@@ -200,7 +221,7 @@ function DashboardPage() {
           allPassedSet.add(pid);
         }
       }
-      finalAuditSet = new Set((au ?? []).map((r: any) => r.project_id));
+      finalAuditSet = new Set((au ?? []).map((r: { project_id: string }) => r.project_id));
     }
     setProjects(
       rows.map((r) => ({
@@ -248,26 +269,15 @@ function DashboardPage() {
     }
   }
 
-  const importStrategyReady =
-    impBuyer.trim().length > 1 &&
-    impAcquisitionChannel.trim().length > 1 &&
-    impPaidOffer.trim().length > 1 &&
-    impPriceAnchor.trim().length > 0 &&
-    impUpgradeTrigger.trim().length > 1 &&
-    impActivation.trim().length > 1 &&
-    impWow.trim().length > 1 &&
-    impPositioning.trim().length > 1;
+  const importReady = isImportReady({
+    name: impName,
+    description: impDescription,
+    goals: impGoals,
+  });
 
   async function createImport(e: React.FormEvent) {
     e.preventDefault();
-    if (
-      !impName.trim() ||
-      !impDescription.trim() ||
-      impGoals.length === 0 ||
-      !importStrategyReady
-    ) {
-      return;
-    }
+    if (!importReady) return;
     setCreating(true);
     try {
       const { data: userData } = await supabase.auth.getUser();
@@ -285,6 +295,19 @@ function DashboardPage() {
         .select("id")
         .single();
       if (pErr) throw pErr;
+      // Blanks persist as empty strings so downstream code treats them as
+      // explicit missing owner input rather than fabricated placeholder
+      // claims. The audit page has a compact editor to fill them in later.
+      const strategy = normalizeStrategyForPersist({
+        buyer: impBuyer,
+        acquisition_channel: impAcquisitionChannel,
+        paid_offer: impPaidOffer,
+        price_anchor: impPriceAnchor,
+        upgrade_trigger: impUpgradeTrigger,
+        activation_moment: impActivation,
+        wow_moment: impWow,
+        positioning: impPositioning,
+      });
       const { error: iErr } = await supabase.from("intakes").insert({
         project_id: proj.id,
         user_id: uid,
@@ -293,19 +316,12 @@ function DashboardPage() {
           description: impDescription.trim(),
           lovable_project_url: impUrl.trim() || null,
           goals: impGoals,
-          buyer: impBuyer.trim(),
-          acquisition_channel: impAcquisitionChannel.trim(),
-          paid_offer: impPaidOffer.trim(),
-          price_anchor: impPriceAnchor.trim(),
-          upgrade_trigger: impUpgradeTrigger.trim(),
-          activation_moment: impActivation.trim(),
-          wow_moment: impWow.trim(),
-          positioning: impPositioning.trim(),
+          ...strategy,
         },
       });
       if (iErr) throw iErr;
       toast.success(
-        "Project imported. Link GitHub and run the required A–Z audit next.",
+        "Project imported. Link GitHub and run the A–Z audit next — add strategy context from the Audit Center anytime.",
       );
       const newProjectId = proj.id;
       resetForms();
@@ -492,69 +508,73 @@ function DashboardPage() {
               })}
             </div>
           </div>
-          <div className="space-y-4 rounded-lg border border-border bg-surface-2/40 p-4">
-            <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
-              Product strategy — the board treats these answers as authority
-            </p>
-            <ImportStrategyField
-              label="Buyer — who uses and pays"
-              value={impBuyer}
-              onChange={setImpBuyer}
-              placeholder="Independent finance advisers running solo practices"
-            />
-            <ImportStrategyField
-              label="Acquisition channel — where can you reach the first 10 buyers in 30 days?"
-              value={impAcquisitionChannel}
-              onChange={setImpAcquisitionChannel}
-              placeholder="LinkedIn DMs to advisers I already follow · niche subreddit · industry Slack"
-            />
-            <ImportStrategyField
-              label="Paid offer — what is paid for"
-              value={impPaidOffer}
-              onChange={setImpPaidOffer}
-              placeholder="Weekly compliance briefing PDF · or 'internal/free'"
-            />
-            <ImportStrategyField
-              label="Price anchor"
-              value={impPriceAnchor}
-              onChange={setImpPriceAnchor}
-              placeholder='$29/mo · or "not set — recommend one"'
-            />
-            <ImportStrategyField
-              label="Upgrade trigger — buy, renew, or move up"
-              value={impUpgradeTrigger}
-              onChange={setImpUpgradeTrigger}
-              placeholder="Monthly regulator update lands"
-            />
-            <ImportStrategyField
-              label="Activation moment — first 90 seconds"
-              value={impActivation}
-              onChange={setImpActivation}
-              placeholder="They paste one client scenario and see the flagged risks"
-            />
-            <ImportStrategyField
-              label="Wow moment — the screenshot-worthy one"
-              value={impWow}
-              onChange={setImpWow}
-              placeholder="The one-page risk summary they show a client"
-            />
-            <ImportStrategyField
-              label='Positioning — "Unlike ___, this app ___"'
-              value={impPositioning}
-              onChange={setImpPositioning}
-              placeholder="Unlike compliance PDFs, this app flags the client-specific risk in one glance."
-            />
-          </div>
+          <details className="rounded-lg border border-border bg-surface-2/40 p-4" open>
+            <summary className="cursor-pointer list-none">
+              <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+                Help the Boardroom later (optional now)
+              </span>
+              <p className="mt-2 text-xs text-muted-foreground">
+                More context sharpens the plan. Leave anything you don't know
+                blank — the board treats blanks as missing owner input and
+                never invents an answer. You can fill these in from the Audit
+                Center anytime.
+              </p>
+            </summary>
+            <div className="mt-4 space-y-4">
+              <ImportStrategyField
+                label="Buyer — who uses and pays"
+                value={impBuyer}
+                onChange={setImpBuyer}
+                placeholder="Independent finance advisers running solo practices"
+              />
+              <ImportStrategyField
+                label="Acquisition channel — where can you reach the first 10 buyers in 30 days?"
+                value={impAcquisitionChannel}
+                onChange={setImpAcquisitionChannel}
+                placeholder="LinkedIn DMs to advisers I already follow · niche subreddit · industry Slack"
+              />
+              <ImportStrategyField
+                label="Paid offer — what is paid for"
+                value={impPaidOffer}
+                onChange={setImpPaidOffer}
+                placeholder="Weekly compliance briefing PDF · or 'internal/free'"
+              />
+              <ImportStrategyField
+                label="Price anchor"
+                value={impPriceAnchor}
+                onChange={setImpPriceAnchor}
+                placeholder='$29/mo · or "not set — recommend one"'
+              />
+              <ImportStrategyField
+                label="Upgrade trigger — buy, renew, or move up"
+                value={impUpgradeTrigger}
+                onChange={setImpUpgradeTrigger}
+                placeholder="Monthly regulator update lands"
+              />
+              <ImportStrategyField
+                label="Activation moment — first 90 seconds"
+                value={impActivation}
+                onChange={setImpActivation}
+                placeholder="They paste one client scenario and see the flagged risks"
+              />
+              <ImportStrategyField
+                label="Wow moment — the screenshot-worthy one"
+                value={impWow}
+                onChange={setImpWow}
+                placeholder="The one-page risk summary they show a client"
+              />
+              <ImportStrategyField
+                label='Positioning — "Unlike ___, this app ___"'
+                value={impPositioning}
+                onChange={setImpPositioning}
+                placeholder="Unlike compliance PDFs, this app flags the client-specific risk in one glance."
+              />
+            </div>
+          </details>
           <div className="flex gap-2">
             <button
               type="submit"
-              disabled={
-                creating ||
-                !impName.trim() ||
-                !impDescription.trim() ||
-                impGoals.length === 0 ||
-                !importStrategyReady
-              }
+              disabled={creating || !importReady}
               className="rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
             >
               {creating ? "Importing…" : "Import and open the Audit Center"}
@@ -626,7 +646,6 @@ async function resume(
 ) {
   const status = project.status;
   if (project.is_import) {
-    // Imports skip the greenfield intake ladder.
     if (!project.github_repo) {
       navigate({ to: "/audits/$projectId", params: { projectId } });
       return;
