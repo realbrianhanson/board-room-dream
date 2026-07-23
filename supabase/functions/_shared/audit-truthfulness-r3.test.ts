@@ -185,3 +185,65 @@ Deno.test("reconcile — counts.P0>0 preserves original text with counts prefix"
   assert(out.includes("P0=1"));
   assert(out.includes("blocking build"));
 });
+
+// ---------------- R7: broadened client-surface detector ----------------
+
+Deno.test("R7: detector fires on browser READ of sensitive server field", () => {
+  assert(looksLikeClientSurfaceSecurityClaim(
+    "Debug page selects run_steps.response_text into browser",
+    "The route reads response_text directly from the client without server gate",
+    "src/routes/_authenticated/debug.runs.tsx",
+  ));
+});
+
+Deno.test("R7: detector fires on client WRITE of privileged spend cap", () => {
+  assert(looksLikeClientSurfaceSecurityClaim(
+    "Cohort spend cap written from browser client",
+    "Client-side update to cohorts.spend_cap without server-definer RPC",
+    "src/routes/_authenticated/cohort.tsx",
+  ));
+});
+
+Deno.test("R7: detector fires on UI-only enforcement claim", () => {
+  assert(looksLikeClientSurfaceSecurityClaim(
+    "Dismiss finding: severity only enforced in UI",
+    "The dismissal button is a UI-only check, no RLS or trigger blocks P0 dismissal",
+    "src/components/audit-findings-panel.tsx",
+  ));
+});
+
+Deno.test("R7: detector still ignores generic UX findings", () => {
+  assert(!looksLikeClientSurfaceSecurityClaim(
+    "Button contrast fails WCAG",
+    "The primary button text is 3.1:1 contrast on brass background",
+    "src/components/ui/button.tsx",
+  ));
+});
+
+Deno.test("R7: broadened claims are REJECTED without SERVER_AUTH at any severity", () => {
+  const claim = f({
+    severity: "P2",
+    file_path: "src/routes/_authenticated/debug.runs.tsx",
+    title: "Debug page reads response_text",
+    description: "Browser reads response_text directly",
+    evidence: "QUOTE: supabase.from('run_steps').select('response_text') | WHY: bypasses gate",
+  });
+  const { downgrades, rejectedIndices } = downgradeUnsupported([claim]);
+  assert(rejectedIndices.has(0), "must be rejected");
+  assert(downgrades.some((d) => d.disposition === "rejected_unsupported"));
+});
+
+Deno.test("R7: broadened claim WITH SERVER_AUTH is preserved", () => {
+  const claim = f({
+    severity: "P1",
+    file_path: "src/routes/_authenticated/debug.runs.tsx",
+    title: "Debug page reads response_text",
+    description: "Browser reads response_text directly",
+    evidence:
+      "QUOTE: supabase.from('run_steps').select('response_text') | WHY: no policy blocks it. " +
+      "IMPACT: secret_exposure SERVER_AUTH: CREATE POLICY \"read own runs\" ON run_steps FOR SELECT USING (user_id = auth.uid())",
+  });
+  const { findings, rejectedIndices } = downgradeUnsupported([claim]);
+  assertEquals(rejectedIndices.size, 0);
+  assertEquals(findings[0].severity, "P1");
+});
