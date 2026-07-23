@@ -83,8 +83,9 @@ function OnboardingPage() {
           <Lightbulb className="mb-3 h-5 w-5 text-primary" />
           <h2 className="font-display text-xl text-foreground">Blueprint a new idea</h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            Answer five short prompts. The board scores it, debates it, and locks a plan you can build.
+            Answer five focused prompts. The board scores the intake, debates it, and locks an evidence-backed plan you can build.
           </p>
+
           <span className="mt-5 inline-flex items-center gap-1.5 text-sm text-foreground/85 group-hover:text-primary">
             Start the intake <ArrowRight className="h-3.5 w-3.5" />
           </span>
