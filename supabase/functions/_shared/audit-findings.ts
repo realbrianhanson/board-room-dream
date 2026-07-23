@@ -802,3 +802,67 @@ function validateRescuedShape(v: unknown, shape: TailShape): string | null {
   }
   return validateSeatReport(cleaned);
 }
+
+// AUDIT-JSON-RECOVERY-R5 — bounded deterministic recovery for a valid
+// top-level JSON object/array followed only by whitespace and redundant
+// unmatched closing delimiters of the SAME kind (e.g. an extra "}" after a
+// complete object). This exists because live production step
+// audit_inspector_c15 emitted:
+//   {\n  "findings": []\n}\n}
+// which is machine-recoverable without repair, guessing, or truncation.
+//
+// Rules (all must hold):
+//   1. First non-whitespace char is "{" or "[" (root is object/array).
+//   2. A balanced prefix parses strictly with JSON.parse.
+//   3. Every char AFTER that prefix is whitespace OR the SAME closer as the
+//      root kind ("}" for object roots, "]" for array roots).
+//   4. Any prose, commas, colons, open delimiters, mismatched closers, a
+//      second JSON value, or unterminated string ⇒ reject.
+// This helper does NOT run schema validation; the caller runs it after.
+export function tryRecoverTrailingRedundantCloser(
+  text: string,
+): { ok: true; value: unknown } | { ok: false; reason: string } {
+  const s = String(text ?? "");
+  let i = 0;
+  while (i < s.length && (s[i] === " " || s[i] === "\t" || s[i] === "\n" || s[i] === "\r")) i++;
+  if (i >= s.length) return { ok: false, reason: "empty" };
+  const first = s[i];
+  if (first !== "{" && first !== "[") return { ok: false, reason: "root is not object or array" };
+  const allowedTrailing = first === "{" ? "}" : "]";
+  const stack: Array<"{" | "["> = [];
+  let inString = false;
+  let escape = false;
+  let end = -1;
+  for (let j = i; j < s.length; j++) {
+    const c = s[j];
+    if (inString) {
+      if (escape) { escape = false; continue; }
+      if (c === "\\") { escape = true; continue; }
+      if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') { inString = true; continue; }
+    if (c === "{" || c === "[") { stack.push(c as "{" | "["); continue; }
+    if (c === "}" || c === "]") {
+      const open = stack.pop();
+      if (!open) return { ok: false, reason: "unbalanced closing delimiter" };
+      if ((open === "{" && c !== "}") || (open === "[" && c !== "]")) {
+        return { ok: false, reason: "mismatched delimiter" };
+      }
+      if (stack.length === 0) { end = j; break; }
+    }
+  }
+  if (inString) return { ok: false, reason: "unterminated string" };
+  if (end < 0) return { ok: false, reason: "no complete top-level value" };
+  const prefix = s.slice(i, end + 1);
+  let value: unknown;
+  try { value = JSON.parse(prefix); }
+  catch (e) { return { ok: false, reason: `parse failed: ${(e as Error).message}` }; }
+  for (let j = end + 1; j < s.length; j++) {
+    const c = s[j];
+    if (c === " " || c === "\t" || c === "\n" || c === "\r") continue;
+    if (c === allowedTrailing) continue;
+    return { ok: false, reason: `unexpected trailing character ${JSON.stringify(c)}` };
+  }
+  return { ok: true, value };
+}
