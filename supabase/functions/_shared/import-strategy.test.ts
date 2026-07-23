@@ -1,7 +1,10 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   isFieldValid,
+  isOptionalMonetizationField,
+  OPTIONAL_MONETIZATION_FIELDS,
   RECOMMEND_PLACEHOLDER,
+  REQUIRED_STRATEGY_FIELDS,
   STRATEGY_FIELDS,
   validateImportStrategy,
 } from "./import-strategy.ts";
@@ -17,13 +20,47 @@ const full = {
   positioning: "Unlike PDFs, flags client risk",
 };
 
-Deno.test("parity — 8 canonical strategy fields", () => {
+const sixRequiredOnly = { ...full, price_anchor: "", upgrade_trigger: "" };
+
+Deno.test("parity — 8 canonical strategy fields (6 required + 2 optional)", () => {
   assertEquals(STRATEGY_FIELDS.length, 8);
+  assertEquals(REQUIRED_STRATEGY_FIELDS.length, 6);
+  assertEquals(OPTIONAL_MONETIZATION_FIELDS, ["price_anchor", "upgrade_trigger"] as const);
+  for (const f of OPTIONAL_MONETIZATION_FIELDS) assert(isOptionalMonetizationField(f));
+  for (const f of REQUIRED_STRATEGY_FIELDS) assert(!isOptionalMonetizationField(f));
+});
+
+Deno.test("parity — six required valid + both monetization blank => zero issues", () => {
+  assertEquals(validateImportStrategy(sixRequiredOnly).length, 0);
+});
+
+Deno.test("parity — blank required field => 'missing'", () => {
+  const issues = validateImportStrategy({ ...sixRequiredOnly, buyer: "" });
+  assertEquals(issues[0].field, "buyer");
+  assertEquals(issues[0].reason, "missing");
+});
+
+Deno.test("parity — recommend placeholder only valid on recommendable fields", () => {
+  assert(isFieldValid("price_anchor", RECOMMEND_PLACEHOLDER));
+  assert(isFieldValid("upgrade_trigger", RECOMMEND_PLACEHOLDER));
+  assert(!isFieldValid("buyer", RECOMMEND_PLACEHOLDER));
+});
+
+Deno.test("parity — blank accepted only on optional fields", () => {
+  assert(isFieldValid("price_anchor", ""));
+  assert(isFieldValid("upgrade_trigger", ""));
+  assert(!isFieldValid("buyer", ""));
+  assert(!isFieldValid("positioning", ""));
+});
+
+Deno.test("parity — filler still rejected on optional fields (blank OK; junk not OK)", () => {
+  const issues = validateImportStrategy({ ...sixRequiredOnly, price_anchor: "xxxx" });
+  const map = Object.fromEntries(issues.map((i) => [i.field, i.reason]));
+  assertEquals(map.price_anchor, "filler");
 });
 
 Deno.test("parity — single-character filler rejected on non-price fields", () => {
   assert(!isFieldValid("buyer", "x"));
-  // "xxxx" is repeated-single-char filler; must be rejected now.
   assert(!isFieldValid("buyer", "xxxx"));
   assert(isFieldValid("buyer", "Independent advisers"));
 });
@@ -34,12 +71,6 @@ Deno.test("parity — price_anchor accepts short but meaningful values", () => {
   assert(isFieldValid("price_anchor", "free"));
   assert(!isFieldValid("price_anchor", "$"));
   assert(!isFieldValid("price_anchor", "--"));
-});
-
-Deno.test("parity — recommend placeholder only valid on recommendable fields", () => {
-  assert(isFieldValid("price_anchor", RECOMMEND_PLACEHOLDER));
-  assert(isFieldValid("upgrade_trigger", RECOMMEND_PLACEHOLDER));
-  assert(!isFieldValid("buyer", RECOMMEND_PLACEHOLDER));
 });
 
 Deno.test("parity — rejects repeated-single-character and common placeholder filler", () => {
@@ -76,3 +107,9 @@ Deno.test("parity — full valid input has zero issues", () => {
   assertEquals(validateImportStrategy(full).length, 0);
 });
 
+Deno.test("parity — REGRESSION: blank price_anchor/upgrade_trigger never generate issues", () => {
+  const issues = validateImportStrategy({ ...sixRequiredOnly, price_anchor: "", upgrade_trigger: "" });
+  const map = Object.fromEntries(issues.map((i) => [i.field, i.reason]));
+  assertEquals(map.price_anchor, undefined);
+  assertEquals(map.upgrade_trigger, undefined);
+});
