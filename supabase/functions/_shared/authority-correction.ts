@@ -31,16 +31,25 @@ export const AUTHORITY_CORRECTION_MAX = 2;
 // The correction step must sort AFTER every prior step in the run so
 // attempt 2 lands after attempt 1 and neither collides with earlier
 // protocol rounds (plan/design consensus, dissent capture, etc). Pure
-// helper: given the max existing round on the run and a protocol-safe
-// minimum, return the next round. Callers pass max=null when the max
-// query returns nothing or fails; the minSafe floor keeps the correction
-// after the original 3-loop consensus protocol rounds.
-export function nextCorrectionRound(currentMaxRound: number | null, minSafe = 7): number {
-  const base = typeof currentMaxRound === "number" && Number.isFinite(currentMaxRound)
-    ? currentMaxRound
-    : minSafe - 1;
-  const next = base + 1;
-  return next < minSafe ? minSafe : next;
+// helper: given the max existing round on the run and the correction
+// attempt number about to be queued, return the round to use.
+// - When the DB max is a real number, next = max + 1 always wins.
+// - When the DB max is null (query unavailable / no rows / test double),
+//   the fallback floor scales with the attempt so attempt 1 lands at >=7
+//   and attempt 2 lands at >=8. This preserves monotonicity across
+//   attempts even when the max query fails.
+export function nextCorrectionRound(
+  currentMaxRound: number | null,
+  nextAttempt = 1,
+  baseFloor = 7,
+): number {
+  const attempt = Number.isFinite(nextAttempt) && nextAttempt >= 1 ? Math.floor(nextAttempt) : 1;
+  const minSafe = baseFloor + (attempt - 1);
+  if (typeof currentMaxRound === "number" && Number.isFinite(currentMaxRound)) {
+    const next = currentMaxRound + 1;
+    return next < minSafe ? minSafe : next;
+  }
+  return minSafe;
 }
 
 export type AuthorityPhase =
