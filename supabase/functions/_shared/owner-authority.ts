@@ -475,9 +475,25 @@ export function findUnauthorizedHighImpact(
 }
 
 function dedupe(items: Unauthorized[]): Unauthorized[] {
+  // First, drop monetization_scope entries whose snippet is already
+  // covered by a more specific category (e.g. payment_provider_or_checkout
+  // or monetary_amount) — the generic monetization rule is a safety net,
+  // not a duplicate finding.
+  const snippetsByCat = new Map<UnauthorizedCategory, Set<string>>();
+  for (const it of items) {
+    if (!snippetsByCat.has(it.category)) snippetsByCat.set(it.category, new Set());
+    snippetsByCat.get(it.category)!.add(normalize(it.snippet));
+  }
+  const specific = new Set<string>();
+  for (const cat of ["payment_provider_or_checkout", "monetary_amount"] as const) {
+    for (const s of snippetsByCat.get(cat) ?? []) specific.add(s);
+  }
+  const filtered = items.filter((it) =>
+    !(it.category === "monetization_scope" && specific.has(normalize(it.snippet)))
+  );
   const seen = new Set<string>();
   const out: Unauthorized[] = [];
-  for (const it of items) {
+  for (const it of filtered) {
     const key = `${it.category}::${normalize(it.snippet)}`;
     if (seen.has(key)) continue;
     seen.add(key);
