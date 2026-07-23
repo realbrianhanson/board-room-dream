@@ -263,9 +263,10 @@ export async function enforceAuthorityOrCorrect(
 
   // Query the current max round on the run so correction attempt N always
   // sorts after attempt N-1 (and after any newly-added protocol rounds).
-  // Fall back to the protocol-safe minimum on any query failure — test
-  // doubles / transient errors must not silently collapse attempts to the
-  // same round.
+  // Fall back to an attempt-aware protocol-safe minimum on any query
+  // failure or empty result — test doubles, transient DB errors, and a
+  // brand-new run with no rows must NOT silently collapse attempt 1 and
+  // attempt 2 to the same round.
   let currentMax: number | null = null;
   try {
     const res: any = await ctx.admin
@@ -275,10 +276,12 @@ export async function enforceAuthorityOrCorrect(
       .order("round", { ascending: false })
       .limit(1)
       .maybeSingle();
-    const r = res?.data?.round;
-    currentMax = typeof r === "number" ? r : null;
-  } catch { /* fall through to minSafe */ }
-  const roundNo = nextCorrectionRound(currentMax);
+    if (res && !res.error) {
+      const r = res?.data?.round;
+      currentMax = typeof r === "number" && Number.isFinite(r) ? r : null;
+    }
+  } catch { /* fall through to attempt-aware minSafe */ }
+  const roundNo = nextCorrectionRound(currentMax, nextAttempt);
 
   await ctx.admin.from("run_steps").insert({
     run_id: ctx.run.id,
