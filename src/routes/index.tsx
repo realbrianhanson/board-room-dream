@@ -245,7 +245,7 @@ function Hero() {
           as="h1"
           delay={80}
           id="hero-title"
-          className="font-display text-5xl leading-[1.02] text-foreground sm:text-6xl md:text-[5.25rem] lg:text-[6.25rem]"
+          className="font-display text-5xl leading-[1.04] text-foreground sm:text-5xl md:text-6xl lg:text-[4.75rem]"
         >
           The{" "}
           <span className="italic text-primary/95">quality layer</span>{" "}
