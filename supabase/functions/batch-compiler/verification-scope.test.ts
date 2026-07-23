@@ -226,3 +226,42 @@ Deno.test("mixed — fully explicit DB positive/negative + edge invocation + suc
   assertEquals(err, null, `expected pass, got: ${err}`);
 });
 
+
+// Batch 1 compile blocker (2026-07-23): the never-weaken detector must be
+// clause-aware — safe prohibitions ("do not rewrite the tests") must PASS while
+// positive/imperative weakening directives must still REJECT.
+Deno.test("weakening — PASS: 'Do not rewrite the tests; report the reproduced failure and stop.'", () => {
+  assertEquals(
+    verificationWeakeningError("Do not rewrite the tests; report the reproduced failure and stop."),
+    null,
+  );
+});
+
+Deno.test("weakening — PASS: 'Never weaken or remove the negative RLS assertion.'", () => {
+  assertEquals(
+    verificationWeakeningError("Never weaken or remove the negative RLS assertion."),
+    null,
+  );
+});
+
+Deno.test("weakening — PASS: 'Repair only harness defects without changing expected invariants.'", () => {
+  assertEquals(
+    verificationWeakeningError("Repair only harness defects without changing expected invariants."),
+    null,
+  );
+});
+
+Deno.test("weakening — REJECT: 'Rewrite the tests to match the existing policies.'", () => {
+  const err = verificationWeakeningError("Rewrite the tests to match the existing policies.");
+  assert(err && /test-weakening directive/i.test(err), `expected rejection, got: ${err}`);
+});
+
+Deno.test("weakening — REJECT mixed clause: 'Do not change the policy; rewrite the failing tests to match it.'", () => {
+  const err = verificationWeakeningError("Do not change the policy; rewrite the failing tests to match it.");
+  assert(err && /test-weakening directive/i.test(err), `expected rejection of second clause, got: ${err}`);
+});
+
+Deno.test("weakening — REJECT: 'Skip the failing assertion so the suite passes.'", () => {
+  const err = verificationWeakeningError("Skip the failing assertion so the suite passes.");
+  assert(err && /test-weakening directive/i.test(err), `expected rejection, got: ${err}`);
+});

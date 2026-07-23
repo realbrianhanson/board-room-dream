@@ -500,9 +500,20 @@ export function verificationWeakeningError(vp: string): string | null {
     /adjust\s+(?:the\s+)?tests?\s+to\s+(?:reflect|match)\s+(?:current|existing)/i,
     /update\s+(?:the\s+)?tests?\s+to\s+match\s+(?:current|existing)/i,
   ];
-  for (const p of patterns) {
-    const m = text.match(p);
-    if (m) {
+  // Prohibitions that, when governing a weakening verb inside the same clause,
+  // convert an otherwise-unsafe phrase into a safe prohibition ("do not rewrite
+  // the tests"). Clause boundaries are sentence/semicolon/newline breaks so
+  // mixed clauses like "Do not change the policy; rewrite the failing tests"
+  // still catch the unsafe second clause.
+  const NEGATION_RE =
+    /\b(?:do(?:es)?\s+not|don't|doesn't|didn't|never|must\s+not|mustn't|cannot|can\s+not|can't|may\s+not|might\s+not|refuse[sd]?\s+to|without|no\s+need\s+to|shall\s+not|shan't|should\s+not|shouldn't|won't|will\s+not|avoid|prohibit(?:ed|s)?)\b/i;
+  const clauses = text.split(/[.;\n\r]+/);
+  for (const clause of clauses) {
+    for (const p of patterns) {
+      const m = clause.match(p);
+      if (!m || m.index === undefined) continue;
+      const preceding = clause.slice(0, m.index);
+      if (NEGATION_RE.test(preceding)) continue;
       return `compiled_verification_prompt_md contains a test-weakening directive ("${m[0]}"). A failing security invariant must be reported and stopped for a separate owner-reviewed fix batch — never made green by rewriting the expected invariant.`;
     }
   }
