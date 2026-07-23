@@ -19,10 +19,11 @@ describe("groupOpenFindingsByAudit", () => {
     const groups = groupOpenFindingsByAudit(audits, findings, batches);
     expect(groups.map((g) => g.label)).toEqual([
       "Current final audit",
-      expect.stringMatching(/^Previous final audit ·/),
       expect.stringMatching(/^Batch 3 ·/),
+      expect.stringMatching(/^Previous final audit ·/),
     ]);
     expect(groups[0].findings.map((f) => f.id)).toEqual(["f1"]);
+
   });
 
   it("returns empty when no openable findings", () => {
