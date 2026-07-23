@@ -1,5 +1,16 @@
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { decryptSecret, encryptSecret } from "../_shared/crypto.ts";
+
+// COMPATIBILITY NOTE (APP-RELIABILITY-FINDINGS-R1 / task 5):
+// The prior local encrypt/decrypt in this file used the identical byte
+// format as _shared/crypto.ts: SHA-256(secret_bytes) → AES-GCM key, then
+// base64(IV(12) || ciphertext_with_tag). Both used TextEncoder/TextDecoder
+// on the plaintext. Rows written by the old implementation therefore
+// decrypt correctly through the shared helpers with no rotation needed.
+// The shared helpers additionally FAIL CLOSED when KEY_ENCRYPTION_SECRET
+// is missing/blank/'undefined' (see crypto.test.ts) — a strict improvement
+// over the old `Deno.env.get(...)!` non-null assertion.
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -11,58 +22,12 @@ const CORS = {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? Deno.env.get("SUPABASE_PUBLISHABLE_KEY")!;
-const KEY_ENCRYPTION_SECRET = Deno.env.get("KEY_ENCRYPTION_SECRET")!;
 
 function j(status: number, body: any) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...CORS, "Content-Type": "application/json" },
   });
-}
-
-async function importAesKey(): Promise<CryptoKey> {
-  const enc = new TextEncoder().encode(KEY_ENCRYPTION_SECRET);
-  const hash = await crypto.subtle.digest("SHA-256", enc);
-  return crypto.subtle.importKey("raw", hash, { name: "AES-GCM" }, false, [
-    "encrypt",
-    "decrypt",
-  ]);
-}
-
-function b64encode(buf: ArrayBuffer): string {
-  const bytes = new Uint8Array(buf);
-  let s = "";
-  for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s);
-}
-function b64decode(s: string): Uint8Array {
-  const bin = atob(s);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
-async function encrypt(plain: string): Promise<string> {
-  const key = await importAesKey();
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    key,
-    new TextEncoder().encode(plain),
-  );
-  const combined = new Uint8Array(iv.length + ct.byteLength);
-  combined.set(iv, 0);
-  combined.set(new Uint8Array(ct), iv.length);
-  return b64encode(combined.buffer);
-}
-
-async function decrypt(stored: string): Promise<string> {
-  const key = await importAesKey();
-  const buf = b64decode(stored);
-  const iv = buf.slice(0, 12);
-  const ct = buf.slice(12);
-  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
-  return new TextDecoder().decode(pt);
 }
 
 async function verifyOpenRouter(key: string): Promise<boolean> {
@@ -124,7 +89,7 @@ Deno.serve(async (req) => {
     if (action === "store" || action === "rotate") {
       const key: string = String(body?.key ?? "").trim();
       if (!key || key.length < 16) return j(400, { error: "Key too short" });
-      const encrypted = await encrypt(key);
+      const encrypted = await encryptSecret(key);
       const last4 = key.slice(-4);
       let status: "unverified" | "valid" | "invalid" = "unverified";
       if (provider === "openrouter") {
@@ -153,7 +118,7 @@ Deno.serve(async (req) => {
         .maybeSingle();
       if (error) throw error;
       if (!data) return j(404, { error: "No key stored" });
-      const key = await decrypt(data.encrypted_key);
+      const key = await decryptSecret(data.encrypted_key);
       let status: "unverified" | "valid" | "invalid" = "unverified";
       if (provider === "openrouter") {
         status = (await verifyOpenRouter(key)) ? "valid" : "invalid";

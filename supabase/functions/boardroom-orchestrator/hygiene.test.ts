@@ -271,3 +271,49 @@ Deno.test("failRun (audit): does NOT clobber a project that already advanced pas
   await failRun(admin, state.runs[0], "some_audit_error");
   assertEquals(state.projects![0].status, "locked", "advanced status must survive audit reconciliation");
 });
+
+// APP-RELIABILITY-FINDINGS-R1 / task 4: zero-batch failure must not clobber
+// a project that concurrently advanced past the pre-build lifecycle.
+
+Deno.test("failRun (batches, zero batches): status='locked' -> reconciled to expected value", async () => {
+  const state = {
+    runs: [{ id: "r1", status: "running", error: null, kind: "batches", project_id: "p1" }],
+    steps: [],
+    audits: [],
+    projects: [{ id: "p1", status: "locked", is_import: false, current_batch_no: 0 }],
+    plans: [{ id: "pl1", project_id: "p1", kind: "plan", is_build_safe: true }],
+    rpcCalls: [],
+  };
+  const admin = makeFakeAdmin(state);
+  await failRun(admin, state.runs[0], "batches_failed");
+  assertEquals(state.projects![0].status, "locked");
+});
+
+Deno.test("failRun (batches, zero batches): does NOT clobber a project that already advanced to 'building'", async () => {
+  const state = {
+    runs: [{ id: "r1", status: "running", error: null, kind: "batches", project_id: "p1" }],
+    steps: [],
+    audits: [],
+    projects: [{ id: "p1", status: "building", is_import: false, current_batch_no: 2 }],
+    plans: [{ id: "pl1", project_id: "p1", kind: "plan", is_build_safe: true }],
+    rpcCalls: [],
+  };
+  const admin = makeFakeAdmin(state);
+  await failRun(admin, state.runs[0], "batches_failed");
+  assertEquals(state.projects![0].status, "building", "advanced status must survive zero-batch reconciliation");
+  assertEquals(state.projects![0].current_batch_no, 2, "advanced batch_no must survive");
+});
+
+Deno.test("failRun (batches, zero batches): does NOT clobber 'done'", async () => {
+  const state = {
+    runs: [{ id: "r1", status: "running", error: null, kind: "batches", project_id: "p1" }],
+    steps: [],
+    audits: [],
+    projects: [{ id: "p1", status: "done", is_import: false, current_batch_no: 6 }],
+    plans: [{ id: "pl1", project_id: "p1", kind: "plan", is_build_safe: true }],
+    rpcCalls: [],
+  };
+  const admin = makeFakeAdmin(state);
+  await failRun(admin, state.runs[0], "batches_failed");
+  assertEquals(state.projects![0].status, "done");
+});

@@ -508,7 +508,7 @@ function DashboardPage() {
               })}
             </div>
           </div>
-          <details className="rounded-lg border border-border bg-surface-2/40 p-4" open>
+          <details className="rounded-lg border border-border bg-surface-2/40 p-4">
             <summary className="cursor-pointer list-none">
               <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
                 Help the Boardroom later (optional now)

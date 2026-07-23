@@ -171,18 +171,34 @@ function IntakePage() {
   const current = STEPS[step];
   const canProceed = canProceedFromStep(current.kind, answers);
 
-  async function persist(next: Answers) {
+  // Persist returns an explicit success result. On failure we surface the
+  // exact server error, keep the user's answers on screen (they're already in
+  // React state), and let the caller decide NOT to advance/validate/navigate.
+  async function persist(next: Answers): Promise<{ ok: true } | { ok: false; error: string }> {
     setAnswers(next);
     setSaving(true);
-    const { error } = await supabase.from("intakes").update({ answers: next }).eq("id", intakeId);
-    setSaving(false);
-    if (error) toast.error(error.message);
+    try {
+      const { error } = await supabase.from("intakes").update({ answers: next }).eq("id", intakeId);
+      if (error) {
+        toast.error(`Couldn't save — ${error.message}. Your answers are still here; try again.`);
+        return { ok: false, error: error.message };
+      }
+      return { ok: true };
+    } catch (e) {
+      const msg = (e as Error).message;
+      toast.error(`Couldn't save — ${msg}. Your answers are still here; try again.`);
+      return { ok: false, error: msg };
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function next() {
-    if (!canProceed) return;
+    // Guard against double-click/double-submit: saving or running already in flight.
+    if (!canProceed || saving || running) return;
     if (step < STEPS.length - 1) {
-      await persist(answers);
+      const result = await persist(answers);
+      if (!result.ok) return; // do not advance on save failure
       setStep(step + 1);
       return;
     }
@@ -190,7 +206,12 @@ function IntakePage() {
     setRunError(null);
     setNoKey(false);
     try {
-      await persist(answers);
+      const saveResult = await persist(answers);
+      if (!saveResult.ok) {
+        // Do not run validation or navigate when the final save failed.
+        setRunError(`Couldn't save your answers — ${saveResult.error}. Try again.`);
+        return;
+      }
       const { data: session } = await supabase.auth.getSession();
       const token = session.session?.access_token;
       if (!token) throw new Error("Not signed in");
@@ -440,11 +461,11 @@ function IntakePage() {
           </span>
           <button
             onClick={next}
-            disabled={!canProceed || running}
+            disabled={!canProceed || running || saving}
             className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
           >
-            {running ? "The board is scoring…" : step === STEPS.length - 1 ? "Submit to the board" : "Continue"}
-            {!running && <ArrowRight className="h-3.5 w-3.5" />}
+            {running ? "The board is scoring…" : saving ? "Saving…" : step === STEPS.length - 1 ? "Submit to the board" : "Continue"}
+            {!running && !saving && <ArrowRight className="h-3.5 w-3.5" />}
           </button>
         </div>
       </div>

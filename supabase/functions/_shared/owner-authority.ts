@@ -365,6 +365,26 @@ function sentenceForMatch(ownLine: string, matchOffset: number): string {
   return ownLine;
 }
 
+// Further narrow a sentence to the sub-clause containing the match. Boundaries
+// are conjunctive connectives (",\s*then/but/however/and then", stand-alone
+// " but | then | however ") that separate independent directives. This
+// prevents a preserve/negation in one clause from silencing a genuine
+// directive in another ("Preserve auth, then DROP TABLE projects" fires on
+// clause 2; "do not change X but charge $99" fires on clause 2).
+function clauseForMatch(sentence: string, matchOffset: number): string {
+  const bounds: number[] = [0];
+  const re = /,\s*(?:but|then|however|and\s+then)\b|\s+(?:but|then|however)\s+/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(sentence))) bounds.push(m.index + m[0].length);
+  bounds.push(sentence.length);
+  for (let i = 0; i < bounds.length - 1; i++) {
+    if (matchOffset >= bounds[i] && matchOffset < bounds[i + 1]) {
+      return sentence.slice(bounds[i], bounds[i + 1]);
+    }
+  }
+  return sentence;
+}
+
 // Find spans in `text` that describe net-new / destructive high-impact
 // directives which are NOT covered by a verified OWNER-AUTHORIZED marker on
 // the same line or the immediately-following line, AND whose category is
@@ -395,7 +415,13 @@ export function findUnauthorizedHighImpact(
       // noun (`checkout`/`$49`), not the earlier `Do not add Stripe`.
       const endOff = Math.min(ownLine.length - 1, Math.max(0, (start - lineStart) + m[0].length - 1));
       const sentence = sentenceForMatch(ownLine, endOff);
-      if (NEGATION_OR_PRESERVE.test(sentence)) continue;
+      // Clause-scoped negation: within the sentence, narrow further to the
+      // conjunctive sub-clause that actually contains the match so a
+      // preserve/negation elsewhere in the sentence cannot silence it.
+      const sentenceStart = ownLine.indexOf(sentence);
+      const clauseOffset = sentenceStart >= 0 ? Math.max(0, endOff - sentenceStart) : 0;
+      const clause = clauseForMatch(sentence, clauseOffset);
+      if (NEGATION_OR_PRESERVE.test(clause)) continue;
       if (rule.category === "monetary_amount" && /(?:\$|€|£|¥)\s*0(?![.,]?\d)/i.test(m[0])) continue;
       const directiveEntities = extractDirectiveEntities(rule.category, m[0]);
       // Marker coverage: same line or the immediately-following line, category

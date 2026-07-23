@@ -736,11 +736,14 @@ function ChangeRequestForm({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!description.trim()) return;
+    if (!description.trim() || submitting) return;
     setSubmitting(true);
+    let createdCrId: string | null = null;
+    let userId: string | null = null;
     try {
       const { data: userData } = await supabase.auth.getUser();
       if (!userData.user) throw new Error("Not signed in");
+      userId = userData.user.id;
       const { data: plan } = await supabase
         .from("plan_versions")
         .select("id")
@@ -759,13 +762,14 @@ function ChangeRequestForm({
         .from("change_requests")
         .insert({
           project_id: projectId,
-          user_id: userData.user.id,
+          user_id: userId,
           plan_version_id: plan.id,
           description: description.trim(),
         })
         .select("id")
         .single();
       if (crErr) throw crErr;
+      createdCrId = cr.id;
 
       const { data: session } = await supabase.auth.getSession();
       const token = session.session?.access_token;
@@ -777,19 +781,54 @@ function ChangeRequestForm({
           action: "start_run",
           project_id: projectId,
           kind: "change_request",
-          change_request_id: cr.id,
+          change_request_id: createdCrId,
         }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: "Failed" }));
         throw new Error(body.error ?? "Failed to convene the board");
       }
+      // Success — do NOT compensate.
+      createdCrId = null;
       toast.success("Change request sent to the board.");
       setDescription("");
       setOpen(false);
       onSubmitted();
     } catch (err) {
-      toast.error((err as Error).message);
+      // Deterministic compensation: if the CR was inserted but the run never
+      // bound (invoke rejected, threw, or returned non-ok), re-read to confirm
+      // it is still owner-scoped + pending + run_id null, then delete. Never
+      // touch a CR that already acquired a run_id or moved past 'pending'.
+      if (createdCrId && userId) {
+        try {
+          const { data: current } = await supabase
+            .from("change_requests")
+            .select("id, status, run_id, user_id, project_id")
+            .eq("id", createdCrId)
+            .eq("project_id", projectId)
+            .eq("user_id", userId)
+            .maybeSingle();
+          if (
+            current &&
+            current.status === "pending" &&
+            current.run_id == null &&
+            current.user_id === userId &&
+            current.project_id === projectId
+          ) {
+            await supabase
+              .from("change_requests")
+              .delete()
+              .eq("id", createdCrId)
+              .eq("project_id", projectId)
+              .eq("user_id", userId)
+              .eq("status", "pending")
+              .is("run_id", null);
+          }
+        } catch {
+          // Best-effort compensation; realtime will still reflect the row.
+        }
+      }
+      toast.error(`${(err as Error).message}. Try again.`);
     } finally {
       setSubmitting(false);
     }
