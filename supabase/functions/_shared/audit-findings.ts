@@ -603,25 +603,57 @@ export function evaluateChairMergeCandidate(parsed: unknown): ChairMergeEvaluati
   return { error, findings: published, downgrades, summary, verdict };
 }
 
-// R3 — audit-summary reconciliation. Given the Chair's raw summary text and
-// the POST-downgrade severity counts persisted alongside it, guarantee the
-// persisted summary text never asserts a severity class that the counts do
-// not support. Live regression (audit 2d953efb): counts.P0 === 0 but the
-// summary text said "P0". Deterministic policy:
-//   - If counts.P0 === 0 and the raw text contains a "P0" token, drop the
-//     raw text entirely and replace it with a derived counts sentence so
-//     the persisted summary cannot mislead a reader about severity mix.
-//   - Otherwise, prefix the raw text with a compact counts sentence and
-//     truncate to the merge summary cap.
+// R3/R6 — audit-summary reconciliation. Given the Chair's raw summary text
+// and the POST-downgrade severity counts persisted alongside it, guarantee
+// the persisted summary text never asserts a severity class that the counts
+// do not support and never cites a rejected finding by title.
+//
+// Live regressions:
+//   - audit 2d953efb: counts.P0 === 0 but the summary text said "P0".
+//   - audit cef4de90: counts.P0 === 0 / P1 === 2 but the summary said
+//     "critical flaw" and named an owner-authority finding that had been
+//     rescored/rejected away.
+//
+// Deterministic policy:
+//   - Build a forbidden-word set from the counts: any severity class with
+//     count 0 forbids its own token ("P0"/"P1"/…) and, when P0===0, the
+//     word "critical"; when both P0 and P1 are 0, the words
+//     "high-severity"/"high severity"/"serious" as well.
+//   - Any rejected-finding title (case-insensitive substring match) is
+//     forbidden too — the summary must not name a finding that isn't
+//     published.
+//   - If any forbidden token appears in the raw text, DROP the raw text
+//     entirely and persist just the derived counts sentence.
+//   - Otherwise prefix the raw text with the counts sentence and cap length.
 export type AuditCounts = { P0: number; P1: number; P2: number; P3: number };
-export function reconcileAuditSummaryText(rawText: string, counts: AuditCounts): string {
+export function reconcileAuditSummaryText(
+  rawText: string,
+  counts: AuditCounts,
+  rejectedTitles: string[] = [],
+): string {
   const text = String(rawText ?? "").trim();
   const countsSentence =
     `Validated counts: P0=${counts.P0}, P1=${counts.P1}, P2=${counts.P2}, P3=${counts.P3}.`;
-  const mentionsP0 = /\bP0\b/.test(text);
-  if (counts.P0 === 0 && mentionsP0) {
-    // The Chair's summary claims a P0 the counts contradict — refuse to
-    // persist that. Use derived text alone.
+  const forbiddenPatterns: RegExp[] = [];
+  if (counts.P0 === 0) {
+    forbiddenPatterns.push(/\bP0\b/i);
+    forbiddenPatterns.push(/\bcritical\b/i);
+  }
+  if (counts.P1 === 0) {
+    forbiddenPatterns.push(/\bP1\b/i);
+  }
+  if (counts.P0 === 0 && counts.P1 === 0) {
+    forbiddenPatterns.push(/\bhigh[- ]severity\b/i);
+    forbiddenPatterns.push(/\bserious\b/i);
+  }
+  const rejectedHit = rejectedTitles.some((title) => {
+    const t = String(title ?? "").trim();
+    if (t.length < 6) return false;
+    return text.toLowerCase().includes(t.toLowerCase());
+  });
+  const forbiddenHit = forbiddenPatterns.some((rx) => rx.test(text));
+  if (rejectedHit || forbiddenHit) {
+    // Refuse to persist the stale narrative — counts sentence alone.
     return countsSentence.slice(0, CAPS.mergeSummaryMax);
   }
   const combined = text ? `${countsSentence} ${text}` : countsSentence;
