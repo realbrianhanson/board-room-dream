@@ -68,12 +68,18 @@ export function missingStrategyFields(
   return STRATEGY_FIELDS.filter((k) => !isFilled(input[k]));
 }
 
-/** {filled, total} for the "Strategy context X/8" badge. */
+/**
+ * {filled, total} for the "Strategy context X/8" badge. Uses the same
+ * field-level validity as the readiness gate — a filled-but-invalid
+ * value (e.g. "xxxx", "test", punctuation-only) does NOT count toward
+ * completeness, so the badge tells the truth about how many fields
+ * actually carry credible strategy context.
+ */
 export function strategyCompleteness(
   input: Partial<ImportStrategyInput>,
 ): { filled: number; total: number } {
-  const missing = missingStrategyFields(input).length;
-  return { filled: STRATEGY_FIELDS.length - missing, total: STRATEGY_FIELDS.length };
+  const filled = STRATEGY_FIELDS.filter((k) => isFieldValid(k, input[k])).length;
+  return { filled, total: STRATEGY_FIELDS.length };
 }
 
 /**
@@ -138,16 +144,58 @@ export function normalizeStrategyForPersist(
 
 
 /**
+ * Common filler / placeholder values (case-insensitive, whitespace-collapsed)
+ * that must never count as real strategy context. Kept as a Set so the
+ * client and server mirrors compare against identical lookups.
+ *
+ * Legitimate concise values (e.g. "SMBs", "SEO", "free", "$0") are NOT in
+ * this list, and pass the length + shape rules in {@link isFieldValid}.
+ */
+const FILLER_PLACEHOLDERS = new Set<string>([
+  "asdf", "asdfasdf", "qwerty", "qwertyuiop",
+  "test", "tests", "testing", "test test",
+  "todo", "to do", "to-do",
+  "tbd", "tba",
+  "n/a", "na", "n a",
+  "none", "nope",
+  "unknown", "idk", "dunno", "??", "???",
+  "lorem", "lorem ipsum",
+  "placeholder", "example", "sample",
+  "foo", "bar", "foobar", "baz",
+  "xxx", "yyy", "zzz",
+]);
+
+/** Normalize for filler lookup: lowercase, collapse whitespace. */
+function normFiller(v: string): string {
+  return v.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** Repeated single character: "xxxx", "1111", "----". */
+function isRepeatedSingleChar(v: string): boolean {
+  const stripped = v.replace(/\s+/g, "");
+  if (stripped.length < 2) return false;
+  return /^(.)\1+$/.test(stripped);
+}
+
+/** Only punctuation / symbol characters, no letters or digits. */
+function isPunctuationOnly(v: string): boolean {
+  return v.length > 0 && !/[\p{L}\p{N}]/u.test(v);
+}
+
+/**
  * Field-level validation rules used everywhere strategy context is gated.
  *
  * - `price_anchor` accepts either the canonical recommend placeholder or a
- *   trimmed value with at least 2 characters (so "$0", "£9", "free" are
- *   valid). Founders may legitimately not have chosen a price yet.
- * - `upgrade_trigger` accepts the canonical placeholder or ≥4 chars.
- * - All other fields require ≥4 trimmed characters of real signal — a
- *   single-character filler is not credible strategy context.
- * - Only `price_anchor` and `upgrade_trigger` may use the placeholder;
- *   using it elsewhere is rejected.
+ *   trimmed value with at least 2 characters containing at least one
+ *   letter or digit (so "$0", "£9", "free" are valid; "$" and "--" are not).
+ * - `upgrade_trigger` accepts the canonical placeholder or ≥3 chars of real signal.
+ * - All other fields require ≥3 trimmed characters — accepting legitimate
+ *   concise acronyms like "SEO" while still rejecting single-character filler.
+ * - Every field additionally rejects repeated-single-character strings,
+ *   punctuation-only strings, and common placeholder tokens
+ *   (asdf, test, todo, tbd, n/a, none, unknown, lorem, foo/bar, xxx, …).
+ * - Only `price_anchor` and `upgrade_trigger` may use the recommend
+ *   placeholder; using it elsewhere is rejected.
  */
 export function isFieldValid(field: StrategyField, value: string | null | undefined): boolean {
   const v = t(value);
@@ -155,8 +203,16 @@ export function isFieldValid(field: StrategyField, value: string | null | undefi
   if (isRecommendPlaceholder(v)) {
     return RECOMMENDABLE_FIELDS.includes(field);
   }
-  if (field === "price_anchor") return v.length >= 2;
-  return v.length >= 4;
+  // Universal filler rejection.
+  if (isRepeatedSingleChar(v)) return false;
+  if (isPunctuationOnly(v)) return false;
+  if (FILLER_PLACEHOLDERS.has(normFiller(v))) return false;
+  if (field === "price_anchor") {
+    // Must be at least 2 chars AND contain at least one letter or digit
+    // so a bare "$" or "--" is rejected but "$0" / "£9" / "free" pass.
+    return v.length >= 2 && /[\p{L}\p{N}]/u.test(v);
+  }
+  return v.length >= 3;
 }
 
 /**
@@ -179,8 +235,16 @@ export function validateImportStrategy(
       }
       continue;
     }
-    const min = f === "price_anchor" ? 2 : 4;
-    if (v.length < min) out.push({ field: f, reason: `too-short (min ${min})` });
+    if (isRepeatedSingleChar(v)) { out.push({ field: f, reason: "filler" }); continue; }
+    if (isPunctuationOnly(v))    { out.push({ field: f, reason: "filler" }); continue; }
+    if (FILLER_PLACEHOLDERS.has(normFiller(v))) { out.push({ field: f, reason: "filler" }); continue; }
+    if (f === "price_anchor") {
+      if (v.length < 2 || !/[\p{L}\p{N}]/u.test(v)) {
+        out.push({ field: f, reason: "too-short (min 2)" });
+      }
+      continue;
+    }
+    if (v.length < 3) out.push({ field: f, reason: "too-short (min 3)" });
   }
   return out;
 }

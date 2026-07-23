@@ -5,9 +5,15 @@ import remarkGfm from "remark-gfm";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { AlertTriangle, KeyRound, Pause, Play, RotateCcw, Users2 } from "lucide-react";
+import {
+  computeVoteSegments,
+  segmentArcPath,
+  SEAT_ORDER as VOTE_SEAT_ORDER,
+  type VoteSegment,
+} from "@/lib/vote-ring-segments";
 
 export type Seat = "chair" | "strategist" | "contrarian" | "inspector";
-const SEAT_ORDER: Seat[] = ["chair", "strategist", "contrarian", "inspector"];
+const SEAT_ORDER: Seat[] = VOTE_SEAT_ORDER;
 
 const SEAT_META: Record<Seat, { label: string; hue: string; initials: string }> = {
   chair: { label: "The Chair", hue: "38 65% 55%", initials: "CH" },
@@ -282,35 +288,13 @@ export function BoardroomSession(props: BoardroomSessionProps) {
   const completedR1 = steps.filter((s) => s.round === 1 && s.status === "completed").length;
   const totalR1 = Math.max(4, steps.filter((s) => s.round === 1).length || 4);
 
-  const segments = useMemo(() => {
-    const voteSteps = steps.filter(
-      (s) => s.round === 4 && s.status === "completed" && s.step_key.startsWith("r4_vote_"),
-    );
-    let latestLoop = -1;
-    for (const v of voteSteps) {
-      const m = /_loop(\d+)$/.exec(v.step_key);
-      if (m) latestLoop = Math.max(latestLoop, Number(m[1]));
-    }
-    const latest = voteSteps.filter((v) => v.step_key.endsWith(`_loop${latestLoop}`));
-    const bySeat = new Map<Seat, SessionStep>();
-    for (const v of latest) bySeat.set(v.seat, v);
-    // The Chair abstains on its own synthesis in current runs; legacy runs
-    // include its vote. Size the ring to whoever actually votes.
-    const votingOrder = SEAT_ORDER.filter((s) => s !== "chair" || bySeat.has("chair"));
-    const out: Array<"empty" | "brass" | "oxblood"> = [];
-    for (const seat of votingOrder) {
-      const v = bySeat.get(seat);
-      const scores = v?.response_json?.scores as Record<string, number> | undefined;
-      for (const key of rubric) {
-        if (!scores || typeof scores[key] !== "number") out.push("empty");
-        else out.push(scores[key] >= 8 ? "brass" : "oxblood");
-      }
-    }
-    return out;
-  }, [steps, rubric]);
+  const segments = useMemo<VoteSegment[]>(
+    () => computeVoteSegments(steps, rubric),
+    [steps, rubric],
+  );
 
   const roundOneFill = completedR1 / totalR1;
-  const votesFilled = segments.filter((s) => s !== "empty").length;
+  const votesFilled = segments.filter((s) => s.result !== "empty").length;
   const votesFraction = segments.length ? votesFilled / segments.length : 0;
   const consensusFill =
     run?.status === "consensus" || run?.status === "chair_ruled"
@@ -606,7 +590,7 @@ function seatGlowState(step: SessionStep | undefined) {
 function TheTable({
   seats, consensusFill, segments, rubricSize, runStatus, consensusRingRef, round, completed, total,
 }: {
-  seats: SeatView[]; consensusFill: number; segments: Array<"empty" | "brass" | "oxblood">; rubricSize: number;
+  seats: SeatView[]; consensusFill: number; segments: VoteSegment[]; rubricSize: number;
   runStatus: string | undefined; consensusRingRef: React.RefObject<HTMLDivElement | null>;
   round: number; completed: number; total: number;
 }) {
@@ -614,8 +598,10 @@ function TheTable({
   const angles = [Math.PI * 1.5, 0, Math.PI * 0.5, Math.PI];
   const positions = angles.map((a) => ({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) }));
   const ringRx = rx + 46, ringRy = ry + 46;
-  const total_segments = rubricSize * 4;
-  const showSegments = segments.some((s) => s !== "empty") || runStatus === "consensus" || runStatus === "chair_ruled";
+  const showSegments =
+    segments.some((s) => s.result !== "empty") ||
+    runStatus === "consensus" ||
+    runStatus === "chair_ruled";
   const chairRuled = runStatus === "chair_ruled";
 
   return (
@@ -632,29 +618,22 @@ function TheTable({
           />
         )}
         {showSegments && segments.map((seg, i) => {
-          if (seg === "empty") return null;
-          const seatIdx = Math.floor(i / rubricSize);
-          const rubricIdx = i % rubricSize;
-          const seatAngle = angles[seatIdx];
-          const arcSpan = Math.PI / 3.2; // ~56° per seat cluster
-          const segStep = arcSpan / rubricSize;
-          const segLen = segStep * 0.72;
-          const center = seatAngle - arcSpan / 2 + segStep * (rubricIdx + 0.5);
-          const t0 = center - segLen / 2;
-          const t1 = center + segLen / 2;
-          const x0 = cx + ringRx * Math.cos(t0), y0 = cy + ringRy * Math.sin(t0);
-          const x1 = cx + ringRx * Math.cos(t1), y1 = cy + ringRy * Math.sin(t1);
+          // Look up geometry by SEAT IDENTITY (Chair top / Strategist right /
+          // Contrarian bottom / Inspector left) via the pure helper, so a
+          // Chair-abstain does NOT shift Strategist votes onto Chair's angle.
+          const arc = segmentArcPath(seg, rubricSize, { cx, cy, ringRx, ringRy });
+          if (!arc) return null;
           // Consensus ring segments: brass is progress (primary token),
           // failure is destructive (semantic token). Chair-ruled uses a
           // muted brass to distinguish it from clean consensus.
-          const stroke = seg === "brass"
+          const stroke = arc.stroke === "brass"
             ? (chairRuled ? "hsl(var(--primary))" : "hsl(var(--primary))")
             : "hsl(var(--destructive))";
           return (
             <path
-              key={i}
-              d={`M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${ringRx} ${ringRy} 0 0 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`}
-              fill="none" stroke={stroke} strokeWidth={seg === "oxblood" ? 2.5 : 2} strokeLinecap="round"
+              key={`${seg.seat}:${seg.rubricIdx}:${i}`}
+              d={arc.d}
+              fill="none" stroke={stroke} strokeWidth={arc.stroke === "oxblood" ? 2.5 : 2} strokeLinecap="round"
               opacity={chairRuled ? 0.65 : 1} style={{ transition: "opacity 300ms ease-out" }}
             />
           );

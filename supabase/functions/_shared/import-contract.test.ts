@@ -53,3 +53,22 @@ Deno.test("renderImportContract instructs the board never to invent missing cont
   const out = renderImportContract({ imported: true, description: "x" });
   assertStringIncludes(out, "MUST NOT invent");
 });
+
+Deno.test("advisory boundary — price/upgrade recommendations are proposal-only and excluded from executable scope", () => {
+  const out = renderImportContract({ imported: true, description: "x" });
+  // Advisory carve-out applies to price/upgrade only and must be assumption-labeled.
+  assertStringIncludes(out, "ADVISORY RECOMMENDATIONS (price / upgrade only)");
+  assertStringIncludes(out, "[OWNER DECISION REQUIRED]");
+  assertStringIncludes(out, "proposal_requires_owner_approval");
+  // Recommendations must NEVER carry an OWNER-AUTHORIZED marker.
+  assertStringIncludes(out, "never carry an 'OWNER-AUTHORIZED' marker");
+  // Recommendations must be excluded from every executable surface.
+  assertStringIncludes(out, "EXCLUDED from any locked plan, executable batch, compiled implementation prompt, checkout flow, pricing CTA, or monetization scope");
+  // Other missing fields (buyer/positioning/etc.) MUST NOT trigger advisory recs.
+  assertStringIncludes(out, "buyer / paid_offer / activation / wow / positioning / acquisition_channel");
+  // Per-field notes for price and upgrade must reiterate the boundary.
+  assertStringIncludes(out, "Price anchor: (not supplied by owner");
+  assertStringIncludes(out, "proposal_requires_owner_approval and excluded from locked plans, batches, CTAs, and checkout");
+  assertStringIncludes(out, "Upgrade trigger: (not supplied by owner");
+});
+

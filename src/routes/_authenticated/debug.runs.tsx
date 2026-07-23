@@ -35,12 +35,12 @@ type ProjectRow = { id: string; name: string };
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, string> = {
     queued: "border-border bg-surface-2 text-muted-foreground",
-    running: "border-[hsl(38_65%_55%/0.4)] bg-[hsl(38_65%_55%/0.12)] text-[hsl(38_65%_70%)]",
-    completed: "border-[hsl(160_45%_42%/0.4)] bg-[hsl(160_45%_42%/0.12)] text-[hsl(160_45%_62%)]",
-    consensus: "border-[hsl(160_45%_42%/0.4)] bg-[hsl(160_45%_42%/0.12)] text-[hsl(160_45%_62%)]",
+    running: "border-primary/40 bg-primary/15 text-primary",
+    completed: "border-success/40 bg-success/15 text-success",
+    consensus: "border-success/40 bg-success/15 text-success",
     paused: "border-border bg-surface-2 text-muted-foreground",
-    paused_budget: "border-[hsl(8_60%_45%/0.4)] bg-[hsl(8_60%_45%/0.12)] text-[hsl(8_60%_65%)]",
-    failed: "border-[hsl(8_60%_45%/0.4)] bg-[hsl(8_60%_45%/0.12)] text-[hsl(8_60%_65%)]",
+    paused_budget: "border-destructive/40 bg-destructive/15 text-destructive",
+    failed: "border-destructive/40 bg-destructive/15 text-destructive",
     skipped: "border-border bg-surface-2 text-muted-foreground",
   };
   const cls = map[status] ?? map.queued;
@@ -64,17 +64,31 @@ function DebugRunsPage() {
   async function load() {
     setLoading(true);
     setLoadError(null);
-    const { data: profile, error: profErr } = await supabase
-      .from("profiles")
-      .select("role")
-      .maybeSingle();
-    if (profErr) {
-      setIsAdmin(false);
-      setLoadError(profErr.message);
+    // Admin gate: do NOT decide privilege from profiles.role in the browser
+    // (profiles is a client-writable table; a compromised client could set
+    // it). Ask the server, via the security-definer public.has_role RPC,
+    // whether THIS signed-in user is an admin. Table RLS remains the
+    // authoritative defense-in-depth for actual data reads below.
+    const { data: userData, error: userErr } = await supabase.auth.getUser();
+    if (userErr || !userData.user) {
+      setIsAdmin(null);
+      setLoadError(userErr?.message ?? "Not signed in");
       setLoading(false);
       return;
     }
-    const admin = profile?.role === "admin";
+    const { data: adminData, error: adminErr } = await supabase.rpc("has_role", {
+      _user_id: userData.user.id,
+      _role: "admin",
+    });
+    if (adminErr) {
+      // Treat RPC failure as an explicit recoverable load error, not as
+      // "not admin" — that would silently gate a real admin out of the page.
+      setIsAdmin(null);
+      setLoadError(adminErr.message);
+      setLoading(false);
+      return;
+    }
+    const admin = adminData === true;
     setIsAdmin(admin);
     if (!admin) {
       setLoading(false);
@@ -135,6 +149,26 @@ function DebugRunsPage() {
   }
 
   if (isAdmin === null) {
+    if (loadError) {
+      return (
+        <div className="mx-auto max-w-3xl p-8">
+          <div
+            role="alert"
+            className="rounded-xl border border-destructive/40 bg-destructive/10 px-6 py-4 text-sm text-destructive"
+          >
+            <p className="font-medium">Couldn't verify admin access.</p>
+            <p className="mt-1 text-destructive/80">{loadError}</p>
+            <button
+              type="button"
+              onClick={load}
+              className="mt-3 inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/20"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      );
+    }
     return <div className="p-8 text-muted-foreground">Loading…</div>;
   }
   if (!isAdmin) {
@@ -168,7 +202,7 @@ function DebugRunsPage() {
           </select>
           <button
             onClick={startTestRun}
-            className="rounded-md bg-[hsl(38_65%_55%)] px-4 py-2 text-sm font-medium text-[hsl(220_15%_8%)] hover:bg-[hsl(38_70%_62%)]"
+            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:brightness-110"
           >
             Start test run
           </button>
@@ -236,7 +270,7 @@ function DebugRunsPage() {
                     <td className="px-4 py-3 text-muted-foreground">{r.round_no}</td>
                     <td className="px-4 py-3 text-muted-foreground">
                       ${Number(r.spent_usd).toFixed(4)} / ${Number(r.budget_usd).toFixed(2)}
-                      {r.budget_warning && <span className="ml-2 text-[hsl(38_65%_70%)]">⚠</span>}
+                      {r.budget_warning && <span className="ml-2 text-primary">⚠</span>}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">
                       {new Date(r.created_at).toLocaleString()}
@@ -244,7 +278,7 @@ function DebugRunsPage() {
                     <td className="px-4 py-3 text-right">
                       <button
                         onClick={() => toggleExpand(r.id)}
-                        className="text-[hsl(38_65%_70%)] hover:underline"
+                        className="text-primary hover:underline"
                       >
                         {expanded[r.id] ? "hide" : "steps"}
                       </button>
@@ -254,7 +288,7 @@ function DebugRunsPage() {
                     <tr className="bg-surface-2/40">
                       <td colSpan={7} className="px-4 py-3">
                         {r.error && (
-                          <div className="mb-2 text-[hsl(8_60%_65%)]">error: {r.error}</div>
+                          <div className="mb-2 text-destructive">error: {r.error}</div>
                         )}
                         <div className="space-y-2">
                           {(steps[r.id] ?? []).length === 0 && (
@@ -277,7 +311,7 @@ function DebugRunsPage() {
                                 </div>
                               </div>
                               {s.error && (
-                                <div className="mt-2 text-[hsl(8_60%_65%)]">{s.error}</div>
+                                <div className="mt-2 text-destructive">{s.error}</div>
                               )}
                               {s.response_text && (
                                 <details className="mt-2">

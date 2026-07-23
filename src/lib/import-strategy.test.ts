@@ -123,36 +123,73 @@ import { isFieldValid, validateImportStrategy } from "./import-strategy";
 describe("field-level validation", () => {
   it("rejects single-character filler on non-price fields", () => {
     expect(isFieldValid("buyer", "x")).toBe(false);
-    expect(isFieldValid("buyer", "xxxx")).toBe(true);
+    // "xxxx" is repeated-single-char filler — rejected under the strengthened rules.
+    expect(isFieldValid("buyer", "xxxx")).toBe(false);
+    expect(isFieldValid("buyer", "Independent advisers")).toBe(true);
   });
   it("accepts short but meaningful price anchor values", () => {
     expect(isFieldValid("price_anchor", "$0")).toBe(true);
     expect(isFieldValid("price_anchor", "£9")).toBe(true);
+    expect(isFieldValid("price_anchor", "free")).toBe(true);
     expect(isFieldValid("price_anchor", "$")).toBe(false);
+    expect(isFieldValid("price_anchor", "--")).toBe(false);
   });
   it("accepts placeholder only on recommendable fields", () => {
     expect(isFieldValid("price_anchor", RECOMMEND_PLACEHOLDER)).toBe(true);
     expect(isFieldValid("upgrade_trigger", RECOMMEND_PLACEHOLDER)).toBe(true);
     expect(isFieldValid("buyer", RECOMMEND_PLACEHOLDER)).toBe(false);
   });
-  it("validateImportStrategy reports missing / too-short / bad-placeholder", () => {
+  it("rejects repeated-single-character filler on every field", () => {
+    for (const v of ["xxxx", "1111", "----", "aaaaaaa"]) {
+      expect(isFieldValid("buyer", v)).toBe(false);
+      expect(isFieldValid("wow_moment", v)).toBe(false);
+      expect(isFieldValid("price_anchor", v)).toBe(false);
+    }
+  });
+  it("rejects punctuation-only values", () => {
+    expect(isFieldValid("buyer", "!!!")).toBe(false);
+    expect(isFieldValid("positioning", "…")).toBe(false);
+  });
+  it("rejects common placeholder tokens case-insensitively", () => {
+    for (const v of ["asdf", "ASDF", "test", "Testing", "todo", "TBD", "n/a", "N/A", "none", "unknown", "lorem", "Lorem Ipsum", "placeholder", "foo", "bar", "xxx"]) {
+      expect(isFieldValid("buyer", v)).toBe(false);
+    }
+  });
+  it("accepts legitimate concise values", () => {
+    expect(isFieldValid("buyer", "SMBs")).toBe(true);
+    expect(isFieldValid("acquisition_channel", "SEO")).toBe(true);
+    expect(isFieldValid("wow_moment", "One-tap export")).toBe(true);
+  });
+  it("validateImportStrategy reports missing / too-short / bad-placeholder / filler", () => {
     const issues = validateImportStrategy({
       ...full,
       buyer: "",
       wow_moment: "x",
       positioning: RECOMMEND_PLACEHOLDER,
+      acquisition_channel: "xxxx",
+      paid_offer: "asdf",
     });
     const map = Object.fromEntries(issues.map((i) => [i.field, i.reason]));
     expect(map.buyer).toBe("missing");
     expect(map.wow_moment).toMatch(/too-short/);
     expect(map.positioning).toBe("placeholder-not-allowed");
+    expect(map.acquisition_channel).toBe("filler");
+    expect(map.paid_offer).toBe("filler");
   });
-  it("isImportReady uses field validator (rejects 'x')", () => {
-    expect(
-      isImportReady({
-        name: "App", description: "x", goals: ["code_audit"],
-        strategy: { ...full, buyer: "x" },
-      }),
-    ).toBe(false);
+  it("isImportReady uses field validator (rejects 'x' and 'xxxx')", () => {
+    expect(isImportReady({
+      name: "App", description: "x", goals: ["code_audit"],
+      strategy: { ...full, buyer: "x" },
+    })).toBe(false);
+    expect(isImportReady({
+      name: "App", description: "x", goals: ["code_audit"],
+      strategy: { ...full, buyer: "xxxx" },
+    })).toBe(false);
+  });
+  it("strategyCompleteness only counts valid fields, not filler", () => {
+    const badFew: Partial<typeof full> = { ...full, buyer: "xxxx", positioning: "asdf" };
+    expect(strategyCompleteness(badFew)).toEqual({ filled: 6, total: 8 });
+    expect(strategyCompleteness(full)).toEqual({ filled: 8, total: 8 });
   });
 });
+

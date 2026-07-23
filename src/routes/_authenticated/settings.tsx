@@ -524,52 +524,106 @@ function ModelRegistryEditor() {
 }
 
 function DefaultDailyCapEditor() {
-  const [usd, setUsd] = useState<number>(25);
-  const [loading, setLoading] = useState(true);
+  // Fail-closed load state: never render a fabricated fallback like $25
+  // as if it were the current configured cap. Loading, error, and
+  // "no value configured yet" are distinct states; save is disabled until
+  // a real value has actually loaded.
+  type CapState =
+    | { kind: "loading" }
+    | { kind: "error"; message: string }
+    | { kind: "unset" }
+    | { kind: "ready"; usd: number };
+  const [state, setState] = useState<CapState>({ kind: "loading" });
+  const [draft, setDraft] = useState<string>("");
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    (async () => {
-      const { data } = await supabase
-        .from("app_settings")
-        .select("value")
-        .eq("key", "default_daily_cap_usd")
-        .maybeSingle();
-      const n = Number((data?.value as { usd?: number } | null)?.usd);
-      if (Number.isFinite(n) && n > 0) setUsd(n);
-      setLoading(false);
-    })();
-  }, []);
+  async function load() {
+    setState({ kind: "loading" });
+    const { data, error } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("key", "default_daily_cap_usd")
+      .maybeSingle();
+    if (error) {
+      setState({ kind: "error", message: error.message });
+      return;
+    }
+    const raw = (data?.value as { usd?: number } | null)?.usd;
+    const n = Number(raw);
+    if (data && Number.isFinite(n) && n > 0) {
+      setState({ kind: "ready", usd: n });
+      setDraft(String(n));
+    } else {
+      setState({ kind: "unset" });
+      setDraft("");
+    }
+  }
+  useEffect(() => { void load(); }, []);
 
   async function save() {
+    const usd = Number(draft);
+    if (!Number.isFinite(usd) || usd <= 0) return;
     setSaving(true);
     const { error } = await supabase
       .from("app_settings")
       .update({ value: { usd }, updated_at: new Date().toISOString() })
       .eq("key", "default_daily_cap_usd");
     if (error) toast.error(error.message);
-    else toast.success(`Default daily cap set to $${usd.toFixed(2)}`);
+    else {
+      toast.success(`Default daily cap set to $${usd.toFixed(2)}`);
+      setState({ kind: "ready", usd });
+    }
     setSaving(false);
   }
 
-  if (loading) return <div className="h-20 animate-pulse rounded-md bg-surface-2" />;
+  if (state.kind === "loading") {
+    return <div className="h-20 animate-pulse rounded-md bg-surface-2" role="status" aria-label="Loading default daily cap" />;
+  }
+  if (state.kind === "error") {
+    return (
+      <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-5 text-sm text-destructive">
+        <p className="font-medium">Couldn't load the default daily cap.</p>
+        <p className="mt-1 break-words text-destructive/80">{state.message}</p>
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="mt-3 inline-flex rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+  const canSave =
+    state.kind === "ready"
+      ? Number.isFinite(Number(draft)) && Number(draft) > 0 && !saving
+      : false;
+  const draftNum = Number(draft);
+  const draftValid = Number.isFinite(draftNum) && draftNum > 0;
   return (
     <div className="rounded-lg border border-border bg-surface-2 p-5">
       <label className="mb-2 block text-xs text-muted-foreground">Default daily cap ($ USD)</label>
+      {state.kind === "unset" && (
+        <p className="mb-3 text-xs text-muted-foreground">
+          No value configured yet in runtime app_settings. Enter a value to seed it.
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-3">
         <input
           type="number"
           step="0.01"
-          value={usd}
-          onChange={(e) => setUsd(Number(e.target.value))}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder={state.kind === "unset" ? "e.g. 150.00" : ""}
           className="w-40 rounded-md border border-border bg-surface-1 px-3 py-2 font-mono text-sm text-foreground outline-none focus:border-primary"
         />
         <button
           onClick={save}
-          disabled={saving || !Number.isFinite(usd) || usd <= 0}
+          disabled={!draftValid || saving || state.kind !== "ready"}
+          title={state.kind !== "ready" ? "Load the current value before saving." : undefined}
           className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
         >
-          {saving ? "Saving…" : "Save default"}
+          {saving ? "Saving…" : canSave ? "Save default" : "Save default"}
         </button>
       </div>
       <p className="mt-3 text-xs text-muted-foreground">
@@ -799,9 +853,14 @@ function FlywheelPanel() {
   const [addenda, setAddenda] = useState<string[]>([]);
   const [mining, setMining] = useState(false);
   const [acting, setActing] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   async function load() {
-    const [{ data: rows }, { data: setting }] = await Promise.all([
+    // Inspect both queries. Any failure must render an explicit error + Retry;
+    // silently coercing to [] would show "No pending proposals" and hide the
+    // real cause. Preserve last-good data on a background refresh failure so
+    // admins keep seeing what they already loaded.
+    const [propsRes, setRes] = await Promise.all([
       supabase
         .from("field_manual_proposals")
         .select("id, proposed_rule, rationale, status, created_at")
@@ -809,8 +868,13 @@ function FlywheelPanel() {
         .order("created_at", { ascending: false }),
       supabase.from("app_settings").select("value").eq("key", "field_manual_addenda").maybeSingle(),
     ]);
-    setProposals((rows ?? []) as Proposal[]);
-    const items = (setting?.value as { items?: unknown[] } | null)?.items;
+    if (propsRes.error || setRes.error) {
+      setLoadError(propsRes.error?.message ?? setRes.error?.message ?? "Failed to load field manual");
+      return;
+    }
+    setLoadError(null);
+    setProposals((propsRes.data ?? []) as Proposal[]);
+    const items = (setRes.data?.value as { items?: unknown[] } | null)?.items;
     setAddenda(Array.isArray(items) ? items.map(String) : []);
   }
   useEffect(() => { void load(); }, []);
@@ -869,7 +933,7 @@ function FlywheelPanel() {
         </p>
         <button
           onClick={mine}
-          disabled={mining}
+          disabled={mining || (!!loadError && proposals === null)}
           className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
         >
           {mining ? "The Chair is reading the history…" : "Mine recent findings"}
@@ -884,7 +948,22 @@ function FlywheelPanel() {
         </div>
       )}
 
-      {proposals === null ? (
+      {loadError ? (
+        <div
+          role="alert"
+          className="mt-4 rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive"
+        >
+          <p className="font-medium">Couldn't load the field manual.</p>
+          <p className="mt-1 break-words text-destructive/80">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="mt-3 inline-flex rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+          >
+            Retry
+          </button>
+        </div>
+      ) : proposals === null ? (
         <div className="mt-4 h-16 animate-pulse rounded-lg bg-surface-2" />
       ) : proposals.length === 0 ? (
         <p className="mt-4 text-sm text-muted-foreground">No pending proposals. Mine after a batch of audits lands.</p>

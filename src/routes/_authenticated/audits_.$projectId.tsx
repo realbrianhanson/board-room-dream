@@ -231,6 +231,7 @@ function AuditCenterPage() {
         id: a.id,
         batch_id: a.batch_id,
         kind: a.kind,
+        status: a.status,
         created_at: a.created_at,
         head_sha: a.head_sha,
       })),
