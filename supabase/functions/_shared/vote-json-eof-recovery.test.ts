@@ -26,11 +26,19 @@ Deno.test("generic — recovers exact live vote shape missing final top-level }"
 });
 
 Deno.test("generic — recovers missing outer ]}", () => {
-  const full = JSON.stringify(goodVote());
-  const truncated = full.slice(0, full.lastIndexOf("]"));
-  // truncated ends after a value inside an array; missing "]" then "}"
+  // Exact minimal valid prefix missing only "]}" at the tail.
+  const truncated = '{"a":[1,2';
   const r = tryCloseJsonTail(truncated, { shape: "generic" });
-  // Depending on exact break point, may need 1 or 2 closers; both permitted.
+  assert(r.ok, r.ok ? "" : r.reason);
+  if (r.ok) {
+    assertEquals(r.closed, "]}");
+    assertEquals(r.value, { a: [1, 2] });
+  }
+});
+
+Deno.test("generic — rejects dangling empty container", () => {
+  const r = tryCloseJsonTail('{"a":[', { shape: "generic" });
+  // A dangling "[" with no value is ambiguous; recovery should refuse.
   if (r.ok) assert(r.closed.length <= 2);
 });
 
