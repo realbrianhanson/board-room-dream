@@ -108,7 +108,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-28.final-audit-supersession-r1";
+const BUILD_VERSION = "2026-07-28.batch-supersede-stale.1";
 
 import {
   failRun,
