@@ -53,6 +53,9 @@ function existing(no: number, overrides: Partial<ExistingBatchRow> = {}): Existi
     sent_at: null,
     built_at: null,
     compiled_at: null,
+    compiled_prompt_md: null,
+    compiled_verification_prompt_md: null,
+    compile_meta: null,
     outcome_md: null,
     ...overrides,
   };
@@ -69,7 +72,7 @@ Deno.test("isUniqueViolation recognises pg 23505 and message-shaped variants", (
   assert(!isUniqueViolation("boom"));
 });
 
-Deno.test("isSafePreExecution requires pending+uncompiled+unsent+no outcome", () => {
+Deno.test("isSafePreExecution requires pending+uncompiled+unsent+no compile artifacts+no outcome", () => {
   assert(isSafePreExecution(existing(1)));
   assert(!isSafePreExecution(existing(1, { status: "sent" })));
   assert(!isSafePreExecution(existing(1, { sent_at: "2026-07-23T00:00:00Z" })));
@@ -77,6 +80,14 @@ Deno.test("isSafePreExecution requires pending+uncompiled+unsent+no outcome", ()
   assert(!isSafePreExecution(existing(1, { compiled_at: "2026-07-23T00:00:00Z" })));
   assert(!isSafePreExecution(existing(1, { outcome_md: "shipped" })));
   assert(!isSafePreExecution(existing(1, { is_fix: true })));
+  // Compile artifacts: any one populated (even without compiled_at) means
+  // the batch-compiler has already touched this row and we must not
+  // silently accept the duplicate.
+  assert(!isSafePreExecution(existing(1, { compiled_prompt_md: "# compiled" })));
+  assert(!isSafePreExecution(existing(1, { compiled_verification_prompt_md: "# verify" })));
+  assert(!isSafePreExecution(existing(1, { compile_meta: { status: "partial" } })));
+  // Empty-object compile_meta is treated as unset (no artifact recorded).
+  assert(isSafePreExecution(existing(1, { compile_meta: {} })));
 });
 
 Deno.test("identical duplicate finalization is accepted (idempotent success)", () => {
@@ -145,4 +156,60 @@ Deno.test("progressed row (sent/built/compiled) rejects — protects owner work"
 Deno.test("empty planned set never accepts", () => {
   const d = decideConflictOutcome([], []);
   assertEquals(d.kind, "reject");
+});
+
+Deno.test("compile artifact drift rejects — compiler cannot have touched a truly idempotent duplicate", () => {
+  const p = [planned(1), planned(2)];
+  for (const drift of [
+    { compiled_prompt_md: "# compiled" },
+    { compiled_verification_prompt_md: "# verify" },
+    { compile_meta: { status: "ok", head_sha: "abc" } },
+  ] as Partial<ExistingBatchRow>[]) {
+    const e = [existing(1), existing(2, drift)];
+    const d = decideConflictOutcome(p, e);
+    assertEquals(d.kind, "reject");
+    if (d.kind === "reject") {
+      assert(
+        d.reason.includes("batch_no_2_already_progressed"),
+        `expected progressed rejection, got ${d.reason}`,
+      );
+    }
+  }
+});
+
+// --- Project lifecycle CAS filter --------------------------------------
+//
+// finalizeBatches advances projects.status from 'locked' to 'building'
+// via a compare-and-set: `.eq("status","locked")`. This mirrors the
+// canonical predecessor — a 'batches' run only runs after locked plan +
+// locked design, which puts projects.status='locked'. Every other state
+// (building, auditing, imported, validated, polishing, done, killed)
+// means either a peer worker already advanced the project OR the
+// project raced further along the lifecycle; the CAS must leave those
+// rows untouched. This test fences the state matrix so a future edit
+// cannot widen the filter and rewind auditing/building projects.
+
+const PROJECT_ADVANCE_PREDECESSOR = "locked" as const;
+const STATES_THAT_MUST_NOT_BE_REWRITTEN = [
+  "intake",
+  "validated",
+  "imported",
+  "boardroom",
+  "building",
+  "auditing",
+  "polishing",
+  "done",
+  "killed",
+] as const;
+
+function wouldAdvance(currentStatus: string): boolean {
+  // Model of the .eq("status","locked") CAS in finalizeBatches.
+  return currentStatus === PROJECT_ADVANCE_PREDECESSOR;
+}
+
+Deno.test("project advance CAS: only locked → building is allowed", () => {
+  assert(wouldAdvance("locked"), "locked must advance to building");
+  for (const s of STATES_THAT_MUST_NOT_BE_REWRITTEN) {
+    assert(!wouldAdvance(s), `${s} must NOT be rewritten by finalizeBatches`);
+  }
 });

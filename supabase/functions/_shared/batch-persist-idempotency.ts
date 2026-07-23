@@ -46,6 +46,14 @@ export type ExistingBatchRow = {
   built_at: string | null;
   compiled_at: string | null;
   outcome_md: string | null;
+  // Compile artifacts. The batch-compiler can populate any of these
+  // independently of `compiled_at` (e.g. a partial write during a failed
+  // compile, or a schema shift that seeds compile_meta without a full
+  // rewrite). Any non-empty value disqualifies the row from safe-pre-
+  // execution because it means downstream work has already looked at it.
+  compiled_prompt_md: string | null;
+  compiled_verification_prompt_md: string | null;
+  compile_meta: unknown;
 };
 
 export type IdempotencyDecision =
@@ -54,15 +62,24 @@ export type IdempotencyDecision =
 
 // Rows are considered safe pre-execution when they carry the exact
 // pending/uncompiled/unsent shape finalizeBatches writes. Any deviation
-// (sent, built, compiled, outcome recorded, fix lineage, non-pending
-// status) means downstream work has already touched them and we must not
-// silently paper over the conflict.
+// (sent, built, compiled_at, any compile artifact recorded, outcome
+// recorded, fix lineage, non-pending status) means downstream work has
+// already touched them and we must not silently paper over the conflict.
 export function isSafePreExecution(row: ExistingBatchRow): boolean {
+  const compileMetaEmpty = row.compile_meta === null ||
+    row.compile_meta === undefined ||
+    (typeof row.compile_meta === "object" &&
+      row.compile_meta !== null &&
+      Object.keys(row.compile_meta as Record<string, unknown>).length === 0);
   return row.status === "pending" &&
     row.is_fix === false &&
     row.sent_at === null &&
     row.built_at === null &&
     row.compiled_at === null &&
+    (row.compiled_prompt_md === null || row.compiled_prompt_md === "") &&
+    (row.compiled_verification_prompt_md === null ||
+      row.compiled_verification_prompt_md === "") &&
+    compileMetaEmpty &&
     (row.outcome_md === null || row.outcome_md === "");
 }
 

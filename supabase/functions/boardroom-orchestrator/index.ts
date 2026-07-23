@@ -1037,7 +1037,7 @@ async function finalizeBatches(admin: any, run: any, batchesJson: any[]) {
     const { data: existingRaw, error: readErr } = await admin
       .from("batches")
       .select(
-        "project_id,user_id,plan_version_id,batch_no,title,channel,prompt_md,status,is_fix,sent_at,built_at,compiled_at,outcome_md",
+        "project_id,user_id,plan_version_id,batch_no,title,channel,prompt_md,status,is_fix,sent_at,built_at,compiled_at,compiled_prompt_md,compiled_verification_prompt_md,compile_meta,outcome_md",
       )
       .eq("project_id", run.project_id)
       .eq("plan_version_id", plannedRows[0]?.plan_version_id ?? null)
@@ -1061,14 +1061,18 @@ async function finalizeBatches(admin: any, run: any, batchesJson: any[]) {
     // Fall through — treat as if we just inserted the set ourselves.
   }
 
-  // Advance the project only if it's still in a pre-build lifecycle state.
-  // A concurrent worker that already moved it past 'building' must not be
-  // rewound; a project that raced further (e.g. 'auditing') is left alone.
+  // Advance the project only from the canonical pre-build predecessor.
+  // A 'batches' finalization is only valid after locked plan + locked
+  // design, which puts projects.status='locked'. Any other state
+  // (building, auditing, imported, validated, polishing, done, killed)
+  // means a peer worker already advanced the project OR the project
+  // raced further along the lifecycle; either way we must NOT rewind
+  // it. Compare-and-set on status='locked' enforces this narrowly.
   await admin
     .from("projects")
     .update({ status: "building", current_batch_no: 1 })
     .eq("id", run.project_id)
-    .in("status", ["locked", "imported", "auditing", "validated"]);
+    .eq("status", "locked");
 
   // Compare-and-set: only mark completed if the run is still non-terminal.
   // Prevents a losing worker from ever downgrading a peer's terminal write.
