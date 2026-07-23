@@ -12,8 +12,8 @@ export const Route = createFileRoute("/_authenticated/cohort_/$projectId")({
     if (userErr || !userData?.user) throw redirect({ to: "/dashboard" });
     const uid = userData.user.id;
     const [{ data: isAdmin, error: aErr }, { data: isInstructor, error: iErr }] = await Promise.all([
-      supabase.rpc("has_role", { _user_id: uid, _role: "admin" }),
-      supabase.rpc("has_role", { _user_id: uid, _role: "instructor" }),
+      (supabase.rpc as any)("has_role", { _user_id: uid, _role: "admin" }),
+      (supabase.rpc as any)("has_role", { _user_id: uid, _role: "instructor" }),
     ]);
     if (aErr || iErr) throw redirect({ to: "/dashboard" });
     if (!isAdmin && !isInstructor) throw redirect({ to: "/dashboard" });
