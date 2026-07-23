@@ -1540,7 +1540,7 @@ function AuditModal({
               <ScrollText className="h-4 w-4" />
               <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground">Paste code</span>
             </div>
-            <p className="mt-2 text-xs text-muted-foreground">Up to ~200KB of pasted source</p>
+            <p className="mt-2 text-xs text-muted-foreground">Up to {formatBytes(MAX_PASTE_BYTES)} of pasted source</p>
           </button>
         </div>
 
