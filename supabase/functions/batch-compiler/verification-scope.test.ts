@@ -155,3 +155,74 @@ Deno.test("verificationScopeError — mixed requires both layers", () => {
   );
   assert(err && /BOTH the DB layer/i.test(err), `got: ${err}`);
 });
+
+// -- New tightened-contract regressions (PROMPT-CONTRACT-R5.1, 2026-07-23) -----
+
+Deno.test("edge_only — 'Run Deno edge tests' alone is REJECTED (no direct invocation)", () => {
+  const err = verificationScopeError(
+    "Verify Batch. Run the Deno edge tests for the affected function.",
+    "edge_only",
+  );
+  assert(err && /directly invoke/i.test(err), `expected direct-invocation rejection, got: ${err}`);
+});
+
+Deno.test("edge_only — 'Review the edge function' without a direct call is REJECTED", () => {
+  const err = verificationScopeError(
+    "Verify Batch. Review the edge function key-vault for correctness.",
+    "edge_only",
+  );
+  assert(err && /directly invoke/i.test(err), `expected direct-invocation rejection, got: ${err}`);
+});
+
+Deno.test("edge_only — direct call with success only is REJECTED (missing failure/unauthorized)", () => {
+  const err = verificationScopeError(
+    "Verify Batch. Invoke the key-vault edge function as an authorized user; expect a 200 response.",
+    "edge_only",
+  );
+  assert(err && /failure\s*\/\s*unauthorized|auth-negative/i.test(err), `expected failure-case rejection, got: ${err}`);
+});
+
+Deno.test("edge_only — direct call with success AND unauthorized PASSES", () => {
+  const err = verificationScopeError(
+    "Verify Batch. Invoke the key-vault edge function as an authenticated user; expect 200. Then invoke it without a token; expect 401 unauthorized.",
+    "edge_only",
+  );
+  assertEquals(err, null, `expected pass, got: ${err}`);
+});
+
+Deno.test("edge_only — curl call with success AND unauthorized PASSES (curl counts as direct invocation)", () => {
+  const err = verificationScopeError(
+    "Verify Batch. curl the /functions/v1/key-vault endpoint with a valid token; expect 200. Then curl it without a token; expect 401.",
+    "edge_only",
+  );
+  assertEquals(err, null, `expected pass, got: ${err}`);
+});
+
+Deno.test("mixed — missing DB positive/negative is REJECTED", () => {
+  const err = verificationScopeError(
+    "Verify Batch. Run the pgTAP migration schema check. Invoke the edge function with success (200) and failure (401 unauthorized).",
+    "mixed",
+  );
+  assert(err && /DB positive AND negative/i.test(err), `expected DB positive/negative rejection, got: ${err}`);
+});
+
+Deno.test("mixed — missing edge success/failure is REJECTED", () => {
+  const err = verificationScopeError(
+    "Verify Batch. Run pgTAP with positive owner case and negative anon case. Then invoke the edge function key-vault to sanity-check.",
+    "mixed",
+  );
+  assert(err && /edge\/RPC success AND failure/i.test(err), `expected edge success/failure rejection, got: ${err}`);
+});
+
+Deno.test("mixed — fully explicit DB positive/negative + edge invocation + success/failure PASSES", () => {
+  const err = verificationScopeError(
+    [
+      "Verify Batch.",
+      "Run pgTAP: positive owner SELECT succeeds; negative anon returns zero rows (cross-tenant blocked).",
+      "Then invoke the key-vault edge function: as an authenticated user returns 200; without a token returns 401 unauthorized.",
+    ].join(" "),
+    "mixed",
+  );
+  assertEquals(err, null, `expected pass, got: ${err}`);
+});
+
