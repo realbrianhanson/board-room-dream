@@ -255,7 +255,7 @@ const HIGH_IMPACT: Array<{ category: UnauthorizedCategory; re: RegExp }> = [
     // even without naming a dollar amount or a specific payment provider.
     // Owner must still authorize the concrete pricing/monetization decision.
     category: "monetization_scope",
-    re: /\b(?:add|introduce|implement|create|build|launch|define|choose|set|publish|show|display|establish|require|enable|configure|use|wire(?:\s+up)?|connect|set\s+up|integrate|adopt)\b[^.\n]{0,160}\b(?:pricing(?:\s+(?:cta|call[-\s]?to[-\s]?action|page|tier|plan|anchor|section))?|price\s+(?:anchor|point|tag)|paid\s+(?:offer|tier|plan|product)|(?:concrete\s+)?money\s+path|revenue\s+path|monetization|upgrade\s+(?:trigger|condition|cta|path|prompt)|subscription(?!\s+billing)|paywall|billing(?!\s+portal)|checkout(?!\s+session)|charge\s+customers?)\b/gi,
+    re: /\b(?:add|introduce|implement|create|build|launch|define|choose|set|publish|show|display|establish|require|enable|configure|use|wire(?:\s+up)?|connect|set\s+up|integrate|adopt)\b[^.\n;]{0,160}\b(?:pricing(?:\s+(?:cta|call[-\s]?to[-\s]?action|page|tier|plan|anchor|section))?|price\s+(?:anchor|point|tag)|paid\s+(?:offer|tier|plan|product)|(?:concrete\s+)?money\s+path|revenue\s+path|monetization|upgrade\s+(?:trigger|condition|cta|path|prompt)|subscription(?!\s+billing)|paywall|billing(?!\s+portal)|checkout(?!\s+session)|charge\s+customers?)\b/gi,
   },
   {
     category: "new_external_integration",
