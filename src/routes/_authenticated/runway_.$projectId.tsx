@@ -430,7 +430,7 @@ function RunwayPage() {
     const { error } = await supabase.rpc("set_batch_status", {
       p_batch_id: b.id,
       p_next: next,
-      p_outcome: null,
+      p_outcome: undefined,
     });
     if (error) { toast.error(error.message); return; }
     loadAll();
@@ -443,7 +443,7 @@ function RunwayPage() {
       const { error } = await supabase.rpc("set_batch_status", {
         p_batch_id: b.id,
         p_next: "skipped",
-        p_outcome: null,
+        p_outcome: undefined,
       });
       if (error) { toast.error(error.message); return; }
       toast.success("Skipped — later unbuilt batches were skipped too.");
