@@ -349,6 +349,17 @@ export function looksLikeUniversalHelperClaim(title: string, description: string
 // severity (Rule 4b in downgradeUnsupported).
 const CLIENT_SURFACE_CONCERN_RX =
   /\b(auth\s+bypass|admin\s+bypass|rls\s+bypass|privilege\s+escalation|unauthori[sz]ed\s+(?:access|read|write|query|select|mutation|update)|direct\s+select|direct\s+query|bypass(?:es|ed)?\s+(?:rls|auth|policy|policies|security)|admin\s+(?:only\s+)?(?:page|route|debug|panel|dashboard)|client(?:[- ]side)?\s+(?:only|check|enforcement|writes?|reads?|updates?|mutation)|(?:only|solely)\s+enforced\s+(?:in|on|by)\s+(?:the\s+)?(?:ui|client|browser|frontend)|enforced\s+only\s+(?:in|on|by)\s+(?:the\s+)?(?:ui|client|browser|frontend)|ui[- ]only\s+(?:check|guard|gate|enforcement|validation)|browser\s+(?:can\s+)?(?:reads?|selects?|writes?|mutates?|updates?)|reads?\s+(?:sensitive|privileged|server|backend|response_text|response_json|encrypted_key|api_keys?)|writes?\s+(?:privileged|server|backend|spend|cap|cohort|finding|severity|dismissal))\b/i;
+// R8 — client code writing privileged / global / config / registry / admin
+// / lifecycle / security state. Fires on titles/evidence that combine a
+// write/mutate/update verb (singular OR plural, active OR passive, verb OR
+// noun form) with a privileged-domain noun (privileged config, global
+// config, model_registry, app_settings, constitution, spend/budget cap,
+// admin state, lifecycle state, security state), or that explicitly attribute
+// the write to a browser / client / "browser path" / "direct client" origin
+// while touching such state. Ordinary user-owned form saving (profile,
+// preferences, notes) does NOT match — it lacks the privileged-domain noun.
+const CLIENT_PRIVILEGED_WRITE_RX =
+  /\b(?:privileged\s+(?:config|configuration|state|settings?|registry|data|lifecycle|security|admin)|global\s+(?:board\s+)?(?:config|configuration|settings?|state|registry|board)|model[_\- ]?registry|app[_\- ]?settings|constitution|(?:spend|budget)\s+cap|admin[_\- ]?only\s+(?:config|configuration|setting|settings|registry|state|lifecycle)|direct\s+(?:browser|client)(?:[- ]side)?(?:\s+\w+){0,3}\s+(?:writes?|written|writing|updates?|updated|updating|reads?|mutat(?:e|es|ed|ing|ion|ions))|(?:writes?|written|writing|updates?|updated|updating|mutat(?:e|es|ed|ing|ion|ions))\s+(?:via|from|through|by)\s+(?:the\s+)?(?:direct\s+)?(?:browser|client)|browser(?:\s+\w+){0,3}\s+(?:writes?|written|writing|mutat(?:e|es|ed|ing|ion|ions))|from\s+(?:the\s+)?browser\s+path|browser\s+path\b|(?:config|configuration|registry|constitution|lifecycle\s+state|privileged\s+state|global\s+state|global\s+config|global\s+configuration)\s+(?:mutat(?:e|es|ed|ing|ion|ions)|updated?|written|writing|changed?|modified?|edited?)|client(?:[- ]side)?\s+(?:code\s+)?(?:can\s+)?(?:change|modify|edit|update|write|mutat\w+)s?\s+(?:global|privileged|admin|config|configuration|lifecycle|security|registry|constitution|model[_\- ]?registry|app[_\- ]?settings))\b/i;
 export function looksLikeClientSurfaceSecurityClaim(
   title: string,
   description: string,
@@ -356,7 +367,7 @@ export function looksLikeClientSurfaceSecurityClaim(
 ): boolean {
   if (!isFrontendPath(filePath)) return false;
   const t = `${title}\n${description}`;
-  return CLIENT_SURFACE_CONCERN_RX.test(t);
+  return CLIENT_SURFACE_CONCERN_RX.test(t) || CLIENT_PRIVILEGED_WRITE_RX.test(t);
 }
 
 // R3 — product-strategy / copy claim detector. Covers copy, positioning,
