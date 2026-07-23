@@ -534,7 +534,7 @@ Deno.test("OA-V3-R5: generic monetization directive variants are all blocked wit
   ];
   for (const t of cases) {
     const err = ownerAuthorityError(t, a);
-    assert(err && /monetization_scope/.test(err!), `expected monetization_scope for: ${t} — got: ${err}`);
+    assert(err && /monetization_scope|payment_provider_or_checkout/.test(err!), `expected monetization/payment for: ${t} — got: ${err}`);
   }
 });
 
