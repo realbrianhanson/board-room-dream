@@ -199,6 +199,7 @@ export type Database = {
           id: string
           kind: string
           loop_no: number
+          previous_project_status: string | null
           project_id: string
           run_id: string | null
           source: string | null
@@ -216,6 +217,7 @@ export type Database = {
           id?: string
           kind: string
           loop_no?: number
+          previous_project_status?: string | null
           project_id: string
           run_id?: string | null
           source?: string | null
@@ -233,6 +235,7 @@ export type Database = {
           id?: string
           kind?: string
           loop_no?: number
+          previous_project_status?: string | null
           project_id?: string
           run_id?: string | null
           source?: string | null
