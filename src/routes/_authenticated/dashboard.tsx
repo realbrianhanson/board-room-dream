@@ -129,6 +129,7 @@ function DashboardPage() {
   const navigate = useNavigate();
   const search = Route.useSearch();
   const [projects, setProjects] = useState<Project[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [mode, setMode] = useState<NewMode>(() => initialModeFromSearch(search.new));
 
