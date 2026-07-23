@@ -472,7 +472,47 @@ export function BoardroomSession(props: BoardroomSessionProps) {
 
       <div className="mt-10">
         <p className="mb-4 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Transcript</p>
-        {!run ? (
+        {runStale && runError && run && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="mb-3 flex items-center justify-between gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-200"
+          >
+            <span>
+              Showing the last loaded transcript — the latest refresh failed
+              ({runError}).
+            </span>
+            <button
+              type="button"
+              onClick={retryLoad}
+              disabled={retrying}
+              className="rounded-md border border-amber-400/50 px-2.5 py-1 font-medium text-amber-100 transition-colors hover:bg-amber-500/20 disabled:opacity-60"
+            >
+              {retrying ? "Retrying…" : "Retry"}
+            </button>
+          </div>
+        )}
+        {!run && runError ? (
+          // Initial load failed and we have nothing to show. Never fall
+          // through to the "Preparing the room…" placeholder here — that
+          // would silently hide a real error.
+          <div
+            role="alert"
+            className="rounded-xl border border-destructive/40 bg-destructive/10 px-6 py-8 text-sm text-destructive"
+          >
+            <p className="font-medium">Couldn't load the boardroom.</p>
+            <p className="mt-1 text-destructive/80">{runError}</p>
+            <button
+              type="button"
+              onClick={retryLoad}
+              disabled={retrying}
+              className="mt-4 inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20 disabled:opacity-60"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              {retrying ? "Retrying…" : "Retry"}
+            </button>
+          </div>
+        ) : !run ? (
           <EmptyBoardroom
             hasKey={hasKey}
             isOwner={isOwner}
@@ -494,6 +534,7 @@ export function BoardroomSession(props: BoardroomSessionProps) {
           </div>
         )}
       </div>
+
 
       <style>{`
         @keyframes consensusPulse { 0% { box-shadow: 0 0 0 0 hsl(38 65% 55% / 0.55); } 100% { box-shadow: 0 0 0 42px hsl(38 65% 55% / 0); } }
