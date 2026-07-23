@@ -356,7 +356,7 @@ function DashboardPage() {
 
   async function createImport(e: React.FormEvent) {
     e.preventDefault();
-    if (!importReady) return;
+    if (!importCoreReady) return;
     setCreating(true);
     try {
       const { data: userData } = await supabase.auth.getUser();
