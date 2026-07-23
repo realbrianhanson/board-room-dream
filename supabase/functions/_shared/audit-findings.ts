@@ -412,7 +412,6 @@ export function downgradeUnsupported(
   const downgrades: DowngradeRecord[] = [];
   const rejectedIndices = new Set<number>();
   const out = findings.map((f, i) => {
-    if (f.severity !== "P0" && f.severity !== "P1") return f;
     let sev: Severity = f.severity;
     const push = (
       from: Severity,
@@ -433,94 +432,96 @@ export function downgradeUnsupported(
       if (rejected) rejectedIndices.add(i);
     };
 
-    // Rule 1 (P0 only): missing IMPACT marker → P0 becomes P1. Rescored,
-    // not rejected — the underlying finding may still be a valid P1 concern.
+    // Rule 1 (P0 only, rescored): missing IMPACT marker → P0 becomes P1.
     if (sev === "P0" && !hasImpactMarker(f.evidence)) {
       push("P0", "P1", "P0 evidence missing IMPACT: build_failure|data_loss|auth_bypass|secret_exposure marker");
       sev = "P1";
     }
 
-    // Rule 2: supabase/migrations/* P0/P1 requires CURRENT marker.
-    // Historical-migration claims without CURRENT are factually unsupported —
-    // reject rather than publish as P2 misinformation.
-    if ((sev === "P0" || sev === "P1") && isMigrationPath(f.file_path) && !hasCurrentMarker(f.evidence)) {
-      push(sev, "P2", "migrations/* claim missing CURRENT: corroboration of effective state", "rejected_unsupported");
-      return { ...f, severity: "P2" as Severity };
+    // R6 — Rules 2/3/4/4b/4d are SEVERITY-AGNOSTIC factual-proof gates. A
+    // P2/P3 finding that alleges a migration gap, missing schema object,
+    // universal-helper reachability, client-surface security bypass, or a
+    // truncated source is just as unsupported at P2 as it was at P1: false
+    // P2 is still bad advice. When the required proof marker is absent, the
+    // finding is REJECTED regardless of incoming severity.
+
+    // Rule 2: supabase/migrations/* requires CURRENT (any severity).
+    if (isMigrationPath(f.file_path) && !hasCurrentMarker(f.evidence)) {
+      // Cap severity to P2 on rejection so any published-array leak still
+      // reflects the demotion; the entry is filtered out by rejectedIndices.
+      const to: Severity = SEV_ORDER[sev] < SEV_ORDER["P2"] ? "P2" : sev;
+      push(sev, to, "migrations/* claim missing CURRENT: corroboration of effective state", "rejected_unsupported");
+      return { ...f, severity: to };
     }
 
     // Rule 3: missing-object claim requires SCHEMA_LEDGER or RUNTIME_FAILURE.
-    // Without corroboration this is a partial-chunk absence, not proof —
-    // reject rather than publish "table X does not exist" as advice.
-    if ((sev === "P0" || sev === "P1")
-        && looksLikeMissingObjectClaim(f.title, f.description)
+    if (looksLikeMissingObjectClaim(f.title, f.description)
         && !hasSchemaLedgerMarker(f.evidence)
         && !hasRuntimeFailureMarker(f.evidence)) {
-      push(sev, "P2", "missing-object claim lacks SCHEMA_LEDGER: or RUNTIME_FAILURE: corroboration", "rejected_unsupported");
-      return { ...f, severity: "P2" as Severity };
+      const to: Severity = SEV_ORDER[sev] < SEV_ORDER["P2"] ? "P2" : sev;
+      push(sev, to, "missing-object claim lacks SCHEMA_LEDGER: or RUNTIME_FAILURE: corroboration", "rejected_unsupported");
+      return { ...f, severity: to };
     }
 
-    // Rule 4: universal-helper claim requires CALLER corroboration. Reject.
-    if ((sev === "P0" || sev === "P1")
-        && looksLikeUniversalHelperClaim(f.title, f.description)
+    // Rule 4: universal-helper claim requires CALLER corroboration.
+    if (looksLikeUniversalHelperClaim(f.title, f.description)
         && !hasCallerMarker(f.evidence)) {
-      push(sev, "P2", "universal-helper claim lacks CALLER: corroboration from a reachable caller", "rejected_unsupported");
-      return { ...f, severity: "P2" as Severity };
+      const to: Severity = SEV_ORDER[sev] < SEV_ORDER["P2"] ? "P2" : sev;
+      push(sev, to, "universal-helper claim lacks CALLER: corroboration from a reachable caller", "rejected_unsupported");
+      return { ...f, severity: to };
     }
 
-    // Rule 4b (R3): client-surface security claim (frontend src/* alleging
-    // auth/admin/RLS/privilege/unauthorized/direct-SELECT bypass) requires a
-    // SERVER_AUTH marker quoting the current vulnerable server construct.
-    // Without it, this is a UI-only observation and is rejected — a false
-    // "admin bypass" P2 is still bad advice.
-    if ((sev === "P0" || sev === "P1")
-        && looksLikeClientSurfaceSecurityClaim(f.title, f.description, f.file_path)
+    // Rule 4b: client-surface security claim (frontend src/* alleging
+    // auth/admin/RLS/privilege/direct-SELECT bypass) requires SERVER_AUTH.
+    if (looksLikeClientSurfaceSecurityClaim(f.title, f.description, f.file_path)
         && !hasServerAuthMarker(f.evidence)) {
-      push(sev, "P2", "client-surface security claim lacks SERVER_AUTH: quote of the current vulnerable server construct", "rejected_unsupported");
-      return { ...f, severity: "P2" as Severity };
+      const to: Severity = SEV_ORDER[sev] < SEV_ORDER["P2"] ? "P2" : sev;
+      push(sev, to, "client-surface security claim lacks SERVER_AUTH: quote of the current vulnerable server construct", "rejected_unsupported");
+      return { ...f, severity: to };
     }
 
-    // Rule 4c (R4): product-strategy / copy / positioning / pricing /
-    // onboarding / buyer-reach findings are P2 by default. RUNTIME_FAILURE
-    // corroboration is REQUIRED to keep them P1 — OWNER_CONTRACT alone no
-    // longer promotes a product recommendation to serious severity. Rescored
-    // (not rejected): these remain valid product-quality suggestions at P2.
+    // Rule 4d: truncation / "file is malformed / cut off" claim requires
+    // FULL_SOURCE (or RUNTIME_FAILURE).
+    if (looksLikeTruncationClaim(f.title, f.description)
+        && !hasFullSourceMarker(f.evidence)
+        && !hasRuntimeFailureMarker(f.evidence)) {
+      const to: Severity = SEV_ORDER[sev] < SEV_ORDER["P2"] ? "P2" : sev;
+      push(sev, to, "truncation/incomplete-source claim lacks FULL_SOURCE: or RUNTIME_FAILURE: corroboration", "rejected_unsupported");
+      return { ...f, severity: to };
+    }
+
+    // Rule 4c (severity-cap only): product-strategy / copy / positioning /
+    // pricing / onboarding / buyer-reach findings are P2 by default. R6:
+    // path exclusion — backend infra paths are NEVER classified here, so a
+    // finding in supabase/functions/_shared/owner-authority.ts about a
+    // masked DROP TABLE / pay directive is not rescored away just because
+    // its evidence contains buyer/payment words. Rescored (not rejected).
     if ((sev === "P0" || sev === "P1")
-        && looksLikeProductStrategyClaim(f.title, f.description)
+        && looksLikeProductStrategyClaim(f.title, f.description, f.file_path)
         && !hasRuntimeFailureMarker(f.evidence)) {
       push(sev, "P2", "product-strategy/copy claim lacks RUNTIME_FAILURE: corroboration (OWNER_CONTRACT alone does not elevate)");
       return { ...f, severity: "P2" as Severity };
     }
 
-    // Rule 4d (R4): truncation / "file is malformed / cut off" claim requires
-    // a FULL_SOURCE marker (or RUNTIME_FAILURE). Rejected — fragment-boundary
-    // artifacts are not real defects and must not be published even at P2.
-    if ((sev === "P0" || sev === "P1")
-        && looksLikeTruncationClaim(f.title, f.description)
-        && !hasFullSourceMarker(f.evidence)
-        && !hasRuntimeFailureMarker(f.evidence)) {
-      push(sev, "P2", "truncation/incomplete-source claim lacks FULL_SOURCE: or RUNTIME_FAILURE: corroboration", "rejected_unsupported");
-      return { ...f, severity: "P2" as Severity };
-    }
-
-    // Rule 5: speculative WHY ("appears", "may", "could", "likely", "seems")
-    // cannot support P0/P1 no matter how well-formed the QUOTE looks.
-    // Speculative severity is not a fact — reject.
+    // Rule 5: speculative WHY hedge — reject at P0/P1.
     if ((sev === "P0" || sev === "P1") && whyIsSpeculative(f.evidence)) {
       push(sev, "P2", "WHY: uses speculative hedge ('appears/may/could/likely/seems')", "rejected_unsupported");
       return { ...f, severity: "P2" as Severity };
     }
 
-    // Baseline QUOTE/WHY + concrete-path/evidence/confidence gate.
-    // A P0/P1 without a concrete path, without QUOTE/WHY, or with low
-    // confidence is not evidence-backed — reject.
-    const reasons: string[] = [];
-    if (!isConcretePath(f.file_path)) reasons.push("missing concrete file_path");
-    if (!isConcreteEvidence(f.evidence)) reasons.push("evidence lacks concrete detail");
-    if (!hasQuoteWhyMarker(f.evidence)) reasons.push("evidence missing QUOTE:/WHY: marker");
-    if (f.confidence === "low") reasons.push("confidence low");
-    if (reasons.length > 0) {
-      push(sev, "P2", reasons.join("; "), "rejected_unsupported");
-      return { ...f, severity: "P2" as Severity };
+    // Baseline QUOTE/WHY + concrete-path/evidence/confidence gate (P0/P1).
+    // Legitimate product/design/copy P2s still publish — this gate only
+    // applies to serious severities.
+    if (sev === "P0" || sev === "P1") {
+      const reasons: string[] = [];
+      if (!isConcretePath(f.file_path)) reasons.push("missing concrete file_path");
+      if (!isConcreteEvidence(f.evidence)) reasons.push("evidence lacks concrete detail");
+      if (!hasQuoteWhyMarker(f.evidence)) reasons.push("evidence missing QUOTE:/WHY: marker");
+      if (f.confidence === "low") reasons.push("confidence low");
+      if (reasons.length > 0) {
+        push(sev, "P2", reasons.join("; "), "rejected_unsupported");
+        return { ...f, severity: "P2" as Severity };
+      }
     }
     return sev === f.severity ? f : { ...f, severity: sev };
   });
