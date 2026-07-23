@@ -174,7 +174,30 @@ function IntakePage() {
     })();
   }, [intakeId, navigate]);
 
+  // One-shot key-presence probe. Uses the existing safe key-vault "list"
+  // action which returns only provider/status metadata — never the secret.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase.functions.invoke("key-vault", {
+          body: { action: "list" },
+        });
+        if (cancelled || error) return;
+        const rows: Array<{ provider: string; status: string }> = data?.keys ?? [];
+        const or = rows.find((k) => k.provider === "openrouter");
+        setKeyHintMissing(!or || or.status === "invalid");
+      } catch {
+        // Silent — never invent key state on a probe failure.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const progress = useMemo(() => (step + 1) / STEPS.length, [step]);
+
   const current = STEPS[step];
   const canProceed = canProceedFromStep(current.kind, answers);
 
