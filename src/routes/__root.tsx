@@ -92,8 +92,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "twitter:card", content: "summary_large_image" },
       { name: "twitter:title", content: "App Blueprint — Audit, blueprint, and compile prompts for your Lovable app" },
       { name: "twitter:description", content: "App Blueprint audits your code, produces the Blueprint, and compiles step-by-step prompts you run in Lovable. The Boardroom — an adversarial council of frontier models — pressure-tests every decision. App Blueprint never builds or deploys your app for you." },
-      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/6bc1f9e5-2f53-4179-a24e-d19261b25aa5/id-preview-db101d11--887503f1-4c18-4b48-87f8-05674e6d8964.lovable.app-1784399490838.png" },
-      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/6bc1f9e5-2f53-4179-a24e-d19261b25aa5/id-preview-db101d11--887503f1-4c18-4b48-87f8-05674e6d8964.lovable.app-1784399490838.png" },
+      { property: "og:image", content: "https://screenshot2.lovable.dev/bc1dcd8d-241d-4ad1-8351-bf4cd6fcf609/id-preview-0ab5f4ab--887503f1-4c18-4b48-87f8-05674e6d8964.lovable.app-1784823532029.png" },
+      { name: "twitter:image", content: "https://screenshot2.lovable.dev/bc1dcd8d-241d-4ad1-8351-bf4cd6fcf609/id-preview-0ab5f4ab--887503f1-4c18-4b48-87f8-05674e6d8964.lovable.app-1784823532029.png" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
