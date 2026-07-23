@@ -127,13 +127,13 @@ Deno.serve(async (req) => {
 
     const alertListHtml = (alertRows ?? []).length
       ? `<ul style="padding-left:18px;margin:8px 0 0">${(alertRows ?? []).slice(0, 15).map((a: any) =>
-          `<li style="margin:6px 0"><strong>${KIND_TITLE[a.kind] ?? a.kind}</strong> — ${nameById.get(a.user_id) ?? "Member"} · ${projById.get(a.project_id) ?? "—"} <span style="color:#888">(${alertLine(a)})</span></li>`).join("")}</ul>`
+          `<li style="margin:6px 0"><strong>${escapeHtml(KIND_TITLE[a.kind] ?? a.kind)}</strong> — ${escapeHtml(nameById.get(a.user_id) ?? "Member")} · ${escapeHtml(projById.get(a.project_id) ?? "—")} <span style="color:#888">(${alertLine(a)})</span></li>`).join("")}</ul>`
       : `<p style="color:#888;margin:8px 0 0">Nobody is stuck. The board is calm.</p>`;
 
     const html = `<!doctype html><html><body style="background:#141519;font-family:Inter,Arial,sans-serif;color:#eee;padding:24px">
       <div style="max-width:560px;margin:0 auto;background:#1a1c22;border:1px solid #2a2d34;border-radius:12px;padding:24px">
         <p style="font-family:monospace;letter-spacing:.28em;font-size:11px;color:#888;text-transform:uppercase;margin:0">Boardroom · Daily digest</p>
-        <h1 style="font-family:'Fraunces',Georgia,serif;font-size:24px;color:#f2ecd8;margin:6px 0 4px">${c.name}</h1>
+        <h1 style="font-family:'Fraunces',Georgia,serif;font-size:24px;color:#f2ecd8;margin:6px 0 4px">${escapeHtml(c.name)}</h1>
         <p style="color:#aaa;margin:0 0 20px;font-size:13px">${totals.members} members · ${totals.projects} projects · ${totals.locked} locked · ${totals.done} shipped · ${totals.open_alerts} open alert${totals.open_alerts === 1 ? "" : "s"}</p>
         <h2 style="font-size:12px;font-family:monospace;letter-spacing:.22em;text-transform:uppercase;color:#888;margin:0 0 4px">Attention</h2>
         ${alertListHtml}
@@ -141,7 +141,7 @@ Deno.serve(async (req) => {
       </div>
     </body></html>`;
 
-    const subject = `Boardroom — ${c.name} · ${totals.open_alerts} alert${totals.open_alerts === 1 ? "" : "s"}`;
+    const subject = `Boardroom — ${escapeHtml(c.name)} · ${totals.open_alerts} alert${totals.open_alerts === 1 ? "" : "s"}`;
     const send = await sendDigest(to, subject, html);
     results.push({ cohort: c.name, to, ...totals, ...send });
   }
