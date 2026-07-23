@@ -172,20 +172,19 @@ Deno.test("regression: onboarding cohort-first copy without OWNER_CONTRACT → P
 
 // ---------------- reconcileAuditSummaryText ----------------
 
-Deno.test("reconcile — counts.P0=0 but text says 'P0' → text replaced with counts sentence", () => {
+Deno.test("reconcile — counts.P0=0 but text says 'P0' → deterministic counts sentence", () => {
   const text = "Chair merged 4 findings; 1 P0 needs immediate action.";
   const out = reconcileAuditSummaryText(text, { P0: 0, P1: 1, P2: 2, P3: 1 });
-  assert(!/\bP0\b(?!=0)/.test(out.replace("P0=0", "")),
-    `output must not assert a P0 severity: ${out}`);
-  assert(out.includes("P0=0"));
+  assertEquals(out, "Validated counts: P0=0, P1=1, P2=2, P3=1.");
 });
 
-Deno.test("reconcile — counts.P0>0 preserves original text with counts prefix", () => {
+Deno.test("reconcile — counts.P0>0 also produces deterministic sentence (no model prose kept)", () => {
   const text = "1 P0 blocking build.";
   const out = reconcileAuditSummaryText(text, { P0: 1, P1: 0, P2: 0, P3: 0 });
-  assert(out.includes("P0=1"));
-  assert(out.includes("blocking build"));
+  assertEquals(out, "Validated counts: P0=1, P1=0, P2=0, P3=0.");
+  assert(!/blocking build/.test(out));
 });
+
 
 // ---------------- R7: broadened client-surface detector ----------------
 
