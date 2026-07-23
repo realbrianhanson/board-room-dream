@@ -61,21 +61,30 @@ function PlanWorkspacePage() {
   const [activeCrRun, setActiveCrRun] = useState<Run | null>(null);
   const [me, setMe] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const [loadTick, setLoadTick] = useState(0);
 
   // Initial load
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      setLoading(true);
+      setPlanError(null);
       const { data: userData } = await supabase.auth.getUser();
       if (cancelled) return;
       setMe(userData.user?.id ?? null);
 
-      const { data: proj } = await supabase
+      const { data: proj, error: projErr } = await supabase
         .from("projects")
         .select("id, name, user_id, status")
         .eq("id", projectId)
         .maybeSingle();
       if (cancelled) return;
+      if (projErr) {
+        setPlanError(projErr.message);
+        setLoading(false);
+        return;
+      }
       if (!proj) {
         toast.error("Project not found");
         navigate({ to: "/dashboard" });
@@ -83,7 +92,10 @@ function PlanWorkspacePage() {
       }
       setProject(proj as Project);
 
-      const { data: pvs } = await supabase
+      // A failure loading plan_versions must NOT coerce to empty list — that
+      // would render the "No build-safe plan yet" reconvene state for a
+      // transient RLS/network failure and hide a retryable problem.
+      const { data: pvs, error: pvErr } = await supabase
         .from("plan_versions")
         .select(
           "id, project_id, version, content_md, prd_md, features, decision_log, is_chair_ruled, dissent_ledger, locked_at, source_run_id, is_build_safe, invalidated_reason",
@@ -91,26 +103,36 @@ function PlanWorkspacePage() {
         .eq("project_id", projectId)
         .eq("kind", "plan")
         .order("version", { ascending: false });
-      const list = (pvs ?? []) as unknown as PlanVersion[];
-      if (!cancelled) {
-        setVersions(list);
-        const initialSafe = list.find((v) => v.is_build_safe);
-        setSelectedVersionId(initialSafe?.id ?? list[0]?.id ?? null);
+      if (cancelled) return;
+      if (pvErr) {
+        setPlanError(pvErr.message);
+        setLoading(false);
+        return;
       }
+      const list = (pvs ?? []) as unknown as PlanVersion[];
+      setVersions(list);
+      const initialSafe = list.find((v) => v.is_build_safe);
+      setSelectedVersionId(initialSafe?.id ?? list[0]?.id ?? null);
 
-      const { data: crList } = await supabase
+      const { data: crList, error: crErr } = await supabase
         .from("change_requests")
         .select("id, description, status, board_verdict, run_id, created_at")
         .eq("project_id", projectId)
         .order("created_at", { ascending: false });
-      if (!cancelled) setCrs((crList ?? []) as unknown as ChangeRequest[]);
+      if (cancelled) return;
+      if (crErr) {
+        setPlanError(crErr.message);
+        setLoading(false);
+        return;
+      }
+      setCrs((crList ?? []) as unknown as ChangeRequest[]);
 
       setLoading(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, [projectId, navigate]);
+  }, [projectId, navigate, loadTick]);
 
   // Realtime: plan_versions + change_requests + boardroom_runs for this project
   useEffect(() => {
