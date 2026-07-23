@@ -1573,10 +1573,11 @@ function AuditModal({
       : `Audit Batch ${modal.batch.batch_no}`;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 p-6" onClick={onClose}>
-      <div className="w-full max-w-xl rounded-xl border border-border bg-surface-1 p-6" onClick={(e) => e.stopPropagation()}>
+      <div className="relative w-full max-w-xl rounded-xl border border-border bg-surface-1 p-6" onClick={(e) => e.stopPropagation()}>
         <button onClick={onClose} className="absolute right-3 top-3 rounded-md p-1 text-muted-foreground hover:text-foreground" aria-label="Close">
           <X className="h-4 w-4" />
         </button>
+
         <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(38_65%_70%)]">The board reviews code</p>
         <h3 className="mt-2 font-display text-2xl text-foreground">{title}</h3>
 
