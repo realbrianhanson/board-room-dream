@@ -455,7 +455,7 @@ function AuditCenterPage() {
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => startFinalAudit("github")}
-                  disabled={!startAllowed || !ghRepo}
+                  disabled={!startAllowed || !ghRepo || strategyGateBlocked}
                   className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
                 >
                   {starting ? "Opening the audit…" : ghRepo ? "Run the A–Z audit" : "Link a repo first"}
@@ -480,7 +480,7 @@ function AuditCenterPage() {
                 <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={5_000_000} />
                 <button
                   onClick={() => startFinalAudit("paste")}
-                  disabled={!startAllowed || !pasted.trim()}
+                  disabled={!startAllowed || !pasted.trim() || strategyGateBlocked}
                   className="mt-3 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
                 >
                   {starting ? "Opening the audit…" : "Run the A–Z audit on this code"}
@@ -576,7 +576,7 @@ function AuditCenterPage() {
                     <div className="flex flex-wrap items-center gap-2">
                       <button
                         onClick={() => startFinalAudit("github")}
-                        disabled={!startAllowed || !ghRepo}
+                        disabled={!startAllowed || !ghRepo || strategyGateBlocked}
                         data-testid="final-retry-github"
                         className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
                       >
@@ -607,7 +607,7 @@ function AuditCenterPage() {
                         <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={5_000_000} />
                         <button
                           onClick={() => startFinalAudit("paste")}
-                          disabled={!startAllowed || !pasted.trim()}
+                          disabled={!startAllowed || !pasted.trim() || strategyGateBlocked}
                           data-testid="final-retry-paste"
                           className="mt-3 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
                         >
