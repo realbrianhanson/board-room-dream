@@ -269,7 +269,8 @@ export async function enforceAuthorityOrCorrect(
   };
   const nextConsensus = {
     ...(ctx.run.consensus ?? {}),
-    authority_correction: nextState,
+    ...(ctx.restartMeta ?? {}),
+    authority_correction: { ...nextState, ...(ctx.restartMeta ?? {}) },
   };
   await ctx.admin
     .from("boardroom_runs")
