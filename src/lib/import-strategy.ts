@@ -259,7 +259,7 @@ export function isImportStrategyReady(input: Partial<ImportStrategyInput>): bool
     const v = t(input[k]);
     if (v.length === 0) return false;
     if (isRecommendPlaceholder(v)) return false;
-    return true;
+    return isFieldValid(k, v);
   });
 }
 
