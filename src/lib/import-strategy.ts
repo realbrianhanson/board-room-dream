@@ -1,13 +1,14 @@
 /**
  * Pure helpers for the "Existing app" import strategy fields.
  *
- * ACTIVATION-FLOW-R3: the imported-app audit must NOT begin with zero
- * strategic context. Import readiness now requires all eight strategy
- * fields plus core identity. For the two monetization fields owners may
- * legitimately not have decided yet (price_anchor, upgrade_trigger) we
- * accept a normalized "Board should recommend" placeholder so we never
- * force founders to invent a number. Every other field must carry real
- * owner-supplied signal.
+ * ACTIVATION-FLOW-R4: the imported-app A–Z audit requires credible owner
+ * context for SIX required fields (buyer, acquisition_channel, paid_offer,
+ * activation_moment, wow_moment, positioning). Price anchor and upgrade
+ * trigger are owner monetization decisions that may legitimately remain
+ * blank — BOTH a blank value AND the canonical "Not set — Board should
+ * recommend" placeholder pass the readiness gate. Blanks persist as empty
+ * strings so downstream code (audit contract, board prompts) treats them
+ * as explicit missing owner input rather than fabricated facts.
  */
 
 export const STRATEGY_FIELDS = [
@@ -25,6 +26,22 @@ export type StrategyField = (typeof STRATEGY_FIELDS)[number];
 
 export type ImportStrategyInput = Record<StrategyField, string>;
 
+/** Six fields that MUST carry credible owner context before the A–Z audit. */
+export const REQUIRED_STRATEGY_FIELDS: readonly StrategyField[] = [
+  "buyer",
+  "acquisition_channel",
+  "paid_offer",
+  "activation_moment",
+  "wow_moment",
+  "positioning",
+];
+
+/** Two owner-decision monetization fields that may remain blank or use the recommend placeholder. */
+export const OPTIONAL_MONETIZATION_FIELDS: readonly StrategyField[] = [
+  "price_anchor",
+  "upgrade_trigger",
+];
+
 /**
  * The exact string the UI writes when an owner explicitly defers a
  * monetization decision to the Board. Kept as a single constant so the
@@ -34,10 +51,7 @@ export type ImportStrategyInput = Record<StrategyField, string>;
 export const RECOMMEND_PLACEHOLDER = "Not set — Board should recommend";
 
 /** Fields where {@link RECOMMEND_PLACEHOLDER} is a valid owner answer. */
-export const RECOMMENDABLE_FIELDS: readonly StrategyField[] = [
-  "price_anchor",
-  "upgrade_trigger",
-];
+export const RECOMMENDABLE_FIELDS: readonly StrategyField[] = OPTIONAL_MONETIZATION_FIELDS;
 
 export function isRecommendPlaceholder(value: string | null | undefined): boolean {
   return (value ?? "").trim().toLowerCase() === RECOMMEND_PLACEHOLDER.toLowerCase();
@@ -47,6 +61,10 @@ const t = (v: string | null | undefined) => (v ?? "").trim();
 
 function isFilled(value: string | null | undefined): boolean {
   return t(value).length > 0;
+}
+
+export function isOptionalMonetizationField(field: StrategyField): boolean {
+  return OPTIONAL_MONETIZATION_FIELDS.includes(field);
 }
 
 /** Human labels for the badge / missing-field guidance UI. */
@@ -61,7 +79,7 @@ export const STRATEGY_FIELD_LABELS: Record<StrategyField, string> = {
   positioning: "Positioning",
 };
 
-/** Returns the names of strategy fields that have no owner-supplied value. */
+/** Returns strategy fields (both required + optional) that have no owner-supplied value. */
 export function missingStrategyFields(
   input: Partial<ImportStrategyInput>,
 ): StrategyField[] {
@@ -69,17 +87,29 @@ export function missingStrategyFields(
 }
 
 /**
- * {filled, total} for the "Strategy context X/8" badge. Uses the same
- * field-level validity as the readiness gate — a filled-but-invalid
- * value (e.g. "xxxx", "test", punctuation-only) does NOT count toward
- * completeness, so the badge tells the truth about how many fields
- * actually carry credible strategy context.
+ * Breakdown for the "Strategy context" badge: how many required fields carry
+ * credible owner signal (X/6), and how many optional monetization fields the
+ * owner has filled or explicitly deferred (Y/2). Uses the same field-level
+ * validity as the readiness gate — filler ("xxxx", "test", punctuation-only)
+ * does NOT count. For optional monetization fields, both a real value AND
+ * the canonical recommend placeholder count as "filled".
  */
 export function strategyCompleteness(
   input: Partial<ImportStrategyInput>,
-): { filled: number; total: number } {
-  const filled = STRATEGY_FIELDS.filter((k) => isFieldValid(k, input[k])).length;
-  return { filled, total: STRATEGY_FIELDS.length };
+): {
+  required: { filled: number; total: number };
+  optional: { filled: number; total: number };
+} {
+  const requiredFilled = REQUIRED_STRATEGY_FIELDS.filter((k) => isFieldValid(k, input[k])).length;
+  const optionalFilled = OPTIONAL_MONETIZATION_FIELDS.filter((k) => {
+    const v = t(input[k]);
+    if (v.length === 0) return false;
+    return isFieldValid(k, v);
+  }).length;
+  return {
+    required: { filled: requiredFilled, total: REQUIRED_STRATEGY_FIELDS.length },
+    optional: { filled: optionalFilled, total: OPTIONAL_MONETIZATION_FIELDS.length },
+  };
 }
 
 /**
@@ -101,9 +131,9 @@ export function isImportCoreReady(input: {
 
 /**
  * Full readiness gate for launching an imported-app audit. Requires the
- * three core-identity fields plus all eight strategy fields. The two
- * recommendable monetization fields accept {@link RECOMMEND_PLACEHOLDER}
- * so owners aren't forced to invent pricing.
+ * three core-identity fields plus credible owner context for every
+ * REQUIRED strategy field. Price anchor and upgrade trigger are owner
+ * decisions — blank or the recommend placeholder both pass.
  */
 export function isImportReady(input: {
   name: string;
@@ -116,23 +146,22 @@ export function isImportReady(input: {
 }
 
 /**
- * The strategy fields still needed before an import audit can launch,
- * honoring {@link RECOMMEND_PLACEHOLDER} for recommendable fields.
- * Uses the strict field-level validator below so the badge, readiness
- * gate, client button, and server gate all agree on what counts as
- * credible strategy context.
+ * REQUIRED strategy fields still missing/invalid before an import audit can
+ * launch. Optional monetization fields (price_anchor, upgrade_trigger) are
+ * never listed here — blank counts as an owner decision to defer.
  */
 export function missingImportFields(
   input: Partial<ImportStrategyInput>,
 ): StrategyField[] {
-  return STRATEGY_FIELDS.filter((k) => !isFieldValid(k, input[k]));
+  return REQUIRED_STRATEGY_FIELDS.filter((k) => !isFieldValid(k, input[k]));
 }
 
 
 /**
  * Trim every strategy field, preserving empty strings so downstream code can
  * treat blanks as explicit "missing owner input" rather than fabricated data.
- * Recommendable fields keep the placeholder verbatim.
+ * Blank price_anchor / upgrade_trigger MUST stay blank — never coerced to
+ * the recommend placeholder or any invented value.
  */
 export function normalizeStrategyForPersist(
   input: Partial<ImportStrategyInput>,
@@ -147,9 +176,6 @@ export function normalizeStrategyForPersist(
  * Common filler / placeholder values (case-insensitive, whitespace-collapsed)
  * that must never count as real strategy context. Kept as a Set so the
  * client and server mirrors compare against identical lookups.
- *
- * Legitimate concise values (e.g. "SMBs", "SEO", "free", "$0") are NOT in
- * this list, and pass the length + shape rules in {@link isFieldValid}.
  */
 const FILLER_PLACEHOLDERS = new Set<string>([
   "asdf", "asdfasdf", "qwerty", "qwertyuiop",
@@ -165,19 +191,16 @@ const FILLER_PLACEHOLDERS = new Set<string>([
   "xxx", "yyy", "zzz",
 ]);
 
-/** Normalize for filler lookup: lowercase, collapse whitespace. */
 function normFiller(v: string): string {
   return v.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-/** Repeated single character: "xxxx", "1111", "----". */
 function isRepeatedSingleChar(v: string): boolean {
   const stripped = v.replace(/\s+/g, "");
   if (stripped.length < 2) return false;
   return /^(.)\1+$/.test(stripped);
 }
 
-/** Only punctuation / symbol characters, no letters or digits. */
 function isPunctuationOnly(v: string): boolean {
   return v.length > 0 && !/[\p{L}\p{N}]/u.test(v);
 }
@@ -185,31 +208,27 @@ function isPunctuationOnly(v: string): boolean {
 /**
  * Field-level validation rules used everywhere strategy context is gated.
  *
- * - `price_anchor` accepts either the canonical recommend placeholder or a
- *   trimmed value with at least 2 characters containing at least one
- *   letter or digit (so "$0", "£9", "free" are valid; "$" and "--" are not).
- * - `upgrade_trigger` accepts the canonical placeholder or ≥3 chars of real signal.
- * - All other fields require ≥3 trimmed characters — accepting legitimate
- *   concise acronyms like "SEO" while still rejecting single-character filler.
- * - Every field additionally rejects repeated-single-character strings,
+ * - Optional monetization fields (price_anchor, upgrade_trigger) accept a
+ *   BLANK value (owner deferring the decision) OR the canonical
+ *   {@link RECOMMEND_PLACEHOLDER}. Non-blank values still must pass the
+ *   filler / shape rules; price_anchor accepts short-but-meaningful values
+ *   ("$0", "£9", "free"), upgrade_trigger needs ≥3 chars.
+ * - Required strategy fields (buyer / acquisition / paid_offer /
+ *   activation / wow / positioning) MUST carry ≥3 trimmed characters of
+ *   credible signal. The recommend placeholder is REJECTED there.
+ * - Every non-blank value rejects repeated-single-character strings,
  *   punctuation-only strings, and common placeholder tokens
  *   (asdf, test, todo, tbd, n/a, none, unknown, lorem, foo/bar, xxx, …).
- * - Only `price_anchor` and `upgrade_trigger` may use the recommend
- *   placeholder; using it elsewhere is rejected.
  */
 export function isFieldValid(field: StrategyField, value: string | null | undefined): boolean {
   const v = t(value);
-  if (v.length === 0) return false;
-  if (isRecommendPlaceholder(v)) {
-    return RECOMMENDABLE_FIELDS.includes(field);
-  }
-  // Universal filler rejection.
+  const optional = isOptionalMonetizationField(field);
+  if (v.length === 0) return optional; // blank is a valid owner decision on optional fields only.
+  if (isRecommendPlaceholder(v)) return optional; // placeholder only on optional fields.
   if (isRepeatedSingleChar(v)) return false;
   if (isPunctuationOnly(v)) return false;
   if (FILLER_PLACEHOLDERS.has(normFiller(v))) return false;
   if (field === "price_anchor") {
-    // Must be at least 2 chars AND contain at least one letter or digit
-    // so a bare "$" or "--" is rejected but "$0" / "£9" / "free" pass.
     return v.length >= 2 && /[\p{L}\p{N}]/u.test(v);
   }
   return v.length >= 3;
@@ -218,6 +237,8 @@ export function isFieldValid(field: StrategyField, value: string | null | undefi
 /**
  * Returns a list of `{ field, reason }` explaining every invalid strategy
  * field, suitable for surfacing in the UI and server error responses.
+ * Blank optional monetization fields (price_anchor, upgrade_trigger) never
+ * generate an issue — they are owner decisions.
  */
 export function validateImportStrategy(
   input: Partial<ImportStrategyInput>,
@@ -225,14 +246,13 @@ export function validateImportStrategy(
   const out: Array<{ field: StrategyField; reason: string }> = [];
   for (const f of STRATEGY_FIELDS) {
     const v = t(input[f]);
+    const optional = isOptionalMonetizationField(f);
     if (v.length === 0) {
-      out.push({ field: f, reason: "missing" });
+      if (!optional) out.push({ field: f, reason: "missing" });
       continue;
     }
     if (isRecommendPlaceholder(v)) {
-      if (!RECOMMENDABLE_FIELDS.includes(f)) {
-        out.push({ field: f, reason: "placeholder-not-allowed" });
-      }
+      if (!optional) out.push({ field: f, reason: "placeholder-not-allowed" });
       continue;
     }
     if (isRepeatedSingleChar(v)) { out.push({ field: f, reason: "filler" }); continue; }
@@ -250,16 +270,12 @@ export function validateImportStrategy(
 }
 
 /**
- * Legacy readiness gate (all 8 fields, strict). Retained for callers that
- * want the "everything filled" signal without accepting the recommend
- * placeholder as a substitute.
+ * Readiness gate signalling that the strategy inputs are shippable to the
+ * audit runner. Requires credible signal on every REQUIRED field and, for
+ * optional monetization fields, accepts blank OR the recommend placeholder
+ * (never fabricated filler). Kept in lockstep with {@link isImportReady}
+ * so client and server can never disagree.
  */
 export function isImportStrategyReady(input: Partial<ImportStrategyInput>): boolean {
-  return STRATEGY_FIELDS.every((k) => {
-    const v = t(input[k]);
-    if (v.length === 0) return false;
-    if (isRecommendPlaceholder(v)) return false;
-    return isFieldValid(k, v);
-  });
+  return validateImportStrategy(input).length === 0;
 }
-

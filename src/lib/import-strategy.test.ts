@@ -9,7 +9,10 @@ import {
   strategyCompleteness,
   isRecommendPlaceholder,
   RECOMMEND_PLACEHOLDER,
+  REQUIRED_STRATEGY_FIELDS,
+  OPTIONAL_MONETIZATION_FIELDS,
   STRATEGY_FIELDS,
+  isOptionalMonetizationField,
   type ImportStrategyInput,
 } from "./import-strategy";
 
@@ -24,6 +27,26 @@ const full: ImportStrategyInput = {
   positioning: "Unlike PDFs, flags client-specific risk",
 };
 
+// Six required + two optional monetization fields — never claim "all eight
+// required" anywhere in the UI or the readiness gates.
+const sixRequiredOnly: ImportStrategyInput = {
+  ...full,
+  price_anchor: "",
+  upgrade_trigger: "",
+};
+
+describe("field partition — 6 required + 2 optional", () => {
+  it("exposes the exact partition", () => {
+    expect(REQUIRED_STRATEGY_FIELDS.length).toBe(6);
+    expect(OPTIONAL_MONETIZATION_FIELDS).toEqual(["price_anchor", "upgrade_trigger"]);
+    expect([...REQUIRED_STRATEGY_FIELDS, ...OPTIONAL_MONETIZATION_FIELDS].sort()).toEqual(
+      [...STRATEGY_FIELDS].sort(),
+    );
+    for (const f of OPTIONAL_MONETIZATION_FIELDS) expect(isOptionalMonetizationField(f)).toBe(true);
+    for (const f of REQUIRED_STRATEGY_FIELDS) expect(isOptionalMonetizationField(f)).toBe(false);
+  });
+});
+
 describe("core-identity readiness", () => {
   it("accepts name + description + at least one goal", () => {
     expect(isImportCoreReady({ name: "App", description: "Does X.", goals: ["code_audit"] })).toBe(true);
@@ -35,52 +58,89 @@ describe("core-identity readiness", () => {
   });
 });
 
-describe("isImportReady (core + strategy context required)", () => {
-  it("requires all 8 strategy fields alongside core identity", () => {
-    expect(isImportReady({ name: "App", description: "x", goals: ["code_audit"] })).toBe(false);
-    expect(
-      isImportReady({ name: "App", description: "x", goals: ["code_audit"], strategy: full }),
-    ).toBe(true);
+describe("isImportReady (six required only)", () => {
+  it("REGRESSION — six valid required fields + BOTH monetization blank => ready", () => {
+    expect(isImportReady({
+      name: "App", description: "x", goals: ["code_audit"], strategy: sixRequiredOnly,
+    })).toBe(true);
+  });
+
+  it("REGRESSION — blocks when any of the six required fields is blank/invalid", () => {
+    for (const f of REQUIRED_STRATEGY_FIELDS) {
+      expect(isImportReady({
+        name: "App", description: "x", goals: ["code_audit"],
+        strategy: { ...sixRequiredOnly, [f]: "" },
+      })).toBe(false);
+      expect(isImportReady({
+        name: "App", description: "x", goals: ["code_audit"],
+        strategy: { ...sixRequiredOnly, [f]: "x" },
+      })).toBe(false);
+      expect(isImportReady({
+        name: "App", description: "x", goals: ["code_audit"],
+        strategy: { ...sixRequiredOnly, [f]: "xxxx" },
+      })).toBe(false);
+    }
   });
 
   it("accepts the RECOMMEND placeholder for price_anchor and upgrade_trigger", () => {
-    const withPlaceholders: ImportStrategyInput = {
-      ...full,
-      price_anchor: RECOMMEND_PLACEHOLDER,
-      upgrade_trigger: RECOMMEND_PLACEHOLDER,
-    };
-    expect(
-      isImportReady({ name: "App", description: "x", goals: ["code_audit"], strategy: withPlaceholders }),
-    ).toBe(true);
+    expect(isImportReady({
+      name: "App", description: "x", goals: ["code_audit"],
+      strategy: { ...sixRequiredOnly, price_anchor: RECOMMEND_PLACEHOLDER, upgrade_trigger: RECOMMEND_PLACEHOLDER },
+    })).toBe(true);
   });
 
-  it("still rejects when a non-recommendable field is blank", () => {
-    expect(
-      isImportReady({
-        name: "App",
-        description: "x",
-        goals: ["code_audit"],
-        strategy: { ...full, positioning: "" },
-      }),
-    ).toBe(false);
+  it("accepts every combination of blank / placeholder / real value on the two optional fields", () => {
+    const opts = ["", RECOMMEND_PLACEHOLDER, "$29/mo"];
+    for (const p of opts) for (const u of opts) {
+      expect(isImportReady({
+        name: "App", description: "x", goals: ["code_audit"],
+        strategy: { ...sixRequiredOnly, price_anchor: p, upgrade_trigger: u === "$29/mo" ? "Second client added" : u },
+      })).toBe(true);
+    }
   });
 
-  it("missingImportFields lists the exact remaining fields", () => {
+  it("missingImportFields lists only the six required, never price/upgrade", () => {
+    expect(missingImportFields(sixRequiredOnly)).toEqual([]);
+    expect(missingImportFields(full)).toEqual([]);
     expect(missingImportFields({ ...full, buyer: "", wow_moment: " " }).sort()).toEqual(
       ["buyer", "wow_moment"].sort(),
     );
-    expect(missingImportFields(full)).toEqual([]);
+    // Blank optional monetization fields never appear as missing.
+    expect(missingImportFields({ ...full, price_anchor: "", upgrade_trigger: "" })).toEqual([]);
   });
 });
 
 describe("strategy completeness helper", () => {
-  it("counts all 8 fields when full", () => {
-    expect(strategyCompleteness(full)).toEqual({ filled: 8, total: 8 });
-    expect(missingStrategyFields(full)).toEqual([]);
+  it("returns 6/6 required + 2/2 optional when everything is filled", () => {
+    expect(strategyCompleteness(full)).toEqual({
+      required: { filled: 6, total: 6 },
+      optional: { filled: 2, total: 2 },
+    });
   });
-  it("returns every field name when empty", () => {
+  it("returns 6/6 required + 0/2 optional when monetization is deferred (blank)", () => {
+    expect(strategyCompleteness(sixRequiredOnly)).toEqual({
+      required: { filled: 6, total: 6 },
+      optional: { filled: 0, total: 2 },
+    });
+  });
+  it("recommend placeholder counts as an optional 'filled' owner decision", () => {
+    expect(strategyCompleteness({
+      ...sixRequiredOnly,
+      price_anchor: RECOMMEND_PLACEHOLDER,
+      upgrade_trigger: RECOMMEND_PLACEHOLDER,
+    })).toEqual({
+      required: { filled: 6, total: 6 },
+      optional: { filled: 2, total: 2 },
+    });
+  });
+  it("returns 0/6 when required fields are empty", () => {
+    expect(strategyCompleteness({})).toEqual({
+      required: { filled: 0, total: 6 },
+      optional: { filled: 0, total: 2 },
+    });
+  });
+  it("missingStrategyFields still enumerates every blank field for the UI", () => {
     expect(missingStrategyFields({})).toEqual([...STRATEGY_FIELDS]);
-    expect(strategyCompleteness({})).toEqual({ filled: 0, total: 8 });
   });
 });
 
@@ -104,22 +164,32 @@ describe("persist normalization", () => {
     const out = normalizeStrategyForPersist({});
     for (const k of STRATEGY_FIELDS) expect(out[k]).toBe("");
   });
+  it("REGRESSION — blank price_anchor / upgrade_trigger stay blank through normalization", () => {
+    const out = normalizeStrategyForPersist({ price_anchor: "", upgrade_trigger: "   " });
+    expect(out.price_anchor).toBe("");
+    expect(out.upgrade_trigger).toBe("");
+    // Never coerced to the recommend placeholder or an invented value.
+    expect(out.price_anchor).not.toContain("recommend");
+    expect(out.upgrade_trigger).not.toContain("recommend");
+  });
 });
 
-describe("legacy isImportStrategyReady (strict)", () => {
+describe("legacy isImportStrategyReady (aligned with 6-required rule)", () => {
   it("true when everything filled with real values", () => {
     expect(isImportStrategyReady(full)).toBe(true);
   });
-  it("false for placeholder values (strict gate does not accept 'recommend')", () => {
-    expect(isImportStrategyReady({ ...full, price_anchor: RECOMMEND_PLACEHOLDER })).toBe(false);
+  it("REGRESSION — true when the six required are filled and price/upgrade are blank", () => {
+    expect(isImportStrategyReady(sixRequiredOnly)).toBe(true);
   });
-  it("false when anything blank", () => {
+  it("false when a required field is blank", () => {
     expect(isImportStrategyReady({ ...full, positioning: "" })).toBe(false);
   });
-  it("false for obvious filler that field-level validation rejects", () => {
-    // Strict gate must agree with isFieldValid — no "xxxx" / "test" escape hatch.
+  it("false for obvious filler on any field", () => {
     expect(isImportStrategyReady({ ...full, buyer: "xxxx" })).toBe(false);
     expect(isImportStrategyReady({ ...full, positioning: "test" })).toBe(false);
+  });
+  it("false when recommend placeholder appears on a required field", () => {
+    expect(isImportStrategyReady({ ...full, buyer: RECOMMEND_PLACEHOLDER })).toBe(false);
   });
 });
 
@@ -128,9 +198,15 @@ import { isFieldValid, validateImportStrategy } from "./import-strategy";
 describe("field-level validation", () => {
   it("rejects single-character filler on non-price fields", () => {
     expect(isFieldValid("buyer", "x")).toBe(false);
-    // "xxxx" is repeated-single-char filler — rejected under the strengthened rules.
     expect(isFieldValid("buyer", "xxxx")).toBe(false);
     expect(isFieldValid("buyer", "Independent advisers")).toBe(true);
+  });
+  it("accepts blank on optional monetization fields (owner deferring)", () => {
+    expect(isFieldValid("price_anchor", "")).toBe(true);
+    expect(isFieldValid("upgrade_trigger", "")).toBe(true);
+    // ...and rejects blank on required fields.
+    expect(isFieldValid("buyer", "")).toBe(false);
+    expect(isFieldValid("positioning", "")).toBe(false);
   });
   it("accepts short but meaningful price anchor values", () => {
     expect(isFieldValid("price_anchor", "$0")).toBe(true);
@@ -165,6 +241,12 @@ describe("field-level validation", () => {
     expect(isFieldValid("acquisition_channel", "SEO")).toBe(true);
     expect(isFieldValid("wow_moment", "One-tap export")).toBe(true);
   });
+  it("validateImportStrategy — no issues for six-required-only fixture", () => {
+    expect(validateImportStrategy(sixRequiredOnly)).toEqual([]);
+    expect(validateImportStrategy({
+      ...sixRequiredOnly, price_anchor: RECOMMEND_PLACEHOLDER, upgrade_trigger: RECOMMEND_PLACEHOLDER,
+    })).toEqual([]);
+  });
   it("validateImportStrategy reports missing / too-short / bad-placeholder / filler", () => {
     const issues = validateImportStrategy({
       ...full,
@@ -181,6 +263,17 @@ describe("field-level validation", () => {
     expect(map.acquisition_channel).toBe("filler");
     expect(map.paid_offer).toBe("filler");
   });
+  it("REGRESSION — validateImportStrategy never reports issues for blank optional monetization fields", () => {
+    const issues = validateImportStrategy({ ...sixRequiredOnly, price_anchor: "", upgrade_trigger: "" });
+    const map = Object.fromEntries(issues.map((i) => [i.field, i.reason]));
+    expect(map.price_anchor).toBeUndefined();
+    expect(map.upgrade_trigger).toBeUndefined();
+  });
+  it("still flags filler on optional monetization fields (blank OK; junk not OK)", () => {
+    const issues = validateImportStrategy({ ...sixRequiredOnly, price_anchor: "xxxx" });
+    const map = Object.fromEntries(issues.map((i) => [i.field, i.reason]));
+    expect(map.price_anchor).toBe("filler");
+  });
   it("isImportReady uses field validator (rejects 'x' and 'xxxx')", () => {
     expect(isImportReady({
       name: "App", description: "x", goals: ["code_audit"],
@@ -191,10 +284,4 @@ describe("field-level validation", () => {
       strategy: { ...full, buyer: "xxxx" },
     })).toBe(false);
   });
-  it("strategyCompleteness only counts valid fields, not filler", () => {
-    const badFew: Partial<typeof full> = { ...full, buyer: "xxxx", positioning: "asdf" };
-    expect(strategyCompleteness(badFew)).toEqual({ filled: 6, total: 8 });
-    expect(strategyCompleteness(full)).toEqual({ filled: 8, total: 8 });
-  });
 });
-

@@ -344,8 +344,11 @@ function DashboardPage() {
     positioning: impPositioning,
   };
   // Fast-import gate: only the three identity fields are required to CREATE
-  // the project. All eight strategy fields remain required before the A–Z
-  // audit itself can start (enforced in Audit Center UI + server gate).
+  // the project. Six required strategy fields (buyer, acquisition_channel,
+  // paid_offer, activation_moment, wow_moment, positioning) are required
+  // before the A–Z audit itself can start. Price anchor and upgrade trigger
+  // are optional owner decisions — blank stays blank; the board never
+  // invents monetization answers. (Enforced in Audit Center UI + server gate.)
   const importCoreReady = isImportCoreReady({
     name: impName,
     description: impDescription,
@@ -400,7 +403,7 @@ function DashboardPage() {
       });
       if (iErr) throw iErr;
       toast.success(
-        "Project opened. Fill in strategy context and link GitHub in the Audit Center — the full A–Z audit requires valid strategy context on all eight fields.",
+        "Project opened. Fill in strategy context and link GitHub in the Audit Center — the A–Z audit requires credible owner context on the six required strategy fields. Price and upgrade trigger are optional owner decisions.",
       );
 
       const newProjectId = proj.id;
@@ -591,15 +594,18 @@ function DashboardPage() {
           <details className="rounded-lg border border-border bg-surface-2/40 p-4">
             <summary className="cursor-pointer list-none">
               <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
-                Strategy context — optional here, required before the A–Z audit
+                Strategy context — 6 required + 2 optional owner decisions
               </span>
               <p className="mt-2 text-xs text-muted-foreground">
                 You can open the project now and fill these in from the Audit
-                Center. All eight fields are required before the expensive
-                A–Z audit itself can start. For price and upgrade trigger
-                you can tap
+                Center. Six required fields (buyer, acquisition channel, paid
+                offer, activation moment, wow moment, positioning) must carry
+                credible owner context before the A–Z audit runs. Price anchor
+                and upgrade trigger are optional owner monetization decisions —
+                leave them blank to defer, or tap
                 <span className="mx-1 font-mono text-foreground/80">Board should recommend</span>
-                if you'd rather have the board propose one.
+                if you'd rather have the board propose one. Blanks stay blank
+                and the board never invents a price or upgrade path.
               </p>
             </summary>
             <div className="mt-4 space-y-4">
