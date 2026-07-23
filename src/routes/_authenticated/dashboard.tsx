@@ -343,13 +343,16 @@ function DashboardPage() {
     wow_moment: impWow,
     positioning: impPositioning,
   };
-  const importMissingFields = missingImportFields(strategyValues);
-  const importReady = isImportReady({
+  // Fast-import gate: only the three identity fields are required to CREATE
+  // the project. All eight strategy fields remain required before the A–Z
+  // audit itself can start (enforced in Audit Center UI + server gate).
+  const importCoreReady = isImportCoreReady({
     name: impName,
     description: impDescription,
     goals: impGoals,
-    strategy: strategyValues,
   });
+  const importMissingStrategy = missingImportFields(strategyValues);
+
 
   async function createImport(e: React.FormEvent) {
     e.preventDefault();
