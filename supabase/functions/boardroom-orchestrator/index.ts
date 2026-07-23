@@ -46,11 +46,13 @@ import {
 import { BatchContextTooLarge, MarkdownCompactionImpossible, buildValidationRetryRequest } from "../_shared/batch-context.ts";
 import { tryCloseJsonTail, tryRecoverTrailingRedundantCloser } from "../_shared/audit-findings.ts";
 import {
-  finalizeChangeRequestAuthorityError,
-  finalizePlanAuthorityError,
+  absorbCorrectionStep,
+  type Artifact,
+  computeAuthorityViolationError,
+  enforceAuthorityOrCorrect,
+  findAwaitedCorrectionStep,
   loadOwnerAuthority,
-  preLockAuthorityError,
-} from "../_shared/owner-authority.ts";
+} from "../_shared/authority-correction.ts";
 
 
 
@@ -580,34 +582,44 @@ async function lockPlanAndQueueBlueprint(
     return;
   }
 
-  // Pre-lock owner-authority gate: independently load owner sources and run
-  // the high-impact validator over the exact artifacts we are about to lock.
-  // Chair/loop3 CANNOT override — a violation terminalizes the run before any
-  // downstream blueprint work is queued.
+  // Pre-lock owner-authority gate (R6 correction wrapper). Chair/loop3 CANNOT
+  // override — but a candidate that violates owner-authority is now sent
+  // through a bounded Chair authority-correction step (up to
+  // AUTHORITY_CORRECTION_MAX attempts) before the run is terminated. This is
+  // orthogonal to the 3-loop consensus protocol: dissent and loop_no are
+  // preserved verbatim on the run.
+  let authority: Awaited<ReturnType<typeof loadOwnerAuthority>>;
   try {
-    const authority = await loadOwnerAuthority(admin, {
+    authority = await loadOwnerAuthority(admin, {
       projectId: run.project_id,
       founderNotes: run.founder_notes ?? null,
     });
-    const preErr = preLockAuthorityError(
-      [{ label: `${planKind}.content_md (pending lock)`, text: contentMd }],
-      authority,
-    );
-    if (preErr) {
-      await failRun(admin, run, preErr);
+  } catch (e) {
+    await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
+    return;
+  }
+  const enforceRes = await enforceAuthorityOrCorrect({
+    admin,
+    run,
+    phase: "pre_lock_plan",
+    authority,
+    artifacts: [
+      { key: "content_md", label: `${planKind}.content_md (pending lock)`, text: contentMd },
+    ],
+    onTerminalFail: async (err) => {
+      await failRun(admin, run, err);
       await insertAlert(admin, {
         user_id: run.user_id,
         project_id: run.project_id,
         kind: "owner_authority_violation",
-        detail: { run_id: run.id, mode, phase: "pre_lock", excerpt: preErr.slice(0, 800) },
+        detail: { run_id: run.id, mode, phase: "pre_lock", excerpt: err.slice(0, 800) },
       });
-      return;
-    }
-  } catch (e) {
-    // Loader failure is safe-fail: block the lock, not the process.
-    await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
-    return;
-  }
+    },
+    restartMeta: { original_mode: mode },
+  });
+  if (enforceRes.status === "failed_terminal") return;
+  if (enforceRes.status === "pending") return;
+  contentMd = enforceRes.artifacts.find((a) => a.key === "content_md")!.text;
 
 
   // Atomically claim the lock transition: two concurrent ticks can both reach
@@ -709,32 +721,43 @@ async function finalizeBlueprint(admin: any, run: any, steps: any[]) {
     ? extract!.response_json.features
     : Array.isArray(bp?.response_json?.features) ? bp!.response_json.features : [];
 
-  // Pre-finalization owner-authority gate: the PRD markdown + features are
-  // generated AFTER lockPlanAndQueueBlueprint and would otherwise bypass the
-  // deterministic gate. Independently load owner sources and validate both
-  // artifacts. On violation: do NOT update plan_versions, do NOT mark the
-  // run completed. Fail with proposal_requires_owner_approval + alert.
-  // Chair-ruled and consensus flows are treated identically.
+  // Pre-finalization owner-authority gate (R6 correction wrapper). PRD + features
+  // are generated AFTER lockPlanAndQueueBlueprint; block the row update behind
+  // the correction path so a fixable violation does not discard the plan.
+  let prdOut = prdMd;
+  let featuresOut: any = features;
   if (planVersionId && (prdMd || (features && features.length))) {
+    let authority: Awaited<ReturnType<typeof loadOwnerAuthority>>;
     try {
-      const authority = await loadOwnerAuthority(admin, {
+      authority = await loadOwnerAuthority(admin, {
         projectId: run.project_id,
         founderNotes: run.founder_notes ?? null,
       });
-      const preErr = finalizePlanAuthorityError(prdMd, features, authority);
-      if (preErr) {
+    } catch (e) {
+      await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
+      return;
+    }
+    const enforceRes = await enforceAuthorityOrCorrect({
+      admin,
+      run,
+      phase: "pre_finalize_blueprint",
+      authority,
+      artifacts: [
+        { key: "prd_md", label: "plan.prd_md (pending finalization)", text: String(prdMd ?? "") },
+        { key: "features_json", label: "plan.features (pending finalization)", text: JSON.stringify(features ?? []) },
+      ],
+      onTerminalFail: async (err) => {
         // Invalidate the plan_versions row that was inserted upstream: PRD
-        // failed the owner-authority gate, so this plan must not be used
-        // as a build-safe input by later design/batches/compiler reads.
-        if (planVersionId) {
-          try {
-            await admin
-              .from("plan_versions")
-              .update({ is_build_safe: false, invalidated_reason: "owner_authority_prd_gate_failed" })
-              .eq("id", planVersionId);
-          } catch { /* best-effort */ }
-        }
-        await failRun(admin, run, preErr);
+        // failed the owner-authority gate after AUTHORITY_CORRECTION_MAX
+        // attempts, so this plan must not be used as a build-safe input by
+        // later design/batches/compiler reads.
+        try {
+          await admin
+            .from("plan_versions")
+            .update({ is_build_safe: false, invalidated_reason: "owner_authority_prd_gate_failed" })
+            .eq("id", planVersionId);
+        } catch { /* best-effort */ }
+        await failRun(admin, run, err);
         await insertAlert(admin, {
           user_id: run.user_id,
           project_id: run.project_id,
@@ -743,22 +766,22 @@ async function finalizeBlueprint(admin: any, run: any, steps: any[]) {
             run_id: run.id,
             mode: finalStatus,
             phase: "pre_finalize_blueprint",
-            excerpt: preErr.slice(0, 800),
+            excerpt: err.slice(0, 800),
           },
         });
-        return;
-      }
-    } catch (e) {
-      await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
-      return;
-    }
-
+      },
+    });
+    if (enforceRes.status === "failed_terminal") return;
+    if (enforceRes.status === "pending") return;
+    prdOut = enforceRes.artifacts.find((a) => a.key === "prd_md")!.text;
+    const featuresText = enforceRes.artifacts.find((a) => a.key === "features_json")!.text;
+    try { featuresOut = JSON.parse(featuresText); } catch { featuresOut = features; }
   }
 
-  if (planVersionId && prdMd) {
+  if (planVersionId && prdOut) {
     await admin
       .from("plan_versions")
-      .update({ prd_md: prdMd, features })
+      .update({ prd_md: prdOut, features: featuresOut })
       .eq("id", planVersionId);
   }
   await admin
@@ -783,11 +806,10 @@ async function finalizeChangeRequest(admin: any, run: any, steps: any[]) {
   const verdict = v.verdict === "approved" ? "approved" : "rejected";
   let newVersionId: string | null = null;
   if (verdict === "approved" && crId) {
-    // Pre-finalization owner-authority gate for change requests. Load the
-    // EXACT current change_requests.description as an explicit owner source
-    // scoped to THIS CR run only. A Chair cannot expand beyond the submitted
-    // change (e.g. tack on Stripe/DROP TABLE). On violation: insert NO plan
-    // version, do NOT mark the CR approved, fail clearly.
+    // Pre-finalization owner-authority gate (R6 correction wrapper) for
+    // change requests. Load the EXACT current change_requests.description as
+    // an explicit owner source scoped to THIS CR run only so the Chair cannot
+    // expand beyond the submitted change.
     let crDescription = "";
     try {
       const { data: crRow } = await admin
@@ -797,17 +819,31 @@ async function finalizeChangeRequest(admin: any, run: any, steps: any[]) {
         .maybeSingle();
       crDescription = String(crRow?.description ?? "");
     } catch { /* ignore — an empty CR description simply blocks any high-impact expansion */ }
+    let authority: Awaited<ReturnType<typeof loadOwnerAuthority>>;
     try {
-      const authority = await loadOwnerAuthority(admin, {
+      authority = await loadOwnerAuthority(admin, {
         projectId: run.project_id,
         founderNotes: run.founder_notes ?? null,
         extraFounderNotes: crDescription
           ? [{ source: `approved_change_request:${crId}`, text: crDescription }]
           : [],
       });
-      const preErr = finalizeChangeRequestAuthorityError(v, authority);
-      if (preErr) {
-        await failRun(admin, run, preErr);
+    } catch (e) {
+      await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
+      return;
+    }
+    const enforceRes = await enforceAuthorityOrCorrect({
+      admin,
+      run,
+      phase: "pre_finalize_change_request",
+      authority,
+      artifacts: [
+        { key: "amended_plan_md", label: "change_request.amended_plan_md (pending finalization)", text: String(v?.amended_plan_md ?? "") },
+        { key: "amended_prd_md", label: "change_request.amended_prd_md (pending finalization)", text: String(v?.amended_prd_md ?? "") },
+        { key: "amended_features_json", label: "change_request.amended_features (pending finalization)", text: JSON.stringify(v?.amended_features ?? []) },
+      ],
+      onTerminalFail: async (err) => {
+        await failRun(admin, run, err);
         await insertAlert(admin, {
           user_id: run.user_id,
           project_id: run.project_id,
@@ -816,15 +852,19 @@ async function finalizeChangeRequest(admin: any, run: any, steps: any[]) {
             run_id: run.id,
             change_request_id: crId,
             phase: "pre_finalize_change_request",
-            excerpt: preErr.slice(0, 800),
+            excerpt: err.slice(0, 800),
           },
         });
-        return;
-      }
-    } catch (e) {
-      await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
-      return;
-    }
+      },
+    });
+    if (enforceRes.status === "failed_terminal") return;
+    if (enforceRes.status === "pending") return;
+    const amendedPlan = enforceRes.artifacts.find((a) => a.key === "amended_plan_md")!.text;
+    const amendedPrd = enforceRes.artifacts.find((a) => a.key === "amended_prd_md")!.text;
+    const amendedFeaturesText = enforceRes.artifacts.find((a) => a.key === "amended_features_json")!.text;
+    let amendedFeatures: any[] = [];
+    try { const parsed = JSON.parse(amendedFeaturesText); if (Array.isArray(parsed)) amendedFeatures = parsed; }
+    catch { amendedFeatures = Array.isArray(v.amended_features) ? v.amended_features : []; }
 
     const { data: existing } = await admin
       .from("plan_versions")
@@ -842,9 +882,9 @@ async function finalizeChangeRequest(admin: any, run: any, steps: any[]) {
         user_id: run.user_id,
         kind: "plan",
         version: nextVersion,
-        content_md: String(v.amended_plan_md ?? ""),
-        prd_md: String(v.amended_prd_md ?? ""),
-        features: Array.isArray(v.amended_features) ? v.amended_features : [],
+        content_md: amendedPlan,
+        prd_md: amendedPrd,
+        features: amendedFeatures,
         decision_log: [{ change_request_id: crId, rationale: v.rationale ?? "" }],
         source_run_id: run.id,
       })
@@ -896,31 +936,49 @@ async function finalizeBatches(admin: any, run: any, batchesJson: any[]) {
     is_fix: false,
   }));
 
-  // Pre-promotion owner-authority gate: independently validate the complete
-  // batch set BEFORE any executable row is saved. Reviewer/reviser upstream
-  // signals are advisory; this is the deterministic last-line gate.
+  // Pre-promotion owner-authority gate (R6 correction wrapper): validate the
+  // complete batch set BEFORE any executable row is saved. A fixable violation
+  // now runs through a bounded Chair correction step before terminating.
+  let authority: Awaited<ReturnType<typeof loadOwnerAuthority>>;
   try {
-    const authority = await loadOwnerAuthority(admin, {
+    authority = await loadOwnerAuthority(admin, {
       projectId: run.project_id,
       founderNotes: run.founder_notes ?? null,
     });
-    const preErr = preLockAuthorityError(
-      rows.map((r) => ({ label: `batch[${r.batch_no}] "${r.title}".prompt_md`, text: r.prompt_md })),
-      authority,
-    );
-    if (preErr) {
-      await failRun(admin, run, preErr);
+  } catch (e) {
+    await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
+    return;
+  }
+  const artifacts: Artifact[] = rows.map((r) => ({
+    key: `batch_${r.batch_no}_prompt_md`,
+    label: `batch[${r.batch_no}] "${r.title}".prompt_md`,
+    text: r.prompt_md,
+  }));
+  const enforceRes = await enforceAuthorityOrCorrect({
+    admin,
+    run,
+    phase: "pre_promote_batches",
+    authority,
+    artifacts,
+    onTerminalFail: async (err) => {
+      await failRun(admin, run, err);
       await insertAlert(admin, {
         user_id: run.user_id,
         project_id: run.project_id,
         kind: "owner_authority_violation",
-        detail: { run_id: run.id, phase: "pre_promote_batches", excerpt: preErr.slice(0, 800) },
+        detail: { run_id: run.id, phase: "pre_promote_batches", excerpt: err.slice(0, 800) },
       });
-      return;
-    }
-  } catch (e) {
-    await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
-    return;
+    },
+    restartMeta: { pending_batches: batchesJson },
+  });
+  if (enforceRes.status === "failed_terminal") return;
+  if (enforceRes.status === "pending") return;
+  for (const a of enforceRes.artifacts) {
+    const m = /^batch_(\d+(?:\.\d+)?)_prompt_md$/.exec(a.key);
+    if (!m) continue;
+    const bno = Number(m[1]);
+    const r = rows.find((r) => r.batch_no === bno);
+    if (r) r.prompt_md = a.text;
   }
 
   const { error: insErr } = await admin.from("batches").insert(rows);
@@ -972,8 +1030,8 @@ async function insertModelAuthoredBatchOrAlert(
       projectId: audit.project_id,
       founderNotes: run?.founder_notes ?? null,
     });
-    const preErr = preLockAuthorityError(
-      [{ label: `fix_batch "${row.title}".prompt_md`, text: String(row.prompt_md ?? "") }],
+    const preErr = computeAuthorityViolationError(
+      [{ key: "prompt_md", label: `fix_batch "${row.title}".prompt_md`, text: String(row.prompt_md ?? "") }],
       authority,
     );
     if (preErr) {
@@ -1321,6 +1379,54 @@ async function afterStepComplete(admin: any, runIn: any) {
   if (steps.some((s: any) => s.status === "running")) {
     return;
   }
+
+  // OWNER-AUTHORITY-CORRECTION-R6: absorb a completed authority-correction
+  // step (if any) into run.consensus.authority_correction and re-drive the
+  // finalization function whose phase queued it. The re-entered finalize
+  // path will run enforceAuthorityOrCorrect again which overlays the newly
+  // corrected artifacts, revalidates, and either finalizes or queues the
+  // next attempt (or terminates at AUTHORITY_CORRECTION_MAX).
+  const awaited = findAwaitedCorrectionStep(run, steps);
+  if (awaited) {
+    if (awaited.status !== "completed") {
+      // Correction step in-flight or errored — nothing more to do here.
+      return;
+    }
+    const absorbed = await absorbCorrectionStep(admin, run, awaited);
+    if (!absorbed.ok) {
+      await failRun(admin, run, absorbed.error ?? "authority_correction_absorb_failed");
+      return;
+    }
+    const freshRun = await getRun(admin, run.id);
+    if (!freshRun) return;
+    const freshSteps = await loadAllSteps(admin, freshRun.id);
+    switch (absorbed.phase) {
+      case "pre_lock_plan":
+        await lockPlanAndQueueBlueprint(
+          admin,
+          freshRun,
+          freshSteps,
+          (freshRun.consensus?.authority_correction?.original_mode as any) ?? "consensus",
+        );
+        return;
+      case "pre_finalize_blueprint":
+        await finalizeBlueprint(admin, freshRun, freshSteps);
+        return;
+      case "pre_finalize_change_request":
+        await finalizeChangeRequest(admin, freshRun, freshSteps);
+        return;
+      case "pre_promote_batches": {
+        const cached = freshRun.consensus?.authority_correction?.pending_batches;
+        if (Array.isArray(cached) && cached.length) {
+          await finalizeBatches(admin, freshRun, cached);
+        }
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
 
   if (run.kind === "test") {
     await admin
