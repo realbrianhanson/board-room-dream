@@ -194,6 +194,7 @@ export function injectOwnerAuthority(
 export type UnauthorizedCategory =
   | "monetary_amount"
   | "payment_provider_or_checkout"
+  | "monetization_scope"
   | "new_external_integration"
   | "disable_or_retire_existing"
   | "destructive_sql"
@@ -212,7 +213,7 @@ export function normalize(s: string): string {
 // like `Do not add Stripe. Add Stripe checkout for $49.` (one line, two
 // sentences) still fires on the second sentence. Same for semicolon-
 // separated clauses: `Do not add Stripe; add Stripe checkout for $49.`
-const NEGATION_OR_PRESERVE = /\b(do\s+not|don['’]?t|never|avoid|reject|instead\s+of|keep\s+existing|preserve|preserving|already\s+exists|already\s+integrated|do not add|remove\s+the\s+dead|dead\s+import)\b/i;
+const NEGATION_OR_PRESERVE = /\b(do\s+not|don['’]?t|never|avoid|reject|instead\s+of|keep\s+existing|preserve|preserving|already\s+exists|already\s+integrated|do not add|remove\s+the\s+dead|dead\s+import|owner\s+decision\s+required)\b/i;
 
 // Category -> keyword vocabulary a marker quote must include to authorize
 // that category. Kept intentionally narrow: a "$49" quote cannot authorize
@@ -221,6 +222,9 @@ const CATEGORY_KEYWORDS: Record<UnauthorizedCategory, RegExp[]> = {
   monetary_amount: [/\d/, /\$|€|£|¥|usd|eur|gbp/i],
   payment_provider_or_checkout: [
     /stripe|paddle|paypal|lemon\s*squeezy|shopify|square|braintree|razorpay|payment|checkout|paywall|subscription|billing|charge|price|per[-\s]?seat/i,
+  ],
+  monetization_scope: [
+    /pricing|price|paid\s+(?:offer|tier|plan)|money\s+path|revenue\s+path|monetiz|upgrade\s+(?:trigger|condition)|subscription|paywall|billing|checkout|charge/i,
   ],
   new_external_integration: [
     /sendgrid|twilio|sentry|intercom|slack|openai|anthropic|resend|postmark|mailgun|segment|amplitude|posthog|mixpanel|pusher|algolia|cloudinary|s3|external|third[-\s]?party|integration|provider|api\s+key/i,
@@ -243,6 +247,15 @@ const HIGH_IMPACT: Array<{ category: UnauthorizedCategory; re: RegExp }> = [
     category: "payment_provider_or_checkout",
     // Expanded verbs: use/wire/connect/set up/migrate to.
     re: /\b(?:add|introduce|integrate|enable|adopt|switch\s+to|migrate\s+to|implement|launch(?:\s+with)?|charge\s+(?:via|through|with)?|create|build|require|configure|use|wire(?:\s+up)?|connect|set\s+up)\b[^.\n]{0,140}\b(?:stripe|paddle|paypal|lemon\s*squeezy|shopify|square|braintree|razorpay|payment\s+link|hosted\s+(?:checkout|payment)|checkout\s+session|billing\s+portal|paywall|subscription\s+billing|charge\s+customers?|per[-\s]?seat\s+pricing|price\s+per\s+\w+)\b/gi,
+  },
+  {
+    // Generic monetization/pricing scope — catches directives that commit
+    // the product to a paid offer, pricing surface, upgrade trigger, money
+    // path, subscription, paywall, billing, checkout, or "charge customers"
+    // even without naming a dollar amount or a specific payment provider.
+    // Owner must still authorize the concrete pricing/monetization decision.
+    category: "monetization_scope",
+    re: /\b(?:add|introduce|implement|create|build|launch|define|choose|set|publish|show|display|establish|require|enable|configure|use|wire(?:\s+up)?|connect|set\s+up|integrate|adopt)\b[^.\n;]{0,160}\b(?:pricing(?:\s+(?:cta|call[-\s]?to[-\s]?action|page|tier|plan|anchor|section))?|price\s+(?:anchor|point|tag)|paid\s+(?:offer|tier|plan|product)|(?:concrete\s+)?money\s+path|revenue\s+path|monetization|upgrade\s+(?:trigger|condition|cta|path|prompt)|subscription(?!\s+billing)|paywall|billing(?!\s+portal)|checkout(?!\s+session)|charge\s+customers?)\b/gi,
   },
   {
     category: "new_external_integration",
@@ -462,9 +475,32 @@ export function findUnauthorizedHighImpact(
 }
 
 function dedupe(items: Unauthorized[]): Unauthorized[] {
+  // First, drop monetization_scope entries whose snippet is already
+  // covered by a more specific category (e.g. payment_provider_or_checkout
+  // or monetary_amount) — the generic monetization rule is a safety net,
+  // not a duplicate finding.
+  const snippetsByCat = new Map<UnauthorizedCategory, Set<string>>();
+  for (const it of items) {
+    if (!snippetsByCat.has(it.category)) snippetsByCat.set(it.category, new Set());
+    snippetsByCat.get(it.category)!.add(normalize(it.snippet));
+  }
+  const specific = new Set<string>();
+  for (const cat of ["payment_provider_or_checkout", "monetary_amount"] as const) {
+    for (const s of snippetsByCat.get(cat) ?? []) specific.add(s);
+  }
+  const filtered = items.filter((it) => {
+    if (it.category !== "monetization_scope") return true;
+    const ns = normalize(it.snippet);
+    // Drop when the same or an overlapping snippet is already reported by
+    // a more specific category (payment provider or monetary amount).
+    for (const s of specific) {
+      if (s === ns || ns.includes(s) || s.includes(ns)) return false;
+    }
+    return true;
+  });
   const seen = new Set<string>();
   const out: Unauthorized[] = [];
-  for (const it of items) {
+  for (const it of filtered) {
     const key = `${it.category}::${normalize(it.snippet)}`;
     if (seen.has(key)) continue;
     seen.add(key);

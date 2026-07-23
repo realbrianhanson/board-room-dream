@@ -379,3 +379,18 @@ Deno.test("owner-authority: compiler blocks even if upstream claims 'reviewed'/'
   });
   assert(err && /OWNER AUTHORITY VIOLATION/.test(err), `Chair override must not defeat the gate, got: ${err}`);
 });
+
+Deno.test("owner-authority: compiler blocks the exact leaked landing-page monetization prompt as defense in depth (OA-V3-R5)", () => {
+  const p = baseValid();
+  p.compiled_prompt_md = validSupabaseSkeleton.replace(
+    "1. ALTER TABLE public.audit_findings ADD COLUMN reviewer text; keep existing columns intact.",
+    "1. In src/routes/index.tsx, add a clear upgrade trigger or pricing call-to-action on the landing page to establish a concrete money path.",
+  );
+  const err = batchAuthorityError(p, currentBatch, fileTree, {
+    source: "github",
+    schemaObjects,
+    authority: codeReviewIntake,
+  });
+  assert(err && /OWNER AUTHORITY VIOLATION/.test(err), `expected owner-authority violation, got: ${err}`);
+  assert(/monetization_scope|payment_provider_or_checkout/.test(err!), `expected monetization/payment category, got: ${err}`);
+});

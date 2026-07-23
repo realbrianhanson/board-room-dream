@@ -503,3 +503,111 @@ Deno.test("R1: 'Preserve X however integrate Sentry' fires on the second clause"
     `expected new_external_integration on the 'however' clause, got: ${JSON.stringify(issues)}`,
   );
 });
+
+// ==================== OA-V3-R5 monetization_scope regressions ====================
+// The generic monetization detector catches directives that commit the product
+// to a paid offer, pricing surface, upgrade trigger, money path, subscription,
+// paywall, billing, or checkout even without a dollar amount or a named
+// payment provider. Owner must still authorize the concrete decision.
+
+Deno.test("OA-V3-R5: exact leaked model directive is blocked without authorization", () => {
+  const a = auth([
+    { source: "intake", text: "please audit the code, review the design, and suggest improvements only." },
+  ]);
+  const leaked =
+    "In src/routes/index.tsx, add a clear upgrade trigger or pricing call-to-action on the landing page to establish a concrete money path.";
+  const err = ownerAuthorityError(leaked, a);
+  assert(err && /OWNER AUTHORITY VIOLATION/.test(err), `leaked prompt must be blocked, got: ${err}`);
+  assert(/monetization_scope/.test(err!), `expected monetization_scope, got: ${err}`);
+});
+
+Deno.test("OA-V3-R5: generic monetization directive variants are all blocked without authorization", () => {
+  const a = auth([{ source: "intake", text: "improvements only, no monetization scope." }]);
+  const cases = [
+    "Add a pricing CTA.",
+    "Establish a concrete money path.",
+    "Define the upgrade trigger.",
+    "Create a paid tier.",
+    "Introduce a subscription for pro features.",
+    "Build a paywall on the reports page.",
+    "Show a pricing page with three tiers.",
+  ];
+  for (const t of cases) {
+    const err = ownerAuthorityError(t, a);
+    assert(err && /monetization_scope|payment_provider_or_checkout/.test(err!), `expected monetization/payment for: ${t} — got: ${err}`);
+  }
+});
+
+Deno.test("OA-V3-R5: [OWNER DECISION REQUIRED: ...] placeholders remain allowed", () => {
+  const a = auth([{ source: "intake", text: "improvements only." }]);
+  const cases = [
+    "[OWNER DECISION REQUIRED: choose a price for the paid tier]",
+    "Add a note: [OWNER DECISION REQUIRED: define the upgrade trigger] — do not commit scope yet.",
+    "[OWNER DECISION REQUIRED: establish a concrete money path]",
+  ];
+  for (const t of cases) {
+    assertEquals(ownerAuthorityError(t, a), null, `owner-decision placeholder must not be blocked: ${t}`);
+  }
+});
+
+Deno.test("OA-V3-R5: proposal_requires_owner_approval label remains allowed", () => {
+  const a = auth([{ source: "intake", text: "improvements only." }]);
+  // The label itself asks for approval, it does not commit scope.
+  const t = "proposal_requires_owner_approval — pricing surface is out of scope until the owner decides.";
+  assertEquals(ownerAuthorityError(t, a), null);
+});
+
+Deno.test("OA-V3-R5: explicit 'do not add pricing' constraint remains allowed", () => {
+  const a = auth([]);
+  const cases = [
+    "Do not add pricing to the landing page.",
+    "Never introduce a paywall.",
+    "Do not add an upgrade trigger; leave monetization scope out.",
+  ];
+  for (const t of cases) {
+    assertEquals(ownerAuthorityError(t, a), null, `explicit negation must remain allowed: ${t}`);
+  }
+});
+
+Deno.test("OA-V3-R5: verbatim OWNER-AUTHORIZED marker whose quote references pricing DOES authorize", () => {
+  const a = auth([
+    { source: "intake", text: "I want a pricing page with a clear upgrade trigger and a paid tier on the landing page." },
+  ]);
+  const text =
+    'Add a pricing page with a clear upgrade trigger on the landing page. [OWNER-AUTHORIZED: source="intake" quote="I want a pricing page with a clear upgrade trigger and a paid tier on the landing page"]';
+  assertEquals(ownerAuthorityError(text, a), null);
+});
+
+Deno.test("OA-V3-R5: OWNER-AUTHORIZED marker whose quote does NOT reference pricing/monetization still fails", () => {
+  const a = auth([
+    { source: "intake", text: "please improve the dashboard layout and typography." },
+  ]);
+  const text =
+    'Add a pricing CTA on the landing page. [OWNER-AUTHORIZED: source="intake" quote="please improve the dashboard layout and typography"]';
+  const err = ownerAuthorityError(text, a);
+  assert(err && /monetization_scope/.test(err!), `mismatched-category marker must not authorize monetization: ${err}`);
+});
+
+// Boundary regression: the shared pre-lock gate that
+// insertModelAuthoredBatchOrAlert routes every model-authored fix batch
+// through (computeAuthorityViolationError -> preLockAuthorityError) MUST
+// reject the exact leaked prompt so no pending fix batch can ever be
+// inserted for it again.
+import { computeAuthorityViolationError } from "./authority-correction.ts";
+
+Deno.test("OA-V3-R5: insertModelAuthoredBatchOrAlert boundary — leaked fix-batch prompt is rejected by the shared pre-lock gate", () => {
+  const a = auth([
+    { source: "intake", text: "please audit the code, review the design, and suggest improvements only." },
+  ]);
+  const leakedFixBatchPromptMd =
+    "Fix batch — Landing page money path\n\n" +
+    "1. In src/routes/index.tsx, add a clear upgrade trigger or pricing call-to-action on the landing page to establish a concrete money path.\n" +
+    "2. Wire the CTA to a checkout route.\n";
+  const err = computeAuthorityViolationError(
+    [{ key: "prompt_md", label: 'fix_batch "Landing page money path".prompt_md', text: leakedFixBatchPromptMd }],
+    a,
+  );
+  assert(err, "shared pre-lock gate must reject the leaked prompt");
+  assert(/proposal_requires_owner_approval/.test(err!));
+  assert(/monetization_scope/.test(err!) || /payment_provider_or_checkout/.test(err!));
+});
