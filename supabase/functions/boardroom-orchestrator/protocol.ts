@@ -298,10 +298,25 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
 
 // Pure — pick the correction copy that matches the step's schema. Never send
 // batch-schema instructions to a reviewer / vote / audit / other step.
-export function correctionForStep(stepKey: string): string {
+export function correctionForStep(stepKey: string, opts?: { isImport?: boolean }): string {
   const key = String(stepKey ?? "");
   if (key === "batches_chair" || key === "batches_revise_chair") {
-    return "Your JSON was truncated. Return 3-8 batches — pick the smallest count that fully covers the locked plan without padding (greenfield builds usually want 6; small improvement plans for imports usually want 3-5). Each prompt_md 900-2,600 characters; total JSON <=24,000 characters. Preserve required coverage but remove repeated context. Do not silently pad to 6 to satisfy an old default.";
+    // BATCH-REVISE-LOW-REASONING-R1: mirror the ORIGINAL system contract's
+    // range so the correction never widens scope (live run 7bb72f5a said
+    // "3-8" here while the greenfield / import contract said 6-8 or 3-6).
+    // Import projects: 3-6 (smallest count that fully covers the locked
+    // improvement plan). Greenfield builds: 6-8 (prefer 6). When the caller
+    // does not know is_import, state both explicitly so no run is told a
+    // range wider than its actual contract.
+    let range: string;
+    if (opts?.isImport === true) {
+      range = "3-6 batches — pick the smallest count that fully covers the locked improvement plan without padding. For imports, NEVER pad to 6 to match a greenfield default.";
+    } else if (opts?.isImport === false) {
+      range = "6-8 batches (prefer 6) — the same range as the original contract. Merge overlapping concerns rather than adding another batch; only exceed 6 when a 7th or 8th is strictly required to keep any single batch below its size limit.";
+    } else {
+      range = "the same count range as the original system contract above (3-6 for imports, 6-8 for greenfield — prefer 6). Do NOT invent extra batches; pick the smallest count that fully covers the locked scope without padding.";
+    }
+    return `Your JSON was truncated. Return ${range} Each prompt_md 900-2,600 characters; total JSON <=24,000 characters. Preserve required coverage but remove repeated context and prose. Do not silently pad to 6 to satisfy an old default.`;
   }
   if (key === "batches_review_inspector" || key === "batches_review_contrarian") {
     return "Your review JSON was truncated. Return ONLY {verdict, issues}; max 8 issues; each issue.text 10-280 characters; total JSON <=4,500 characters. Preserve every blocking issue, merge duplicates, no prose.";
