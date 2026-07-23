@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { ArrowLeft, ArrowRight } from "lucide-react";
+import { canProceedFromIntakeStep } from "@/lib/intake-steps";
 
 export const Route = createFileRoute("/_authenticated/intake/$intakeId")({
   component: IntakePage,
@@ -102,27 +103,10 @@ const MONEY_OPTIONS = [
 const trimmed = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 
 function canProceedFromStep(kind: StepDef["kind"], a: Answers): boolean {
-  switch (kind) {
-    case "idea":
-      return trimmed(a.idea).length > 3 && trimmed(a.positioning).length > 1;
-    case "buyer":
-      return trimmed(a.buyer).length > 3 && trimmed(a.acquisition_channel).length > 1;
-    case "pain":
-      return trimmed(a.pain).length > 3;
-    case "money":
-      return (
-        !!a.money &&
-        trimmed(a.paid_offer).length > 2 &&
-        trimmed(a.price_anchor).length > 0 &&
-        trimmed(a.upgrade_trigger).length > 2
-      );
-    case "inspiration":
-      return (
-        trimmed(a.inspiration).length > 3 &&
-        trimmed(a.activation_moment).length > 1 &&
-        trimmed(a.wow_moment).length > 1
-      );
-  }
+  // Delegate to the pure shared helper so the raised minimum-length rule is
+  // exercised by intake-steps.test.ts and stays consistent between the
+  // wizard UI and any downstream server-side validation.
+  return canProceedFromIntakeStep(kind, a);
 }
 
 function IntakePage() {

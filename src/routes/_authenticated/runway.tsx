@@ -13,26 +13,31 @@ type Row = Project & { locked: boolean; batchCount: number };
 function RunwayIndex() {
   const navigate = useNavigate();
   const [rows, setRows] = useState<Row[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  useEffect(() => {
-    (async () => {
-      const { data: projects } = await supabase
-        .from("projects")
-        .select("id, name, status, created_at")
-        .order("created_at", { ascending: false });
-      const p = (projects ?? []) as Project[];
-      if (!p.length) { setRows([]); return; }
-      const ids = p.map((x) => x.id);
-      const [{ data: pvs }, { data: bs }] = await Promise.all([
-        supabase.from("plan_versions").select("project_id").eq("kind", "plan").eq("is_build_safe", true).in("project_id", ids),
-        supabase.from("batches").select("project_id").in("project_id", ids),
-      ]);
-      const locked = new Set((pvs ?? []).map((r: any) => r.project_id));
-      const counts = new Map<string, number>();
-      for (const b of bs ?? []) counts.set((b as any).project_id, (counts.get((b as any).project_id) ?? 0) + 1);
-      setRows(p.map((x) => ({ ...x, locked: locked.has(x.id), batchCount: counts.get(x.id) ?? 0 })));
-    })();
-  }, []);
+  const load = async () => {
+    setLoadError(null);
+    const { data: projects, error: pErr } = await supabase
+      .from("projects")
+      .select("id, name, status, created_at")
+      .order("created_at", { ascending: false });
+    if (pErr) { setLoadError(pErr.message); setRows(null); return; }
+    const p = (projects ?? []) as Project[];
+    if (!p.length) { setRows([]); return; }
+    const ids = p.map((x) => x.id);
+    const [pv, bs] = await Promise.all([
+      supabase.from("plan_versions").select("project_id").eq("kind", "plan").eq("is_build_safe", true).in("project_id", ids),
+      supabase.from("batches").select("project_id").in("project_id", ids),
+    ]);
+    if (pv.error) { setLoadError(pv.error.message); setRows(null); return; }
+    if (bs.error) { setLoadError(bs.error.message); setRows(null); return; }
+    const locked = new Set((pv.data ?? []).map((r: any) => r.project_id));
+    const counts = new Map<string, number>();
+    for (const b of bs.data ?? []) counts.set((b as any).project_id, (counts.get((b as any).project_id) ?? 0) + 1);
+    setRows(p.map((x) => ({ ...x, locked: locked.has(x.id), batchCount: counts.get(x.id) ?? 0 })));
+  };
+
+  useEffect(() => { void load(); }, []);
 
   return (
     <div className="mx-auto w-full max-w-4xl px-6 py-12 md:py-16">
@@ -43,7 +48,19 @@ function RunwayIndex() {
       </p>
 
       <div className="mt-10">
-        {rows === null ? (
+        {loadError ? (
+          <div role="alert" className="rounded-xl border border-destructive/40 bg-destructive/10 px-6 py-6 text-sm text-destructive">
+            <p className="font-medium">Couldn't load your Runway projects.</p>
+            <p className="mt-1 text-destructive/80">{loadError}</p>
+            <button
+              type="button"
+              onClick={() => { setRows(null); void load(); }}
+              className="mt-4 inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+            >
+              Retry
+            </button>
+          </div>
+        ) : rows === null ? (
           <div className="h-32 animate-pulse rounded-xl bg-surface-1" />
         ) : rows.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border bg-surface-1/40 px-8 py-16 text-center">

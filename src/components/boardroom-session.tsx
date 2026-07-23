@@ -154,35 +154,57 @@ export function BoardroomSession(props: BoardroomSessionProps) {
     return (data as SessionRun) ?? null;
   }, [projectId, kind, loadSteps, onRunLoaded, run]);
 
+
+
+
+
+
+  const loadProject = useCallback(async () => {
+    const { data: userData } = await supabase.auth.getUser();
+    const uid = userData.user?.id ?? null;
+
+    const { data: proj, error: pErr } = await supabase
+      .from("projects")
+      .select("id, name, status, user_id")
+      .eq("id", projectId)
+      .maybeSingle();
+    if (pErr) {
+      // Explicit project-load failure: surface via runError so the UI renders
+      // an accessible retry card instead of hanging on the skeleton or
+      // silently degrading to "preparing…". Preserve any last-good project
+      // on a background refresh failure.
+      setRunError(pErr.message);
+      setRunStale((prev) => (project ? true : prev));
+      return { proj: null as null, uid };
+    }
+    if (!proj) {
+      toast.error("Project not found");
+      setRunError("Project not found");
+      return { proj: null as null, uid };
+    }
+    setProject(proj);
+    setIsOwner(!readOnly && !!uid && uid === proj.user_id);
+    return { proj, uid };
+  }, [projectId, readOnly, project]);
+
   const retryLoad = useCallback(async () => {
     if (retrying) return;
     setRetrying(true);
     try {
-      await loadRun();
+      const { proj } = await loadProject();
+      if (proj) await loadRun();
     } finally {
       setRetrying(false);
     }
-  }, [loadRun, retrying]);
+  }, [loadRun, loadProject, retrying]);
 
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data: userData } = await supabase.auth.getUser();
-      const uid = userData.user?.id ?? null;
-
-      const { data: proj, error: pErr } = await supabase
-        .from("projects")
-        .select("id, name, status, user_id")
-        .eq("id", projectId)
-        .maybeSingle();
+      const { proj, uid } = await loadProject();
       if (cancelled) return;
-      if (pErr || !proj) {
-        toast.error("Project not found");
-        return;
-      }
-      setProject(proj);
-      setIsOwner(!readOnly && !!uid && uid === proj.user_id);
+      if (!proj) return;
 
       const { data: seatRows } = await supabase
         .from("model_registry_public")
@@ -201,7 +223,7 @@ export function BoardroomSession(props: BoardroomSessionProps) {
       await loadRun();
     })();
     return () => { cancelled = true; };
-  }, [projectId, loadRun]);
+  }, [projectId, loadRun, loadProject]);
 
   useEffect(() => {
     const runsChannel = supabase
@@ -334,8 +356,29 @@ export function BoardroomSession(props: BoardroomSessionProps) {
   }
 
   if (!project) {
+    if (runError) {
+      return (
+        <div
+          role="alert"
+          className="rounded-xl border border-destructive/40 bg-destructive/10 px-6 py-8 text-sm text-destructive"
+        >
+          <p className="font-medium">Couldn't load this project.</p>
+          <p className="mt-1 text-destructive/80">{runError}</p>
+          <button
+            type="button"
+            onClick={retryLoad}
+            disabled={retrying}
+            className="mt-4 inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20 disabled:opacity-60"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            {retrying ? "Retrying…" : "Retry"}
+          </button>
+        </div>
+      );
+    }
     return <div className="h-64 animate-pulse rounded-xl bg-surface-1" />;
   }
+
 
   const overBudget = run && Number(run.spent_usd) >= Number(run.budget_usd) * 0.8;
   const locked = run?.status === "consensus" || run?.status === "chair_ruled";

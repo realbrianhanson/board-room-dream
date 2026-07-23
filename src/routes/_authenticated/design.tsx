@@ -62,21 +62,43 @@ function DesignIndex() {
           <div className="grid gap-3">
             {projects.map((p) => {
               const ready = lockedIds.has(p.id);
-              return (
-                <Link
-                  key={p.id}
-                  to="/design/$projectId"
-                  params={{ projectId: p.id }}
-                  className="group flex items-center justify-between rounded-xl border border-border bg-surface-1 p-5 transition-colors hover:border-primary/40 hover:bg-surface-2"
-                >
+              const cardBase =
+                "group flex items-center justify-between rounded-xl border p-5 transition-colors";
+              const body = (
+                <>
                   <div>
                     <p className="font-display text-lg text-foreground">{p.name}</p>
                     <p className="mt-0.5 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
                       {ready ? "Plan locked · ready for the council" : "Plan not yet locked"}
                     </p>
+                    {!ready && (
+                      <p className="mt-2 text-xs text-muted-foreground/80">
+                        Lock a build-safe plan in the Boardroom before opening the design council.
+                      </p>
+                    )}
                   </div>
-                  <ArrowRight className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-primary" />
+                  <ArrowRight
+                    className={`h-4 w-4 transition-colors ${ready ? "text-muted-foreground group-hover:text-primary" : "text-muted-foreground/40"}`}
+                  />
+                </>
+              );
+              return ready ? (
+                <Link
+                  key={p.id}
+                  to="/design/$projectId"
+                  params={{ projectId: p.id }}
+                  className={`${cardBase} border-border bg-surface-1 hover:border-primary/40 hover:bg-surface-2`}
+                >
+                  {body}
                 </Link>
+              ) : (
+                <div
+                  key={p.id}
+                  aria-disabled="true"
+                  className={`${cardBase} cursor-not-allowed border-dashed border-border bg-surface-1/40 opacity-70`}
+                >
+                  {body}
+                </div>
               );
             })}
           </div>
