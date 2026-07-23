@@ -76,12 +76,18 @@ Deno.test("validateStepJson — batches_chair rejects 9 batches (above ceiling)"
 
 // -------- correctionForStep no longer forces six --------
 
-Deno.test("correctionForStep — batch generation copy no longer forces exactly six", () => {
+Deno.test("correctionForStep — batch generation copy is contract-consistent (imports 3-6, greenfield 6-8), no exactly-six mandate", () => {
   for (const k of ["batches_chair", "batches_revise_chair"]) {
-    const c = correctionForStep(k);
-    assertStringIncludes(c, "3-8 batches");
-    assertStringIncludes(c, "smallest count");
-    assert(!/exactly\s+6\s+batches/i.test(c), `must not require exactly six batches (got: ${c})`);
-    assert(!/exactly\s+six\s+batches/i.test(c), `must not require exactly six batches (got: ${c})`);
+    const cImport = correctionForStep(k, { isImport: true });
+    assertStringIncludes(cImport, "3-6 batches");
+    assertStringIncludes(cImport, "smallest count");
+    assert(!/\b3-8 batches\b/.test(cImport), `import copy must not offer 3-8 (got: ${cImport})`);
+    assert(!/exactly\s+6\s+batches/i.test(cImport), `must not require exactly six batches (got: ${cImport})`);
+    assert(!/exactly\s+six\s+batches/i.test(cImport), `must not require exactly six batches (got: ${cImport})`);
+
+    const cGreen = correctionForStep(k, { isImport: false });
+    assertStringIncludes(cGreen, "6-8 batches");
+    assert(!/\b3-8 batches\b/.test(cGreen), `greenfield copy must not offer 3-8 (got: ${cGreen})`);
+    assert(!/exactly\s+6\s+batches/i.test(cGreen), `must not require exactly six batches (got: ${cGreen})`);
   }
 });

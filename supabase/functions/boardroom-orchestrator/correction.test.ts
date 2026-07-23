@@ -3,13 +3,26 @@
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { correctionForStep, validateStepJson } from "./protocol.ts";
 
-Deno.test("correctionForStep — batch generation routes to batches copy (3-8, no exactly-six mandate)", () => {
+Deno.test("correctionForStep — batch generation routes to batches copy (contract-consistent range, no exactly-six mandate)", () => {
   for (const k of ["batches_chair", "batches_revise_chair"]) {
+    // Default (unknown isImport) mentions both ranges so no run is told a wider range than its contract.
     const c = correctionForStep(k);
-    assertStringIncludes(c, "3-8 batches");
+    assertStringIncludes(c, "3-6 for imports");
+    assertStringIncludes(c, "6-8 for greenfield");
     assertStringIncludes(c, "smallest count");
     assertStringIncludes(c, "<=24,000 characters");
+    assert(!/\b3-8 batches\b/.test(c), `must not tell the model a 3-8 range (got: ${c})`);
     assert(!/exactly\s+6\s+batches/i.test(c), `must not force exactly six (got: ${c})`);
+
+    // Import branch: exactly 3-6, no greenfield widening.
+    const ci = correctionForStep(k, { isImport: true });
+    assertStringIncludes(ci, "3-6 batches");
+    assert(!/\b6-8\b/.test(ci), `import correction must not mention 6-8 (got: ${ci})`);
+
+    // Greenfield branch: 6-8 (prefer 6), no 3-6 widening.
+    const cg = correctionForStep(k, { isImport: false });
+    assertStringIncludes(cg, "6-8 batches");
+    assert(!/\b3-6\b/.test(cg), `greenfield correction must not mention 3-6 (got: ${cg})`);
   }
 });
 

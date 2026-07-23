@@ -245,7 +245,7 @@ async function requeueForValidation(admin: any, run: any, step: any, baseMessage
       assistantContent,
       validationError,
       truncated,
-      correction: correctionForStep(step.step_key),
+      correction: correctionForStep(step.step_key, { isImport: step.request?._is_import === true ? true : step.request?._is_import === false ? false : undefined }),
     });
     return await requeueStepIfParentActive(
       admin,
