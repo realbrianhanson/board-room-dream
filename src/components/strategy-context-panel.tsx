@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { ChevronDown, ChevronUp, Check } from "lucide-react";
+import { ChevronDown, ChevronUp, Check, AlertTriangle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import {
   STRATEGY_FIELDS,
@@ -9,6 +9,7 @@ import {
   type ImportStrategyInput,
   type StrategyField,
 } from "@/lib/import-strategy";
+import { strategyPanelPhase } from "@/lib/strategy-panel-phase";
 
 type Props = { projectId: string; isOwner: boolean };
 
