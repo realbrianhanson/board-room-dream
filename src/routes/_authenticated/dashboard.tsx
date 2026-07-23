@@ -400,8 +400,9 @@ function DashboardPage() {
       });
       if (iErr) throw iErr;
       toast.success(
-        "Project imported. Link GitHub and run the A–Z audit next — add strategy context from the Audit Center anytime.",
+        "Project opened. Fill in strategy context and link GitHub in the Audit Center — the full A–Z audit requires valid strategy context on all eight fields.",
       );
+
       const newProjectId = proj.id;
       resetForms();
       await load();
