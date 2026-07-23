@@ -89,6 +89,6 @@ Deno.test("approved CR provenance still authorizes when routed as extraFounderNo
   const modelOutput = `Enable Stripe checkout for $49.\n[OWNER-AUTHORIZED: source="approved_change_request:cr-abc" quote="Add Stripe checkout for $49."]`;
   const markers = extractProvenanceMarkers(modelOutput, auth);
   assert(markers.some((m) => m.ok), "approved marker should validate");
-  const unauthorized = findUnauthorizedHighImpact(modelOutput, auth, markers);
+  const unauthorized = findUnauthorizedHighImpact(modelOutput, auth);
   assertEquals(unauthorized.length, 0, JSON.stringify(unauthorized));
 });
