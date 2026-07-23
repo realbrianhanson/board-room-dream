@@ -109,7 +109,7 @@ Deno.test("severity gate — DOES NOT cap when OWNER_CONTRACT marker is present 
 Deno.test("severity gate — DOES NOT cap when RUNTIME_FAILURE marker is present", () => {
   const ownerContract: AuditOwnerContract = { priceAnchorUnset: true, upgradeTriggerUnset: true };
   const evidence =
-    "RUNTIME_FAILURE: /api/checkout returned 500 in prod logs | " +
+    "IMPACT: build_failure | RUNTIME_FAILURE: /api/checkout returned 500 in prod logs | " +
     "QUOTE: throw new Error('unreachable') | WHY: checkout endpoint crashes on every call.";
   const { findings } = downgradeUnsupported(
     [baseFinding({ severity: "P0", evidence })],
