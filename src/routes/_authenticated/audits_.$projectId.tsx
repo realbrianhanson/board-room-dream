@@ -211,6 +211,23 @@ function AuditCenterPage() {
     else load();
   }
 
+  if (loadError) {
+    return (
+      <div className="mx-auto max-w-5xl px-6 py-14">
+        <div role="alert" className="rounded-xl border border-destructive/40 bg-destructive/10 px-6 py-6 text-sm text-destructive">
+          <p className="font-medium">Couldn't load the Audit Center.</p>
+          <p className="mt-1 break-words text-destructive/80">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => { setLoading(true); void load(); }}
+            className="mt-4 inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (loading) return <div className="mx-auto max-w-5xl px-6 py-14"><div className="h-32 animate-pulse rounded-xl bg-surface-1" /></div>;
 
   return (
