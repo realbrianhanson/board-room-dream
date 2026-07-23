@@ -11,6 +11,13 @@ import {
   Search,
 } from "lucide-react";
 import { Reveal } from "@/components/landing/reveal";
+import {
+  TranscriptRotator,
+  type TranscriptRun,
+} from "@/components/landing/transcript-rotator";
+import { StatsBand } from "@/components/landing/stats-band";
+import { EvidenceTimeline } from "@/components/landing/evidence-timeline";
+import { PromptCard } from "@/components/landing/prompt-card";
 
 export const Route = createFileRoute("/")({
   component: Landing,
@@ -53,6 +60,7 @@ const SEATS = [
     name: "Chair",
     Icon: Gavel,
     role: "Arbitrates the debate and can rule with dissent recorded on the run.",
+    chair: true,
   },
   {
     tag: "SEAT 02",
@@ -107,21 +115,109 @@ const CHAIN = [
   },
 ];
 
-const TRANSCRIPT: {
-  seat: "Chair" | "Strategist" | "Contrarian";
-  line: string;
-}[] = [
+const TRANSCRIPTS: TranscriptRun[] = [
   {
-    seat: "Strategist",
-    line: "Proposing batch 3: extract cohort join into a security-definer RPC. Additive migration, no data move.",
+    id: "run-0042",
+    header: "RUN 0042 · PLAN SESSION · DISSENT ON RECORD",
+    lines: [
+      {
+        seat: "Strategist",
+        line: "Proposing batch 3: extract cohort join into a security-definer RPC. Additive migration, no data move.",
+      },
+      {
+        seat: "Contrarian",
+        line: "Reject batch 3 as scoped — the migration drops profiles.role check. Evidence: supabase/migrations/20260714_join_cohort.sql:42.",
+      },
+      {
+        seat: "Chair",
+        line: "Contrarian sustained. Rewrite batch 3 to keep the role guard. Strategist to revise.",
+      },
+    ],
+    footerLeft: "CONSENSUS 3–1 · dissent recorded",
+    footerRight: "batch 3 · rewrite",
   },
   {
-    seat: "Contrarian",
-    line: 'Reject batch 3 as scoped — the migration drops profiles.role check. Evidence: supabase/migrations/20260714_join_cohort.sql:42.',
+    id: "run-0057",
+    header: "RUN 0057 · DESIGN SESSION · TOKENS LOCK",
+    lines: [
+      {
+        seat: "Strategist",
+        line: "Locking tokens: brass primary at 38 65% 55%, Fraunces display, Inter body. One accent, calm surfaces.",
+      },
+      {
+        seat: "Contrarian",
+        line: "Reject the second gradient token. It reads like generic SaaS. Evidence: src/styles.css:71 introduces --accent-2.",
+      },
+      {
+        seat: "Chair",
+        line: "Contrarian sustained. Drop --accent-2. Brass remains the only decorative accent. Tokens locked.",
+      },
+    ],
+    footerLeft: "CONSENSUS 3–1 · dissent recorded",
+    footerRight: "design · locked",
   },
   {
-    seat: "Chair",
-    line: "Contrarian sustained. Rewrite batch 3 to keep the role guard. Strategist to revise.",
+    id: "run-0063",
+    header: "RUN 0063 · AUDIT SESSION · RLS REVIEW",
+    lines: [
+      {
+        seat: "Inspector",
+        line: "Finding P1: cohorts SELECT policy uses instructor_id = auth.uid() but the join_cohort RPC bypasses it. Evidence: supabase/migrations/20260721_cohorts.sql:31.",
+      },
+      {
+        seat: "Contrarian",
+        line: "Concur. Add negative RLS test: unauth caller must fail. Do not weaken the assertion to make suite green.",
+      },
+      {
+        seat: "Chair",
+        line: "Ruling: P1 stands. Next batch adds pgTAP positive and negative cases before any policy edit.",
+      },
+    ],
+    footerLeft: "CONSENSUS 3–0 · P1 confirmed",
+    footerRight: "audit · fix-batch queued",
+  },
+];
+
+const STATS = [
+  { value: 4, label: "Seats per run" },
+  { value: 3, suffix: "–1", label: "Consensus rule" },
+  { value: 100, suffix: "%", label: "Dissent on record" },
+  { value: 0, label: "Prompts shipped uncompiled" },
+];
+
+const IMPL_PROMPT = [
+  "# Batch 4 · Cohort join RPC",
+  "touch: supabase/migrations/20260714_join_cohort.sql",
+  "touch: supabase/functions/_shared/cohort-join.ts",
+  "add:   security-definer join_cohort(code text)",
+  "keep:  profiles.role guard, RLS additive",
+  "Acceptance: pgTAP + negative RLS case pass.",
+];
+
+const VERIFY_PROMPT = [
+  "# Verification · Batch 4",
+  "invoke: rpc.join_cohort('PUSHTEN1') as authed user",
+  "expect: 200, cohort_id set on profiles row",
+  "invoke: same rpc unauthenticated",
+  "expect: 401 / permission denied",
+  "Acceptance: both cases logged and green.",
+];
+
+const CONTROLS = [
+  {
+    Icon: KeyRound,
+    title: "BYOK",
+    body: "Bring your own OpenRouter key. Stored encrypted server-side. We never route board calls without it, and never return it to the browser.",
+  },
+  {
+    Icon: Gauge,
+    title: "Spend caps",
+    body: "Per-run and per-day caps enforced server-side. Every board call is logged; a run that would breach the cap pauses before it spends.",
+  },
+  {
+    Icon: ShieldCheck,
+    title: "Owner-scoped data",
+    body: "Row-level security on every table. Instructors see only their cohort. Keys stay encrypted server-side and never reach the browser.",
   },
 ];
 
@@ -131,15 +227,21 @@ const TRANSCRIPT: {
 
 function Landing() {
   const [scrolled, setScrolled] = React.useState(false);
+  const [progress, setProgress] = React.useState(0);
+
   React.useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 8);
+    const onScroll = () => {
+      const y = window.scrollY;
+      setScrolled(y > 8);
+      const doc = document.documentElement;
+      const max = doc.scrollHeight - doc.clientHeight;
+      setProgress(max > 0 ? Math.min(1, y / max) : 0);
+    };
     onScroll();
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  // Landing-scoped smooth scrolling for in-page anchor links.
-  // Restored on unmount so authenticated routes aren't affected.
   React.useEffect(() => {
     const reduce = window.matchMedia?.(
       "(prefers-reduced-motion: reduce)",
@@ -155,21 +257,41 @@ function Landing() {
 
   return (
     <div className="relative min-h-dvh bg-background text-foreground">
-      {/* soft brass corner wash — the only decorative flourish */}
+      {/* dot-grid texture — very subtle */}
       <div
         aria-hidden
-        className="pointer-events-none fixed inset-0 -z-0 opacity-[0.05]"
+        className="pointer-events-none fixed inset-0 -z-10 opacity-[0.035]"
+        style={{
+          backgroundImage:
+            "radial-gradient(hsl(var(--foreground)) 1px, transparent 1px)",
+          backgroundSize: "22px 22px",
+        }}
+      />
+      {/* edge vignette */}
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-0 -z-10"
+        style={{
+          background:
+            "radial-gradient(ellipse at center, transparent 55%, hsl(var(--background)) 100%)",
+        }}
+      />
+      {/* corner brass wash */}
+      <div
+        aria-hidden
+        className="pointer-events-none fixed inset-0 -z-10 opacity-[0.05]"
         style={{
           backgroundImage:
             "radial-gradient(circle at 15% 10%, hsl(var(--primary)) 0, transparent 40%), radial-gradient(circle at 85% 90%, hsl(var(--primary)) 0, transparent 45%)",
         }}
       />
 
-      <SiteHeader scrolled={scrolled} />
+      <SiteHeader scrolled={scrolled} progress={progress} />
 
       <main className="relative z-10">
         <Hero />
         <BoardroomSection />
+        <StatsBand stats={STATS} />
         <EvidenceChain />
         <Deliverable />
         <ControlSecurity />
@@ -185,16 +307,28 @@ function Landing() {
 // Header
 // ---------------------------------------------------------------------------
 
-function SiteHeader({ scrolled }: { scrolled: boolean }) {
+function SiteHeader({
+  scrolled,
+  progress,
+}: {
+  scrolled: boolean;
+  progress: number;
+}) {
   return (
     <header
       className={
         "sticky top-0 z-40 backdrop-blur-md transition-colors " +
         (scrolled
-          ? "bg-background/85 border-b border-border"
+          ? "bg-background/85 border-b border-primary/20"
           : "bg-background/40 border-b border-transparent")
       }
     >
+      {/* scroll progress */}
+      <div
+        aria-hidden
+        className="absolute inset-x-0 top-0 h-[2px] origin-left bg-primary/80"
+        style={{ transform: `scaleX(${progress})` }}
+      />
       <nav
         aria-label="Primary"
         className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4 md:px-8"
@@ -238,6 +372,21 @@ function SiteHeader({ scrolled }: { scrolled: boolean }) {
 }
 
 // ---------------------------------------------------------------------------
+// Eyebrow — brass rule + mono label
+// ---------------------------------------------------------------------------
+
+function Eyebrow({ children }: { children: React.ReactNode }) {
+  return (
+    <Reveal as="div" className="flex items-center gap-3">
+      <span aria-hidden className="h-px w-8 bg-primary" />
+      <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+        {children}
+      </span>
+    </Reveal>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Hero
 // ---------------------------------------------------------------------------
 
@@ -246,7 +395,7 @@ function Hero() {
     <section
       id="top"
       aria-labelledby="hero-title"
-      className="relative mx-auto max-w-6xl scroll-mt-24 px-6 pb-20 pt-16 md:grid md:grid-cols-[1.15fr_1fr] md:gap-14 md:px-8 md:pb-28 md:pt-24"
+      className="relative mx-auto max-w-6xl scroll-mt-24 px-6 pb-20 pt-16 md:grid md:grid-cols-[1.1fr_1fr] md:gap-14 md:px-8 md:pb-28 md:pt-24"
     >
       <div className="max-w-2xl">
         <Reveal
@@ -260,10 +409,26 @@ function Hero() {
           as="h1"
           delay={80}
           id="hero-title"
-          className="font-display text-5xl leading-[1.04] text-foreground sm:text-5xl md:text-6xl lg:text-[4.75rem]"
+          className="font-display text-foreground"
+          style={{
+            fontSize: "clamp(2.5rem, 5vw + 1rem, 5.5rem)",
+            lineHeight: 1.04,
+            letterSpacing: "-0.01em",
+          }}
         >
           The{" "}
-          <span className="italic text-primary/95">quality layer</span>{" "}
+          <span
+            className="italic"
+            style={{
+              backgroundImage:
+                "linear-gradient(90deg, hsl(var(--primary)), hsl(38 78% 72%))",
+              WebkitBackgroundClip: "text",
+              backgroundClip: "text",
+              color: "transparent",
+            }}
+          >
+            quality layer
+          </span>{" "}
           between your idea and Lovable.
         </Reveal>
         <Reveal
@@ -308,38 +473,7 @@ function Hero() {
         aria-label="Sample Boardroom transcript"
         className="mt-14 md:mt-2"
       >
-        <div className="overflow-hidden rounded-xl border border-border bg-surface-1 shadow-2xl shadow-black/40">
-          <div className="flex items-center justify-between border-b border-border bg-surface-2 px-4 py-2.5">
-            <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
-              RUN 0042 · PLAN SESSION · DISSENT ON RECORD
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="h-1.5 w-1.5 rounded-full bg-primary" />
-              <span className="h-1.5 w-1.5 rounded-full bg-border" />
-              <span className="h-1.5 w-1.5 rounded-full bg-border" />
-            </span>
-          </div>
-          <ol className="divide-y divide-border">
-            {TRANSCRIPT.map((t, i) => (
-              <li key={i} className="flex gap-4 px-4 py-4">
-                <span className="w-24 shrink-0 font-mono text-[10px] uppercase tracking-[0.18em] text-primary/80">
-                  {t.seat}
-                </span>
-                <p className="text-sm leading-relaxed text-foreground/90">
-                  {t.line}
-                </p>
-              </li>
-            ))}
-          </ol>
-          <div className="flex items-center justify-between border-t border-border bg-surface-2 px-4 py-2.5">
-            <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">
-              CONSENSUS 3–1 · dissent recorded
-            </span>
-            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-              batch 3 · rewrite
-            </span>
-          </div>
-        </div>
+        <TranscriptRotator runs={TRANSCRIPTS} />
       </Reveal>
     </section>
   );
@@ -357,17 +491,12 @@ function BoardroomSection() {
       className="relative border-t border-border/60 bg-background/60 px-6 py-20 md:px-8 md:py-28"
     >
       <div className="mx-auto max-w-6xl">
-        <Reveal
-          as="p"
-          className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground"
-        >
-          The Boardroom
-        </Reveal>
+        <Eyebrow>The Boardroom</Eyebrow>
         <Reveal
           as="h2"
           delay={80}
           id="boardroom-title"
-          className="mt-3 max-w-2xl font-display text-3xl text-foreground md:text-4xl"
+          className="mt-3 max-w-2xl font-display text-4xl text-foreground md:text-5xl"
         >
           Four seats. Configured to disagree.
         </Reveal>
@@ -381,30 +510,47 @@ function BoardroomSection() {
           always kept on record.
         </Reveal>
 
-        <ul className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {SEATS.map((s, i) => (
-            <Reveal
-              as="li"
-              key={s.tag}
-              delay={i * 80}
-              className="group relative flex flex-col rounded-xl border border-border bg-surface-1 p-5 transition-colors hover:border-primary/40"
-            >
-              <div className="mb-6 flex items-center justify-between">
-                <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
-                  {s.tag}
-                </span>
-                <s.Icon
-                  className="h-4 w-4 text-primary/80 transition-colors group-hover:text-primary"
-                  aria-hidden
-                />
-              </div>
-              <h3 className="font-display text-xl text-foreground">{s.name}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                {s.role}
-              </p>
-            </Reveal>
-          ))}
-        </ul>
+        <div className="relative mt-14">
+          {/* horizontal brass line — seats-at-one-table */}
+          <span
+            aria-hidden
+            className="pointer-events-none absolute left-0 right-0 top-1/2 hidden h-px -translate-y-1/2 bg-primary/25 lg:block"
+          />
+          <ul className="relative grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {SEATS.map((s, i) => (
+              <Reveal
+                as="li"
+                key={s.tag}
+                delay={i * 80}
+                className="group relative flex flex-col rounded-xl border border-border bg-surface-1 p-5 transition-all duration-300 hover:-translate-y-1 hover:border-primary/60 hover:shadow-[0_10px_40px_-15px_hsl(var(--primary)/0.35)]"
+              >
+                {s.chair && (
+                  <span
+                    aria-hidden
+                    className="pointer-events-none absolute right-0 top-0 h-6 w-6"
+                    style={{
+                      background:
+                        "linear-gradient(225deg, hsl(var(--primary) / 0.55) 0%, transparent 60%)",
+                    }}
+                  />
+                )}
+                <div className="mb-6 flex items-center justify-between">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
+                    {s.tag}
+                  </span>
+                  <s.Icon
+                    className="h-4 w-4 text-primary/80 transition-all duration-300 group-hover:text-primary group-hover:drop-shadow-[0_0_8px_hsl(var(--primary)/0.7)]"
+                    aria-hidden
+                  />
+                </div>
+                <h3 className="font-display text-xl text-foreground">{s.name}</h3>
+                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                  {s.role}
+                </p>
+              </Reveal>
+            ))}
+          </ul>
+        </div>
       </div>
     </section>
   );
@@ -422,39 +568,17 @@ function EvidenceChain() {
       className="relative border-t border-border/60 px-6 py-20 md:px-8 md:py-28"
     >
       <div className="mx-auto max-w-4xl">
-        <Reveal
-          as="p"
-          className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground"
-        >
-          The evidence chain
-        </Reveal>
+        <Eyebrow>The evidence chain</Eyebrow>
         <Reveal
           as="h2"
           delay={80}
           id="chain-title"
-          className="mt-3 font-display text-3xl text-foreground md:text-4xl"
+          className="mt-3 font-display text-4xl text-foreground md:text-5xl"
         >
           Six steps from idea to a verified Lovable build sequence.
         </Reveal>
 
-        <ol className="relative mt-14 space-y-10 border-l border-border pl-8 md:pl-12">
-          {CHAIN.map((c, i) => (
-            <Reveal as="li" key={c.step} delay={i * 60} className="relative">
-              <span
-                aria-hidden
-                className="absolute -left-[41px] top-1 flex h-8 w-8 items-center justify-center rounded-full border border-primary/60 bg-background font-mono text-[10px] tracking-widest text-primary md:-left-[49px]"
-              >
-                {c.step}
-              </span>
-              <h3 className="font-display text-xl text-foreground md:text-2xl">
-                {c.label}
-              </h3>
-              <p className="mt-2 max-w-xl text-sm leading-relaxed text-muted-foreground md:text-base">
-                {c.note}
-              </p>
-            </Reveal>
-          ))}
-        </ol>
+        <EvidenceTimeline steps={CHAIN} />
       </div>
     </section>
   );
@@ -464,24 +588,6 @@ function EvidenceChain() {
 // The deliverable — two prompt cards
 // ---------------------------------------------------------------------------
 
-const IMPL_PROMPT = [
-  "# Batch 4 · Cohort join RPC",
-  "touch: supabase/migrations/20260714_join_cohort.sql",
-  "touch: supabase/functions/_shared/cohort-join.ts",
-  "add:   security-definer join_cohort(code text)",
-  "keep:  profiles.role guard, RLS additive",
-  "Acceptance: pgTAP + negative RLS case pass.",
-];
-
-const VERIFY_PROMPT = [
-  "# Verification · Batch 4",
-  "invoke: rpc.join_cohort('PUSHTEN1') as authed user",
-  "expect: 200, cohort_id set on profiles row",
-  "invoke: same rpc unauthenticated",
-  "expect: 401 / permission denied",
-  "Acceptance: both cases logged and green.",
-];
-
 function Deliverable() {
   return (
     <section
@@ -489,17 +595,12 @@ function Deliverable() {
       className="relative border-t border-border/60 bg-background/60 px-6 py-20 md:px-8 md:py-28"
     >
       <div className="mx-auto max-w-6xl">
-        <Reveal
-          as="p"
-          className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground"
-        >
-          The deliverable
-        </Reveal>
+        <Eyebrow>The deliverable</Eyebrow>
         <Reveal
           as="h2"
           delay={80}
           id="deliverable-title"
-          className="mt-3 max-w-3xl font-display text-3xl text-foreground md:text-4xl"
+          className="mt-3 max-w-3xl font-display text-4xl text-foreground md:text-5xl"
         >
           Two prompts per batch. Compiled just-in-time against your current
           code before Copy unlocks.
@@ -514,54 +615,9 @@ function Deliverable() {
   );
 }
 
-function PromptCard({ title, lines }: { title: string; lines: string[] }) {
-  return (
-    <Reveal
-      as="article"
-      className="overflow-hidden rounded-xl border border-border bg-surface-1"
-    >
-      <div className="flex items-center justify-between border-b border-border bg-surface-2 px-4 py-2.5">
-        <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
-          {title}
-        </span>
-        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-primary/80">
-          .md
-        </span>
-      </div>
-      <pre className="overflow-x-auto px-4 py-4 font-mono text-[12.5px] leading-relaxed text-foreground/90">
-        {lines.join("\n")}
-      </pre>
-      <div className="border-t border-border bg-surface-2 px-4 py-2.5">
-        <span className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-          <span className="h-1.5 w-1.5 rounded-full bg-primary" />
-          Compiled against HEAD a1b2c3d
-        </span>
-      </div>
-    </Reveal>
-  );
-}
-
 // ---------------------------------------------------------------------------
-// Control & security
+// Control & security — compressed horizontal band
 // ---------------------------------------------------------------------------
-
-const CONTROLS = [
-  {
-    Icon: KeyRound,
-    title: "BYOK",
-    body: "Bring your own OpenRouter key. Stored encrypted server-side. We never route board calls without it, and never return it to the browser.",
-  },
-  {
-    Icon: Gauge,
-    title: "Spend caps",
-    body: "Per-run and per-day caps enforced server-side. Every board call is logged; a run that would breach the cap pauses before it spends.",
-  },
-  {
-    Icon: ShieldCheck,
-    title: "Owner-scoped data",
-    body: "Row-level security on every table. Instructors see only their cohort. Keys stay encrypted server-side and never reach the browser.",
-  },
-];
 
 function ControlSecurity() {
   return (
@@ -571,28 +627,27 @@ function ControlSecurity() {
       className="relative border-t border-border/60 px-6 py-20 md:px-8 md:py-28"
     >
       <div className="mx-auto max-w-6xl">
-        <Reveal
-          as="p"
-          className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground"
-        >
-          Control & security
-        </Reveal>
+        <Eyebrow>Control & security</Eyebrow>
         <Reveal
           as="h2"
           delay={80}
           id="security-title"
-          className="mt-3 max-w-2xl font-display text-3xl text-foreground md:text-4xl"
+          className="mt-3 max-w-2xl font-display text-4xl text-foreground md:text-5xl"
         >
           Your keys. Your data. Your cap.
         </Reveal>
 
-        <div className="mt-12 grid gap-4 md:grid-cols-3">
+        <div className="mt-12 grid grid-cols-1 gap-8 rounded-xl border border-border bg-surface-1/60 p-8 md:grid-cols-3 md:gap-0 md:p-10">
           {CONTROLS.map((c, i) => (
             <Reveal
               as="div"
               key={c.title}
               delay={i * 80}
-              className="rounded-xl border border-border bg-surface-1 p-6"
+              className={
+                "flex flex-col " +
+                (i > 0 ? "md:border-l md:border-border/60 md:pl-8 " : "") +
+                (i < CONTROLS.length - 1 ? "md:pr-8 " : "")
+              }
             >
               <div className="mb-3 flex items-center gap-2">
                 <c.Icon className="h-4 w-4 text-primary" aria-hidden />
@@ -619,24 +674,54 @@ function FinalCta() {
   return (
     <section
       aria-labelledby="final-cta-title"
-      className="relative border-t border-border/60 bg-surface-1 px-6 py-24 md:px-8 md:py-32"
+      className="relative overflow-hidden border-t border-border/60 bg-surface-1 px-6 py-24 md:px-8 md:py-32"
     >
-      <div className="mx-auto flex max-w-4xl flex-col items-center text-center">
+      {/* dot-grid */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 opacity-[0.04]"
+        style={{
+          backgroundImage:
+            "radial-gradient(hsl(var(--foreground)) 1px, transparent 1px)",
+          backgroundSize: "22px 22px",
+        }}
+      />
+      {/* centered brass glow */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(ellipse at center, hsl(var(--primary) / 0.16) 0%, transparent 55%)",
+        }}
+      />
+      <div className="relative mx-auto flex max-w-4xl flex-col items-center text-center">
         <Reveal
           as="h2"
           id="final-cta-title"
           className="max-w-3xl font-display text-4xl leading-[1.05] text-foreground md:text-6xl"
         >
           Bring the board to your{" "}
-          <span className="italic text-primary/95">next build.</span>
+          <span
+            className="italic"
+            style={{
+              backgroundImage:
+                "linear-gradient(90deg, hsl(var(--primary)), hsl(38 78% 72%))",
+              WebkitBackgroundClip: "text",
+              backgroundClip: "text",
+              color: "transparent",
+            }}
+          >
+            next build.
+          </span>
         </Reveal>
         <Reveal as="div" delay={120} className="mt-10">
           <Link
             to="/auth"
-            className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-6 py-3 text-sm font-medium text-primary-foreground shadow-lg shadow-black/30 transition-all hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            className="group inline-flex items-center justify-center gap-2 rounded-md bg-primary px-8 py-4 text-base font-medium text-primary-foreground shadow-lg shadow-black/40 transition-all hover:brightness-110 hover:shadow-[0_0_40px_hsl(var(--primary)/0.4)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           >
             Start with an idea or import your app
-            <ArrowRight className="h-4 w-4" />
+            <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
           </Link>
           <p className="mt-3 font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
             Private beta · create an account or sign in
