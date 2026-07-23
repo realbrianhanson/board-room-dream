@@ -81,15 +81,15 @@ function nextActionLabel(p: Project): string {
 
 const STATUS_COLOR: Record<string, string> = {
   intake: "hsl(40 10% 62%)",
-  validated: "hsl(38 65% 55%)",
-  boardroom: "hsl(38 65% 55%)",
-  locked: "hsl(38 65% 55%)",
-  building: "hsl(205 60% 55%)",
-  auditing: "hsl(160 45% 48%)",
-  polishing: "hsl(38 65% 55%)",
-  done: "hsl(160 45% 48%)",
-  killed: "hsl(8 60% 55%)",
-  imported: "hsl(38 65% 55%)",
+  validated: "hsl(var(--primary))",
+  boardroom: "hsl(var(--primary))",
+  locked: "hsl(var(--primary))",
+  building: "hsl(var(--info))",
+  auditing: "hsl(var(--success))",
+  polishing: "hsl(var(--primary))",
+  done: "hsl(var(--success))",
+  killed: "hsl(var(--destructive))",
+  imported: "hsl(var(--primary))",
 };
 
 const STATUS_FILL: Record<string, number> = {

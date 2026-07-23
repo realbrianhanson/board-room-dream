@@ -246,7 +246,7 @@ export const StrategyContextPanel = forwardRef<StrategyPanelHandle, Props>(funct
           <span
             className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${
               validity.valid
-                ? "border-[hsl(160_45%_48%/0.4)] bg-[hsl(160_45%_28%/0.15)] text-[hsl(160_45%_72%)]"
+                ? "border-success/40 bg-success/15 text-success"
                 : "border-border bg-surface-2 text-muted-foreground"
             }`}
           >

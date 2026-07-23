@@ -92,10 +92,10 @@ type AlertRow = {
 };
 
 const KIND_LABEL: Record<AlertRow["kind"], { title: string; icon: any; tone: string }> = {
-  stuck_48h: { title: "No activity in 48h", icon: Clock, tone: "text-[hsl(38_65%_55%)]" },
-  audit_loop: { title: "Audit loop — needs human eyes", icon: AlertTriangle, tone: "text-[hsl(8_60%_55%)]" },
-  spend_cap: { title: "Spend cap hit — run paused", tone: "text-[hsl(8_60%_55%)]", icon: DollarSign },
-  never_locked: { title: "Idea never made it out of the boardroom", tone: "text-[hsl(38_65%_55%)]", icon: Bell },
+  stuck_48h: { title: "No activity in 48h", icon: Clock, tone: "text-primary" },
+  audit_loop: { title: "Audit loop — needs human eyes", icon: AlertTriangle, tone: "text-destructive" },
+  spend_cap: { title: "Spend cap hit — run paused", tone: "text-destructive", icon: DollarSign },
+  never_locked: { title: "Idea never made it out of the boardroom", tone: "text-primary", icon: Bell },
 };
 
 function alertLine(a: AlertRow): string {
@@ -394,7 +394,7 @@ function CohortPage() {
           <div className="rounded-xl border border-border/40 bg-surface-1 p-6 text-sm text-muted-foreground">Scanning…</div>
         ) : alerts.length === 0 ? (
           <div className="flex items-center gap-3 rounded-xl border border-border/40 bg-surface-1 p-6 text-sm text-muted-foreground">
-            <CheckCircle2 className="h-4 w-4 text-[hsl(160_45%_48%)]" />
+            <CheckCircle2 className="h-4 w-4 text-success" />
             Nobody is stuck. The board is calm.
           </div>
         ) : (
@@ -492,7 +492,7 @@ function CohortPage() {
                     </td>
                     <td className="px-4 py-3">
                       {m.open_alerts ? (
-                        <span className="rounded-full border border-[hsl(8_60%_55%)]/40 bg-[hsl(8_60%_55%)]/10 px-2 py-0.5 font-mono text-[10px] text-[hsl(8_60%_55%)]">
+                        <span className="rounded-full border border-destructive/40 bg-destructive/10 px-2 py-0.5 font-mono text-[10px] text-destructive">
                           {m.open_alerts} open
                         </span>
                       ) : (
@@ -527,7 +527,7 @@ function StatTile({ label, value, hint, tone = "default" }: { label: string; val
   return (
     <div className="rounded-xl border border-border/40 bg-surface-1 p-4">
       <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">{label}</p>
-      <p className={`mt-1 font-display text-2xl ${tone === "warn" ? "text-[hsl(38_65%_55%)]" : "text-foreground"}`}>{value}</p>
+      <p className={`mt-1 font-display text-2xl ${tone === "warn" ? "text-primary" : "text-foreground"}`}>{value}</p>
       {hint && <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">{hint}</p>}
     </div>
   );
