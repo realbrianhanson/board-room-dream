@@ -165,13 +165,18 @@ export function batchAuthorityError(
     if (!/^\s*Verify\s+Batch\s+\d+\s+after\s+implementation\.\s+Do\s+not\s+change\s+product\s+scope\./i.test(vp)) {
       return `compiled_verification_prompt_md must start with "Verify Batch N after implementation. Do not change product scope."`;
     }
-    // Tool routing: lovable → browser test; supabase → direct edge/RPC + Deno test.
+    // Tool routing: lovable → browser test; supabase → layer-aware (db/edge/mixed).
     if (batch.channel === "lovable" && !/browser\s+test|user\s+flow|click/i.test(vp)) {
       return `lovable verification prompt must invoke Lovable's browser testing / user flow verification.`;
     }
-    if (batch.channel === "supabase" && !/(edge\s+function|rpc|deno\s+test|edge-function\s+verification)/i.test(vp)) {
-      return `supabase verification prompt must invoke direct edge-function/RPC calls and Deno tests.`;
+    if (batch.channel === "supabase") {
+      const layer = classifyBatchLayer(p.compiled_prompt_md, p.touched_paths);
+      const scopeErr = verificationScopeError(vp, layer);
+      if (scopeErr) return scopeErr;
     }
+    // Never-weaken invariant — applies to every code channel.
+    const weakErr = verificationWeakeningError(vp);
+    if (weakErr) return weakErr;
   } else {
     // human channel — must not carry a verification prompt.
     if (vp && vp.trim()) {
