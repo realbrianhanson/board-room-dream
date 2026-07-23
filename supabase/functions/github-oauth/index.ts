@@ -1,6 +1,12 @@
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { encryptSecret } from "../_shared/crypto.ts";
+import {
+  decodeStateEnvelope,
+  encodeStatePayload,
+  isAllowedOrigin,
+  normalizeOrigin,
+} from "./origin.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -50,9 +56,9 @@ async function hmac(msg: string): Promise<string> {
   return b64url(new Uint8Array(sig));
 }
 
-async function makeState(userId: string): Promise<string> {
+async function makeState(userId: string, origin: string): Promise<string> {
   const ts = Date.now().toString();
-  const payload = `${userId}|${ts}`;
+  const payload = encodeStatePayload(userId, ts, origin);
   const sig = await hmac(payload);
   return b64url(new TextEncoder().encode(`${payload}|${sig}`));
 }
@@ -60,26 +66,49 @@ async function makeState(userId: string): Promise<string> {
 async function verifyState(
   state: string,
   userId: string,
-): Promise<{ ok: boolean; reason?: string; ageSec?: number }> {
+): Promise<
+  | { ok: true; origin: string; ageSec: number }
+  | { ok: false; reason: string; ageSec?: number }
+> {
   try {
     const decoded = new TextDecoder().decode(b64urlDecode(state));
-    const parts = decoded.split("|");
-    if (parts.length !== 3) return { ok: false, reason: "parts" };
-    const [uid, ts, sig] = parts;
-    if (uid !== userId) return { ok: false, reason: "uid_mismatch" };
-    const ageMs = Date.now() - parseInt(ts, 10);
+    const env = decodeStateEnvelope(decoded);
+    if (!env) return { ok: false, reason: "shape" };
+    if (env.uid !== userId) return { ok: false, reason: "uid_mismatch" };
+    const ageMs = Date.now() - parseInt(env.ts, 10);
     const ageSec = Math.round(ageMs / 1000);
     if (!isFinite(ageMs) || ageMs < 0 || ageMs > 10 * 60 * 1000) {
       return { ok: false, reason: "age", ageSec };
     }
-    const expected = await hmac(`${uid}|${ts}`);
-    if (expected.length !== sig.length) return { ok: false, reason: "sig_len", ageSec };
+    const expected = await hmac(env.payload);
+    if (expected.length !== env.sig.length) return { ok: false, reason: "sig_len", ageSec };
     let diff = 0;
-    for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ sig.charCodeAt(i);
-    return diff === 0 ? { ok: true, ageSec } : { ok: false, reason: "sig_mismatch", ageSec };
+    for (let i = 0; i < expected.length; i++) {
+      diff |= expected.charCodeAt(i) ^ env.sig.charCodeAt(i);
+    }
+    if (diff !== 0) return { ok: false, reason: "sig_mismatch", ageSec };
+    // Origin only returned after HMAC/user/age validation succeeds.
+    const norm = normalizeOrigin(env.origin);
+    if (!norm) return { ok: false, reason: "origin_shape", ageSec };
+    return { ok: true, origin: norm, ageSec };
   } catch (e) {
     return { ok: false, reason: `parse_error:${(e as Error).message}` };
   }
+}
+
+async function loadAllowedOrigins(admin: any): Promise<string[] | null> {
+  const { data, error } = await admin
+    .from("app_settings")
+    .select("value")
+    .eq("key", "allowed_oauth_origins")
+    .maybeSingle();
+  if (error) {
+    console.error(`[github-oauth] allowed_oauth_origins read failed: ${error.message}`);
+    return null;
+  }
+  const raw = (data?.value as any)?.origins;
+  if (!Array.isArray(raw)) return null;
+  return raw.filter((x): x is string => typeof x === "string");
 }
 
 Deno.serve(async (req) => {
@@ -132,14 +161,18 @@ Deno.serve(async (req) => {
     }
 
     if (action === "start") {
-      const origin: string = String(body?.origin ?? "").replace(/\/$/, "");
-      console.log(`[github-oauth] start origin=${origin}`);
-      if (!origin || !/^https?:\/\//.test(origin)) {
-        console.error(`[github-oauth] start invalid_origin=${origin}`);
-        return j(400, { error: "Invalid origin" });
+      const allowed = await loadAllowedOrigins(admin);
+      if (!allowed || allowed.length === 0) {
+        console.error("[github-oauth] start: allowed_oauth_origins missing/empty");
+        return j(400, { error: "OAuth origin not allowed" });
       }
-      const state = await makeState(userId);
-      const redirect_uri = `${origin}/auth/github/callback`;
+      const verifiedOrigin = isAllowedOrigin(body?.origin, allowed);
+      if (!verifiedOrigin) {
+        console.error("[github-oauth] start: origin not allowed");
+        return j(400, { error: "OAuth origin not allowed" });
+      }
+      const state = await makeState(userId, verifiedOrigin);
+      const redirect_uri = `${verifiedOrigin}/auth/github/callback`;
       console.log(`[github-oauth] start redirect_uri=${redirect_uri}`);
       const url = new URL("https://github.com/login/oauth/authorize");
       url.searchParams.set("client_id", GITHUB_CLIENT_ID);
@@ -166,6 +199,13 @@ Deno.serve(async (req) => {
         );
         return j(400, { error: "Invalid or expired state" });
       }
+      // Re-check allow-list at callback time in case config changed mid-flow.
+      const allowed = await loadAllowedOrigins(admin);
+      if (!isAllowedOrigin(stateResult.origin, allowed ?? [])) {
+        console.error("[github-oauth] callback: state origin no longer allowed");
+        return j(400, { error: "OAuth origin not allowed" });
+      }
+      const redirect_uri = `${stateResult.origin}/auth/github/callback`;
 
       const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
         method: "POST",
@@ -174,19 +214,19 @@ Deno.serve(async (req) => {
           client_id: GITHUB_CLIENT_ID,
           client_secret: GITHUB_CLIENT_SECRET,
           code,
+          redirect_uri,
         }),
       });
       console.log(`[github-oauth] callback token exchange http_status=${tokenRes.status}`);
       if (!tokenRes.ok) {
-        const errText = await tokenRes.text().catch(() => "");
-        console.error(`[github-oauth] callback token exchange non-2xx body=${errText}`);
+        console.error(`[github-oauth] callback token exchange non-2xx`);
         return j(502, { error: "GitHub token exchange failed" });
       }
       const tokenJson: any = await tokenRes.json();
       const accessToken: string | undefined = tokenJson?.access_token;
       if (!accessToken) {
         console.error(
-          `[github-oauth] callback no access_token; github response=${JSON.stringify(tokenJson)}`,
+          `[github-oauth] callback no access_token; error_code=${tokenJson?.error ?? "n/a"}`,
         );
         return j(400, { error: tokenJson?.error_description ?? "No access token" });
       }
