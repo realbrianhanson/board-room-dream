@@ -644,9 +644,12 @@ function TheTable({
           const t1 = center + segLen / 2;
           const x0 = cx + ringRx * Math.cos(t0), y0 = cy + ringRy * Math.sin(t0);
           const x1 = cx + ringRx * Math.cos(t1), y1 = cy + ringRy * Math.sin(t1);
+          // Consensus ring segments: brass is progress (primary token),
+          // failure is destructive (semantic token). Chair-ruled uses a
+          // muted brass to distinguish it from clean consensus.
           const stroke = seg === "brass"
-            ? (chairRuled ? "hsl(38 45% 45%)" : "hsl(38 65% 55%)")
-            : "hsl(8 60% 55%)";
+            ? (chairRuled ? "hsl(38 45% 45%)" : "hsl(var(--primary))")
+            : "hsl(var(--destructive))";
           return (
             <path
               key={i}
@@ -838,7 +841,7 @@ function TranscriptCard({
   const roundLabel = stepRoundLabel(step);
   const failed = step.status === "failed";
   return (
-    <div className={`transcript-enter rounded-xl border bg-surface-1 p-5 ${failed ? "border-l-2 border-l-[hsl(8_60%_55%)] border-border" : "border-border"}`}>
+    <div className={`transcript-enter rounded-xl border bg-surface-1 p-5 ${failed ? "border-l-2 border-l-destructive border-border" : "border-border"}`}>
       <div className="flex items-center gap-3">
         <div className="grid h-8 w-8 place-items-center rounded-full"
           style={{ background: `hsl(${meta.hue} / 0.12)`, border: `1px solid hsl(${meta.hue} / 0.35)`, color: `hsl(${meta.hue})` }}>
