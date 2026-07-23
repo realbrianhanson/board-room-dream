@@ -673,7 +673,27 @@ export function reconcileAuditSummaryText(
     return text.toLowerCase().includes(t.toLowerCase());
   });
   const forbiddenHit = forbiddenPatterns.some((rx) => rx.test(text));
-  if (rejectedHit || forbiddenHit) {
+  // R7 — count-claim reconciliation. A model-authored sentence like
+  // "Three P1 issues" or "2 P0 blockers" must NOT be persisted when the
+  // named number contradicts the validated post-downgrade counts. This
+  // catches the class where a narrative survives forbidden-word filters
+  // because the class is nonzero but the stated count is wrong.
+  const numberWords: Record<string, number> = {
+    one: 1, two: 2, three: 3, four: 4, five: 5,
+    six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  };
+  const countMismatch = (() => {
+    const rx = /\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+P([0-3])\b/gi;
+    let m: RegExpExecArray | null;
+    while ((m = rx.exec(text)) !== null) {
+      const raw = m[1].toLowerCase();
+      const claimed = /^\d+$/.test(raw) ? parseInt(raw, 10) : (numberWords[raw] ?? -1);
+      const sev = `P${m[2]}` as keyof AuditCounts;
+      if (claimed >= 0 && claimed !== counts[sev]) return true;
+    }
+    return false;
+  })();
+  if (rejectedHit || forbiddenHit || countMismatch) {
     // Refuse to persist the stale narrative — counts sentence alone.
     return countsSentence.slice(0, CAPS.mergeSummaryMax);
   }
