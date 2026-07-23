@@ -33,7 +33,7 @@ type Audit = {
   summary: {
     counts?: Record<string, number>;
     text?: string;
-    validation_downgrades?: Array<{ title: string; file_path: string | null; from: string; to: string; reason: string }>;
+    validation_downgrades?: Array<{ title: string; file_path: string | null; from: string; to: string; reason: string; disposition?: "rescored" | "rejected_unsupported"; published?: boolean }>;
   } | null;
   created_at: string;
   completed_at: string | null;
