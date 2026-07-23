@@ -969,6 +969,7 @@ async function finalizeBatches(admin: any, run: any, batchesJson: any[]) {
         detail: { run_id: run.id, phase: "pre_promote_batches", excerpt: err.slice(0, 800) },
       });
     },
+    restartMeta: { pending_batches: batchesJson },
   });
   if (enforceRes.status === "failed_terminal") return;
   if (enforceRes.status === "pending") return;
