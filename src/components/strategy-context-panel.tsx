@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ChevronDown, ChevronUp, Check, AlertTriangle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -67,7 +67,15 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  // Request-sequence guard: every load() call bumps requestSeqRef and captures
+  // its own ticket. Only the most-recent ticket may write state, so an unmount
+  // or a Retry that starts before the previous fetch resolves cannot cause a
+  // stale setState. useRef survives re-renders; the effect cleanup below bumps
+  // the sequence so any in-flight ticket is invalidated.
+  const requestSeqRef = useRef(0);
+
   const load = useCallback(async () => {
+    const ticket = ++requestSeqRef.current;
     setLoading(true);
     setLoadError(null);
     const { data, error: err } = await supabase
@@ -77,6 +85,7 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
+    if (ticket !== requestSeqRef.current) return;
     if (err) {
       setLoadError(err.message);
       setLoading(false);
@@ -90,13 +99,10 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
   }, [projectId]);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      await load();
-      if (cancelled) return;
-    })();
+    void load();
     return () => {
-      cancelled = true;
+      // Invalidate any in-flight ticket so its post-await writes are ignored.
+      requestSeqRef.current++;
     };
   }, [load]);
 

@@ -89,7 +89,7 @@ function Landing() {
           The evidence chain
         </p>
         <h2 className="mt-3 font-display text-2xl text-foreground md:text-3xl">
-          Six steps from idea to shipped, on the record.
+          Six steps from idea to a verified Lovable build sequence.
         </h2>
         <ol className="mt-8 grid gap-3 sm:grid-cols-2 md:grid-cols-3">
           {CHAIN.map((c) => (
