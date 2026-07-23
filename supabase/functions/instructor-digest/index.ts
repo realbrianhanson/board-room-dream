@@ -21,6 +21,19 @@ function j(status: number, body: any) {
   return new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
 }
 
+// Every user/DB-influenced string flowing into the digest HTML must be
+// escaped. Ampersand FIRST so it does not double-escape the entity refs
+// emitted for the other characters. Layout markup written by us is trusted
+// and NOT escaped.
+export function escapeHtml(input: unknown): string {
+  return String(input ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 const KIND_TITLE: Record<string, string> = {
   stuck_48h: "No activity in 48h",
   audit_loop: "Audit loop — needs human eyes",
@@ -31,10 +44,10 @@ const KIND_TITLE: Record<string, string> = {
 function alertLine(a: any): string {
   const d = a.detail ?? {};
   switch (a.kind) {
-    case "stuck_48h": return `${d.hours_idle ?? "48+"}h idle`;
-    case "audit_loop": return `Loop ${d.loop_no ?? 2} on "${d.batch_title ?? "batch"}"`;
-    case "spend_cap": return `${d.run_kind ?? "run"} · $${Number(d.spent_usd ?? 0).toFixed(2)} / $${Number(d.budget_usd ?? 0).toFixed(2)}`;
-    case "never_locked": return `${d.days_since_created ?? 7}+ days since validated`;
+    case "stuck_48h": return `${escapeHtml(d.hours_idle ?? "48+")}h idle`;
+    case "audit_loop": return `Loop ${escapeHtml(d.loop_no ?? 2)} on "${escapeHtml(d.batch_title ?? "batch")}"`;
+    case "spend_cap": return `${escapeHtml(d.run_kind ?? "run")} · $${Number(d.spent_usd ?? 0).toFixed(2)} / $${Number(d.budget_usd ?? 0).toFixed(2)}`;
+    case "never_locked": return `${escapeHtml(d.days_since_created ?? 7)}+ days since validated`;
     default: return "";
   }
 }
