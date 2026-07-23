@@ -76,23 +76,34 @@ function AuditCenterPage() {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [runErrors, setRunErrors] = useState<Record<string, string | null>>({});
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [showPaste, setShowPaste] = useState(false);
   const [pasted, setPasted] = useState("");
   const [showRetry, setShowRetry] = useState(false);
 
   const load = useCallback(async () => {
-    const [{ data: p }, { data: au }, { data: bs }, { data: userData }] = await Promise.all([
+    setLoadError(null);
+    const [pr, ar, br, userData] = await Promise.all([
       supabase.from("projects").select("user_id, name, is_import, github_repo").eq("id", projectId).maybeSingle(),
       supabase.from("audits").select("*").eq("project_id", projectId).order("created_at", { ascending: false }),
       supabase.from("batches").select("id, batch_no, title, status").eq("project_id", projectId).order("batch_no", { ascending: true }),
       supabase.auth.getUser(),
     ]);
+    const firstErr = pr.error?.message ?? ar.error?.message ?? br.error?.message ?? null;
+    if (firstErr) {
+      setLoadError(firstErr);
+      setLoading(false);
+      return;
+    }
+    const { data: p } = pr;
+    const { data: au } = ar;
+    const { data: bs } = br;
     const proj = p as { user_id?: string; name?: string; is_import?: boolean; github_repo?: string | null } | null;
     setProjectName(proj?.name ?? "");
     setIsImport(!!proj?.is_import);
     setGhRepo(proj?.github_repo ?? null);
-    setIsOwner(!!proj?.user_id && proj.user_id === userData?.user?.id);
+    setIsOwner(!!proj?.user_id && proj.user_id === userData.data?.user?.id);
     const auditRows = (au ?? []) as Audit[];
     setAudits(auditRows);
     setBatches((bs ?? []) as Batch[]);
@@ -200,13 +211,30 @@ function AuditCenterPage() {
     else load();
   }
 
+  if (loadError) {
+    return (
+      <div className="mx-auto max-w-5xl px-6 py-14">
+        <div role="alert" className="rounded-xl border border-destructive/40 bg-destructive/10 px-6 py-6 text-sm text-destructive">
+          <p className="font-medium">Couldn't load the Audit Center.</p>
+          <p className="mt-1 break-words text-destructive/80">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => { setLoading(true); void load(); }}
+            className="mt-4 inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (loading) return <div className="mx-auto max-w-5xl px-6 py-14"><div className="h-32 animate-pulse rounded-xl bg-surface-1" /></div>;
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-10 md:px-10 md:py-14">
       <Link to="/audits" className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground hover:text-foreground">← Audits</Link>
-      <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">{projectName || "Project"}</h1>
-      <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">The audit ledger</p>
+      <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">Audit Center</h1>
+      <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">{projectName || "Project"}</p>
       {journey && (
         <div className="mt-4 mb-2">
           <ProjectJourney stages={journey} />

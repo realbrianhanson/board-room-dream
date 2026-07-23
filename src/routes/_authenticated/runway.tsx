@@ -42,9 +42,9 @@ function RunwayIndex() {
   return (
     <div className="mx-auto w-full max-w-4xl px-6 py-12 md:py-16">
       <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Runway</span>
-      <h1 className="mt-3 font-display text-4xl leading-tight text-foreground md:text-5xl">Take flight, one batch at a time.</h1>
+      <h1 className="mt-3 font-display text-4xl leading-tight text-foreground md:text-5xl">Build Runway</h1>
       <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-        Once the plan is locked, the Chair sequences your build into numbered batches you paste into Lovable.
+        Once the plan is locked, the Chair sequences your build into numbered batches — one paste into Lovable at a time.
       </p>
 
       <div className="mt-10">

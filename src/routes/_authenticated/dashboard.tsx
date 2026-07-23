@@ -343,10 +343,10 @@ function DashboardPage() {
       <div className="flex items-end justify-between gap-4">
         <div>
           <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
-            Dashboard
+            App Blueprint
           </span>
           <h1 className="mt-3 font-display text-4xl leading-tight text-foreground md:text-5xl">
-            Your desk.
+            Dashboard
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
             Every idea you bring the board lives here, from first intake to final ship.

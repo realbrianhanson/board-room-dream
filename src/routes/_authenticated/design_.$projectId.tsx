@@ -36,7 +36,8 @@ function DesignStudioPage() {
   const [locked, setLocked] = useState<PlanVersion | null>(null);
   const [uid, setUid] = useState<string | null>(null);
   const [reconvening, setReconvening] = useState(false);
-  
+  const [loadError, setLoadError] = useState<string | null>(null);
+
 
   const loadLocked = useCallback(async () => {
     const { data } = await supabase
@@ -51,28 +52,29 @@ function DesignStudioPage() {
     setLocked((data as PlanVersion) ?? null);
   }, [projectId]);
 
-
-  useEffect(() => {
-    (async () => {
-      const { data: u } = await supabase.auth.getUser();
-      setUid(u.user?.id ?? null);
-      const { data: p } = await supabase
-        .from("projects")
-        .select("id, name, user_id, status, is_import, github_repo")
-        .eq("id", projectId)
-        .maybeSingle();
-      setProject((p as Project) ?? null);
-      const { count } = await supabase
-        .from("plan_versions")
-        .select("id", { count: "exact", head: true })
-        .eq("project_id", projectId)
-        .eq("kind", "plan")
-        .eq("is_build_safe", true);
-      setHasPlan((count ?? 0) > 0);
-
-      await loadLocked();
-    })();
+  const load = useCallback(async () => {
+    setLoadError(null);
+    const { data: u } = await supabase.auth.getUser();
+    setUid(u.user?.id ?? null);
+    const projRes = await supabase
+      .from("projects")
+      .select("id, name, user_id, status, is_import, github_repo")
+      .eq("id", projectId)
+      .maybeSingle();
+    if (projRes.error) { setLoadError(projRes.error.message); return; }
+    setProject((projRes.data as Project) ?? null);
+    const planRes = await supabase
+      .from("plan_versions")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", projectId)
+      .eq("kind", "plan")
+      .eq("is_build_safe", true);
+    if (planRes.error) { setLoadError(planRes.error.message); return; }
+    setHasPlan((planRes.count ?? 0) > 0);
+    await loadLocked();
   }, [projectId, loadLocked]);
+
+  useEffect(() => { void load(); }, [load]);
 
   // Live-update locked design when a design run finalizes.
   useEffect(() => {
@@ -119,8 +121,25 @@ function DesignStudioPage() {
     URL.revokeObjectURL(url);
   }
 
+  if (loadError) {
+    return (
+      <div className="mx-auto max-w-6xl px-6 py-14">
+        <div role="alert" className="rounded-xl border border-destructive/40 bg-destructive/10 px-6 py-6 text-sm text-destructive">
+          <p className="font-medium">Couldn't load the Design Council.</p>
+          <p className="mt-1 break-words text-destructive/80">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="mt-4 inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (!project || hasPlan === null) {
-    return <div className="mx-auto max-w-6xl px-6 py-14"><div className="h-32 animate-pulse rounded-xl bg-surface-1" /></div>;
+    return <div className="mx-auto max-w-6xl px-6 py-14"><div className="h-32 animate-pulse rounded-xl bg-surface-1" role="status" aria-label="Loading Design Council" /></div>;
   }
 
   return (
@@ -129,8 +148,8 @@ function DesignStudioPage() {
         <Link to="/design" className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground hover:text-foreground">
           ← Design
         </Link>
-        <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">{project.name}</h1>
-        <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">The Design Council</p>
+        <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">Design Council</h1>
+        <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">{project.name}</p>
         {journey && (
           <div className="mt-4 mb-2">
             <ProjectJourney stages={journey} />

@@ -57,16 +57,20 @@ function OpenRouterCard() {
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   async function refresh() {
     setLoading(true);
+    setLoadError(null);
     try {
       const data = (await callVault("list")) as { keys: KeyRow[] };
       const r = data.keys.find((k) => k.provider === "openrouter") ?? null;
       setRow(r);
       setShowForm(!r);
     } catch (e) {
-      toast.error((e as Error).message);
+      const msg = (e as Error).message ?? "Failed to load key status";
+      setLoadError(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -148,7 +152,19 @@ function OpenRouterCard() {
       </div>
 
       {loading ? (
-        <div className="mt-6 h-16 animate-pulse rounded-md bg-surface-2" />
+        <div className="mt-6 h-16 animate-pulse rounded-md bg-surface-2" role="status" aria-label="Loading OpenRouter status" />
+      ) : loadError ? (
+        <div role="alert" className="mt-6 rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+          <p className="font-medium">Couldn't reach the key vault.</p>
+          <p className="mt-1 break-words text-destructive/80">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className="mt-3 inline-flex rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+          >
+            Retry
+          </button>
+        </div>
       ) : row && !showForm ? (
         <div className="mt-6 space-y-4">
           <div className="flex items-center gap-3 rounded-md border border-border bg-surface-2 px-4 py-3">
@@ -244,13 +260,17 @@ function GitHubCard({ isAdmin }: { isAdmin: boolean }) {
   const [state, setState] = useState<GhStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [iframeNotice, setIframeNotice] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   async function refresh() {
+    setLoadError(null);
     try {
       const data = (await callGh("status")) as GhStatus;
       setState(data);
     } catch (e) {
-      toast.error((e as Error).message);
+      const msg = (e as Error).message ?? "Failed to load GitHub status";
+      setLoadError(msg);
+      toast.error(msg);
     }
   }
   useEffect(() => { refresh(); }, []);
@@ -307,8 +327,20 @@ function GitHubCard({ isAdmin }: { isAdmin: boolean }) {
         )}
       </div>
 
-      {!state ? (
-        <div className="mt-6 h-16 animate-pulse rounded-md bg-surface-2" />
+      {loadError ? (
+        <div role="alert" className="mt-6 rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+          <p className="font-medium">Couldn't reach the GitHub connector.</p>
+          <p className="mt-1 break-words text-destructive/80">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className="mt-3 inline-flex rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+          >
+            Retry
+          </button>
+        </div>
+      ) : !state ? (
+        <div className="mt-6 h-16 animate-pulse rounded-md bg-surface-2" role="status" aria-label="Loading GitHub status" />
       ) : !state.configured ? (
         <div className="mt-6 rounded-md border border-dashed border-border bg-surface-2 p-4 text-sm text-muted-foreground">
           GitHub connection isn't configured yet — the program admin sets two backend secrets to enable it.
@@ -667,7 +699,7 @@ function SettingsPage() {
         Settings
       </span>
       <h1 className="mt-3 font-display text-4xl leading-tight text-foreground">
-        Set the terms.
+        Settings
       </h1>
       <p className="mt-2 text-sm text-muted-foreground">
         Keys, providers, and — if you have the gavel — the board's own configuration.

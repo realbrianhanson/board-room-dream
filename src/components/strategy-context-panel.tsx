@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { ChevronDown, ChevronUp, Check } from "lucide-react";
+import { ChevronDown, ChevronUp, Check, AlertTriangle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import {
   STRATEGY_FIELDS,
@@ -9,6 +9,7 @@ import {
   type ImportStrategyInput,
   type StrategyField,
 } from "@/lib/import-strategy";
+import { strategyPanelPhase } from "@/lib/strategy-panel-phase";
 
 type Props = { projectId: string; isOwner: boolean };
 
@@ -63,39 +64,90 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    const { data, error: err } = await supabase
+      .from("intakes")
+      .select("id, answers")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (err) {
+      setLoadError(err.message);
+      setLoading(false);
+      return;
+    }
+    const row = data as { id: string; answers: Record<string, unknown> | null } | null;
+    setIntakeId(row?.id ?? null);
+    setAnswers(row?.answers ?? {});
+    setValues(readStrategy(row?.answers ?? {}));
+    setLoading(false);
+  }, [projectId]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data, error: err } = await supabase
-        .from("intakes")
-        .select("id, answers")
-        .eq("project_id", projectId)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      await load();
       if (cancelled) return;
-      if (err) {
-        setError(err.message);
-        return;
-      }
-      const row = data as { id: string; answers: Record<string, unknown> | null } | null;
-      setIntakeId(row?.id ?? null);
-      setAnswers(row?.answers ?? {});
-      setValues(readStrategy(row?.answers ?? {}));
     })();
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [load]);
 
-  if (values === null) {
+  const phase = strategyPanelPhase({ loading, error: loadError, intakeId });
+
+  if (phase === "loading") {
     return (
-      <div className="mt-4 h-12 animate-pulse rounded-lg border border-border bg-surface-1" aria-hidden />
+      <div
+        className="mt-4 h-12 animate-pulse rounded-lg border border-border bg-surface-1"
+        role="status"
+        aria-label="Loading strategy context"
+      />
     );
   }
 
-  const { filled, total } = strategyCompleteness(values);
+  if (phase === "error") {
+    return (
+      <div
+        role="alert"
+        className="mt-4 flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive"
+      >
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <p className="font-medium">Couldn't load strategy context.</p>
+          <p className="mt-1 break-words text-destructive/80">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="mt-3 inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === "missing") {
+    if (!isOwner) return null;
+    return (
+      <div className="mt-4 rounded-lg border border-dashed border-border bg-surface-1/60 p-4 text-sm text-muted-foreground">
+        No intake yet — strategy context appears here once you finish the project intake.
+      </div>
+    );
+  }
+
+  // phase === "ready" — values is non-null here.
+  const readyValues = values as ImportStrategyInput;
+  const { filled, total } = strategyCompleteness(readyValues);
+
+
 
   async function save() {
     if (!intakeId) {
@@ -171,7 +223,7 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
                 <span className="text-xs text-muted-foreground">{meta.label}</span>
                 <input
                   type="text"
-                  value={values[k]}
+                  value={readyValues[k]}
                   onChange={(e) =>
                     setValues((prev) => ({ ...(prev as ImportStrategyInput), [k]: e.target.value }))
                   }

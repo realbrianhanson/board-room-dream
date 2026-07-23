@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { selectDisplayedRun, type RunLite } from "./run-selection";
+import { selectDisplayedRun, safeSpend, type RunLite } from "./run-selection";
 
 const t = (iso: string) => new Date(iso).toISOString();
 
@@ -60,5 +60,28 @@ describe("selectDisplayedRun", () => {
       { id: "active-in-progress", status: "running", created_at: t("2026-07-27T10:00:00Z"), spent_usd: 1.5 },
     ];
     expect(selectDisplayedRun(runs)?.id).toBe("active-in-progress");
+  });
+
+  it("NaN/null/malformed spend is coerced to 0 and never scrambles ordering", () => {
+    const runs: RunLite[] = [
+      // Two active runs; the one with real numeric spend must win over
+      // the NaN-spend row. If safeSpend didn't coerce, the comparator
+      // would return NaN and Array.sort would degrade to insertion order.
+      { id: "nan-first", status: "running", created_at: t("2026-07-27T10:00:00Z"), spent_usd: "not-a-number" },
+      { id: "real-spend", status: "running", created_at: t("2026-07-27T11:00:00Z"), spent_usd: 0.42 },
+      { id: "null-spend", status: "running", created_at: t("2026-07-27T12:00:00Z"), spent_usd: null },
+    ];
+    expect(selectDisplayedRun(runs)?.id).toBe("real-spend");
+  });
+
+  it("safeSpend coerces every unsupported shape to 0", () => {
+    expect(safeSpend(null)).toBe(0);
+    expect(safeSpend(undefined)).toBe(0);
+    expect(safeSpend("")).toBe(0);
+    expect(safeSpend("abc")).toBe(0);
+    expect(safeSpend(Number.NaN)).toBe(0);
+    expect(safeSpend(Infinity)).toBe(0);
+    expect(safeSpend("1.75")).toBe(1.75);
+    expect(safeSpend(2)).toBe(2);
   });
 });

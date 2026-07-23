@@ -261,7 +261,7 @@ function CohortPage() {
       <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.28em] text-muted-foreground">Cohort</p>
-          <h1 className="font-display text-4xl leading-tight text-foreground">The room, at a glance.</h1>
+          <h1 className="font-display text-3xl leading-tight text-foreground sm:text-4xl">Cohort</h1>
           <p className="mt-2 max-w-xl text-sm text-muted-foreground">
             {cohorts.length
               ? `${members.length} members across ${cohorts.length} cohort${cohorts.length === 1 ? "" : "s"} · ${stuckCount} open alert${stuckCount === 1 ? "" : "s"}.`
@@ -371,8 +371,13 @@ function CohortPage() {
           </div>
         ) : (
           <div className="overflow-hidden rounded-xl border border-border/40 bg-surface-1">
-            <table className="w-full text-sm">
-              <thead className="border-b border-border/40 text-left font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
+            {/* Horizontal scroll on narrow viewports (320–390px) — the members
+                table has 7 columns and can't compress cleanly below ~640px.
+                min-w-[640px] preserves column alignment; the wrapper is the
+                only element that scrolls, so page chrome stays put. */}
+            <div className="w-full overflow-x-auto">
+              <table className="w-full min-w-[640px] text-sm">
+                <thead className="border-b border-border/40 text-left font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
                 <tr>
                   <th className="px-4 py-3">Member</th>
                   <th className="px-4 py-3">Cohort</th>
@@ -422,7 +427,8 @@ function CohortPage() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+              </table>
+            </div>
           </div>
         )}
       </section>

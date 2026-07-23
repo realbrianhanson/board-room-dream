@@ -61,9 +61,9 @@ function AuditsIndex() {
   return (
     <div className="mx-auto w-full max-w-4xl px-6 py-12 md:py-16">
       <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Audits</span>
-      <h1 className="mt-3 font-display text-4xl leading-tight text-foreground md:text-5xl">Every decision, on record.</h1>
+      <h1 className="mt-3 font-display text-4xl leading-tight text-foreground md:text-5xl">Audit Center</h1>
       <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-        The board reads your real code after every built batch, and again as a full A–Z pass before ship.
+        Every decision, on record. The board reads your real code after every built batch, and again as a full A–Z pass before ship.
       </p>
 
       <div className="mt-10">
