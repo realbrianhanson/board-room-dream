@@ -9,7 +9,12 @@ import { classifyAudits, parseTimestamp } from "@/lib/audit-classification";
 import { projectStatusLine } from "@/lib/project-status-line";
 import {
   isImportReady,
+  missingImportFields,
   normalizeStrategyForPersist,
+  RECOMMEND_PLACEHOLDER,
+  STRATEGY_FIELD_LABELS,
+  type ImportStrategyInput,
+  type StrategyField,
 } from "@/lib/import-strategy";
 import { initialModeFromSearch } from "@/lib/dashboard-search";
 import { DeleteProjectDialog } from "@/components/delete-project-dialog";
@@ -327,10 +332,22 @@ function DashboardPage() {
     }
   }
 
+  const strategyValues: ImportStrategyInput = {
+    buyer: impBuyer,
+    acquisition_channel: impAcquisitionChannel,
+    paid_offer: impPaidOffer,
+    price_anchor: impPriceAnchor,
+    upgrade_trigger: impUpgradeTrigger,
+    activation_moment: impActivation,
+    wow_moment: impWow,
+    positioning: impPositioning,
+  };
+  const importMissingFields = missingImportFields(strategyValues);
   const importReady = isImportReady({
     name: impName,
     description: impDescription,
     goals: impGoals,
+    strategy: strategyValues,
   });
 
   async function createImport(e: React.FormEvent) {
