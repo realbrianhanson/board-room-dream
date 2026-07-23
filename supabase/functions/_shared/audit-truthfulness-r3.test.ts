@@ -131,7 +131,7 @@ Deno.test("regression: landing paid offer copy without OWNER_CONTRACT → P2", (
   assertEquals(findings[0].severity, "P2");
 });
 
-Deno.test("landing paid offer with OWNER_CONTRACT marker → stays P1", () => {
+Deno.test("R4: landing paid offer with OWNER_CONTRACT alone → P2 (RUNTIME_FAILURE required to keep P1)", () => {
   const claim = f({
     severity: "P1",
     file_path: "src/routes/index.tsx",
@@ -139,6 +139,19 @@ Deno.test("landing paid offer with OWNER_CONTRACT marker → stays P1", () => {
     description: "The landing copy does not surface the paid offer or pricing anchor",
     evidence:
       "QUOTE: <h1>App Blueprint</h1> | WHY: no monetization CTA. IMPACT: build_failure OWNER_CONTRACT: locked PRD § Product strategy requires paid_offer surfaced on the landing hero.",
+  });
+  const { findings } = downgradeUnsupported([claim]);
+  assertEquals(findings[0].severity, "P2");
+});
+
+Deno.test("R4: product-strategy claim with RUNTIME_FAILURE marker → stays P1", () => {
+  const claim = f({
+    severity: "P1",
+    file_path: "src/routes/index.tsx",
+    title: "Landing hero paid offer CTA crashes",
+    description: "The paid offer CTA on landing hero throws before the activation moment records",
+    evidence:
+      "QUOTE: onClick={() => track('paid')} | WHY: track is undefined. RUNTIME_FAILURE: ReferenceError: track is not defined at index.tsx:42",
   });
   const { findings } = downgradeUnsupported([claim]);
   assertEquals(findings[0].severity, "P1");

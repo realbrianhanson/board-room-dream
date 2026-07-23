@@ -201,12 +201,20 @@ export function dedupeFindings(findings: CleanFinding[]): CleanFinding[] {
 
 // Downgrade unsupported serious findings. Returns the downgraded findings
 // plus a reason ledger for audits.summary.validation_downgrades.
+export type DowngradeDisposition = "rescored" | "rejected_unsupported";
 export type DowngradeRecord = {
   title: string;
   file_path: string | null;
   from: Severity;
   to: Severity;
   reason: string;
+  // AUDIT-PUBLISH-TRUST-R4: "rescored" = finding is still published at the
+  // reduced severity; "rejected_unsupported" = the finding failed a
+  // deterministic factual-proof gate and is OMITTED from published findings
+  // (kept in this ledger only for observability). Counts, verdict, and
+  // fix_batch generation are based only on published findings.
+  disposition: DowngradeDisposition;
+  published: boolean;
 };
 
 // A supported P0/P1 needs (a) a concrete repo-relative file_path — non-empty,
@@ -363,88 +371,140 @@ export function whyIsSpeculative(evidence: string): boolean {
   return SPECULATION_WHY_RX.test(String(evidence ?? ""));
 }
 
+// R4 — FULL_SOURCE marker for claims that assert a file is "truncated",
+// "incomplete", "missing X", or otherwise malformed. Fragment boundaries in
+// map/extract inputs regularly show a file mid-token; a P0/P1 claiming
+// truncation requires a compact FULL_SOURCE quote of the complete original
+// span, or a RUNTIME_FAILURE marker for a real crash. Missing → rejected.
+export function hasFullSourceMarker(ev: string): boolean {
+  return /\bFULL_SOURCE:\s*\S/.test(String(ev ?? ""));
+}
+const TRUNCATION_CLAIM_RX =
+  /\b(truncat(?:ed|ion)|incomplete|cut[- ]off|malformed|mid[- ](?:token|statement|expression|comment)|missing\s+closing|unterminated|syntactically\s+broken)\b/i;
+export function looksLikeTruncationClaim(title: string, description: string): boolean {
+  const t = `${title}\n${description}`;
+  return TRUNCATION_CLAIM_RX.test(t);
+}
+
 export function downgradeUnsupported(
   findings: CleanFinding[],
-): { findings: CleanFinding[]; downgrades: DowngradeRecord[] } {
+): { findings: CleanFinding[]; downgrades: DowngradeRecord[]; rejectedIndices: Set<number> } {
   const downgrades: DowngradeRecord[] = [];
-  const out = findings.map((f) => {
+  const rejectedIndices = new Set<number>();
+  const out = findings.map((f, i) => {
     if (f.severity !== "P0" && f.severity !== "P1") return f;
     let sev: Severity = f.severity;
-    const push = (from: Severity, to: Severity, reason: string) => {
-      downgrades.push({ title: f.title, file_path: f.file_path, from, to, reason });
+    const push = (
+      from: Severity,
+      to: Severity,
+      reason: string,
+      disposition: DowngradeDisposition = "rescored",
+    ) => {
+      const rejected = disposition === "rejected_unsupported";
+      downgrades.push({
+        title: f.title,
+        file_path: f.file_path,
+        from,
+        to,
+        reason,
+        disposition,
+        published: !rejected,
+      });
+      if (rejected) rejectedIndices.add(i);
     };
 
-    // Rule 1 (P0 only): missing IMPACT marker → P0 becomes P1.
+    // Rule 1 (P0 only): missing IMPACT marker → P0 becomes P1. Rescored,
+    // not rejected — the underlying finding may still be a valid P1 concern.
     if (sev === "P0" && !hasImpactMarker(f.evidence)) {
       push("P0", "P1", "P0 evidence missing IMPACT: build_failure|data_loss|auth_bypass|secret_exposure marker");
       sev = "P1";
     }
 
     // Rule 2: supabase/migrations/* P0/P1 requires CURRENT marker.
+    // Historical-migration claims without CURRENT are factually unsupported —
+    // reject rather than publish as P2 misinformation.
     if ((sev === "P0" || sev === "P1") && isMigrationPath(f.file_path) && !hasCurrentMarker(f.evidence)) {
-      push(sev, "P2", "migrations/* claim missing CURRENT: corroboration of effective state");
+      push(sev, "P2", "migrations/* claim missing CURRENT: corroboration of effective state", "rejected_unsupported");
       return { ...f, severity: "P2" as Severity };
     }
 
     // Rule 3: missing-object claim requires SCHEMA_LEDGER or RUNTIME_FAILURE.
+    // Without corroboration this is a partial-chunk absence, not proof —
+    // reject rather than publish "table X does not exist" as advice.
     if ((sev === "P0" || sev === "P1")
         && looksLikeMissingObjectClaim(f.title, f.description)
         && !hasSchemaLedgerMarker(f.evidence)
         && !hasRuntimeFailureMarker(f.evidence)) {
-      push(sev, "P2", "missing-object claim lacks SCHEMA_LEDGER: or RUNTIME_FAILURE: corroboration");
+      push(sev, "P2", "missing-object claim lacks SCHEMA_LEDGER: or RUNTIME_FAILURE: corroboration", "rejected_unsupported");
       return { ...f, severity: "P2" as Severity };
     }
 
-    // Rule 4: universal-helper claim requires CALLER corroboration.
+    // Rule 4: universal-helper claim requires CALLER corroboration. Reject.
     if ((sev === "P0" || sev === "P1")
         && looksLikeUniversalHelperClaim(f.title, f.description)
         && !hasCallerMarker(f.evidence)) {
-      push(sev, "P2", "universal-helper claim lacks CALLER: corroboration from a reachable caller");
+      push(sev, "P2", "universal-helper claim lacks CALLER: corroboration from a reachable caller", "rejected_unsupported");
       return { ...f, severity: "P2" as Severity };
     }
 
     // Rule 4b (R3): client-surface security claim (frontend src/* alleging
     // auth/admin/RLS/privilege/unauthorized/direct-SELECT bypass) requires a
     // SERVER_AUTH marker quoting the current vulnerable server construct.
+    // Without it, this is a UI-only observation and is rejected — a false
+    // "admin bypass" P2 is still bad advice.
     if ((sev === "P0" || sev === "P1")
         && looksLikeClientSurfaceSecurityClaim(f.title, f.description, f.file_path)
         && !hasServerAuthMarker(f.evidence)) {
-      push(sev, "P2", "client-surface security claim lacks SERVER_AUTH: quote of the current vulnerable server construct");
+      push(sev, "P2", "client-surface security claim lacks SERVER_AUTH: quote of the current vulnerable server construct", "rejected_unsupported");
       return { ...f, severity: "P2" as Severity };
     }
 
-    // Rule 4c (R3): product-strategy / copy / positioning / pricing /
-    // onboarding / buyer-reach claims cannot be P0/P1 without OWNER_CONTRACT
-    // (verbatim owner or locked-PRD requirement) OR a RUNTIME_FAILURE marker.
-    // They remain visible as P2 product-quality findings.
+    // Rule 4c (R4): product-strategy / copy / positioning / pricing /
+    // onboarding / buyer-reach findings are P2 by default. RUNTIME_FAILURE
+    // corroboration is REQUIRED to keep them P1 — OWNER_CONTRACT alone no
+    // longer promotes a product recommendation to serious severity. Rescored
+    // (not rejected): these remain valid product-quality suggestions at P2.
     if ((sev === "P0" || sev === "P1")
         && looksLikeProductStrategyClaim(f.title, f.description)
-        && !hasOwnerContractMarker(f.evidence)
         && !hasRuntimeFailureMarker(f.evidence)) {
-      push(sev, "P2", "product-strategy/copy claim lacks OWNER_CONTRACT: or RUNTIME_FAILURE: corroboration");
+      push(sev, "P2", "product-strategy/copy claim lacks RUNTIME_FAILURE: corroboration (OWNER_CONTRACT alone does not elevate)");
+      return { ...f, severity: "P2" as Severity };
+    }
+
+    // Rule 4d (R4): truncation / "file is malformed / cut off" claim requires
+    // a FULL_SOURCE marker (or RUNTIME_FAILURE). Rejected — fragment-boundary
+    // artifacts are not real defects and must not be published even at P2.
+    if ((sev === "P0" || sev === "P1")
+        && looksLikeTruncationClaim(f.title, f.description)
+        && !hasFullSourceMarker(f.evidence)
+        && !hasRuntimeFailureMarker(f.evidence)) {
+      push(sev, "P2", "truncation/incomplete-source claim lacks FULL_SOURCE: or RUNTIME_FAILURE: corroboration", "rejected_unsupported");
       return { ...f, severity: "P2" as Severity };
     }
 
     // Rule 5: speculative WHY ("appears", "may", "could", "likely", "seems")
     // cannot support P0/P1 no matter how well-formed the QUOTE looks.
+    // Speculative severity is not a fact — reject.
     if ((sev === "P0" || sev === "P1") && whyIsSpeculative(f.evidence)) {
-      push(sev, "P2", "WHY: uses speculative hedge ('appears/may/could/likely/seems')");
+      push(sev, "P2", "WHY: uses speculative hedge ('appears/may/could/likely/seems')", "rejected_unsupported");
       return { ...f, severity: "P2" as Severity };
     }
 
     // Baseline QUOTE/WHY + concrete-path/evidence/confidence gate.
+    // A P0/P1 without a concrete path, without QUOTE/WHY, or with low
+    // confidence is not evidence-backed — reject.
     const reasons: string[] = [];
     if (!isConcretePath(f.file_path)) reasons.push("missing concrete file_path");
     if (!isConcreteEvidence(f.evidence)) reasons.push("evidence lacks concrete detail");
     if (!hasQuoteWhyMarker(f.evidence)) reasons.push("evidence missing QUOTE:/WHY: marker");
     if (f.confidence === "low") reasons.push("confidence low");
     if (reasons.length > 0) {
-      push(sev, "P2", reasons.join("; "));
+      push(sev, "P2", reasons.join("; "), "rejected_unsupported");
       return { ...f, severity: "P2" as Severity };
     }
     return sev === f.severity ? f : { ...f, severity: sev };
   });
-  return { findings: out, downgrades };
+  return { findings: out, downgrades, rejectedIndices };
 }
 
 // Strict validator. Returns null on OK, or a short message describing the
@@ -509,12 +569,17 @@ export function evaluateChairMergeCandidate(parsed: unknown): ChairMergeEvaluati
   const summary = typeof obj.summary === "string" ? obj.summary : "";
   const normalized = normalizeFindings(rawFindings);
   const deduped = dedupeFindings(normalized);
-  const { findings, downgrades } = downgradeUnsupported(deduped);
-  const error = validateMerged(findings, summary);
+  const { findings: downgraded, downgrades, rejectedIndices } = downgradeUnsupported(deduped);
+  // AUDIT-PUBLISH-TRUST-R4: omit findings whose downgrade disposition marks
+  // them as factually unsupported. The full ledger (rescored + rejected)
+  // remains on the audit summary for observability, but counts/verdict/
+  // fix_prompt are based only on the published (kept) findings.
+  const published = downgraded.filter((_, i) => !rejectedIndices.has(i));
+  const error = validateMerged(published, summary);
   const verdictClaim = obj.verdict === "clean" ? "clean" : "findings";
   const verdict: "clean" | "findings" =
-    verdictClaim === "clean" || findings.length === 0 ? "clean" : "findings";
-  return { error, findings, downgrades, summary, verdict };
+    verdictClaim === "clean" || published.length === 0 ? "clean" : "findings";
+  return { error, findings: published, downgrades, summary, verdict };
 }
 
 // R3 — audit-summary reconciliation. Given the Chair's raw summary text and

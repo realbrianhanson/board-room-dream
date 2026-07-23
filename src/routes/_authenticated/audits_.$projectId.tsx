@@ -33,7 +33,7 @@ type Audit = {
   summary: {
     counts?: Record<string, number>;
     text?: string;
-    validation_downgrades?: Array<{ title: string; file_path: string | null; from: string; to: string; reason: string }>;
+    validation_downgrades?: Array<{ title: string; file_path: string | null; from: string; to: string; reason: string; disposition?: "rescored" | "rejected_unsupported"; published?: boolean }>;
   } | null;
   created_at: string;
   completed_at: string | null;
@@ -400,23 +400,33 @@ function AuditCenterPage() {
               </p>
             )}
             {finalAudit.summary?.text && <p className="mt-3 text-sm text-foreground/85">{finalAudit.summary.text}</p>}
-            {finalAudit.summary?.validation_downgrades && finalAudit.summary.validation_downgrades.length > 0 && (
-              <div className="mt-4 rounded-md border border-border/60 bg-surface-2 p-3">
-                <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
-                  Downgraded by the board — {finalAudit.summary.validation_downgrades.length} unsupported serious claim(s) rescored
-                </p>
-                <ul className="mt-2 space-y-1">
-                  {finalAudit.summary.validation_downgrades.map((d, i) => (
-                    <li key={i} className="font-mono text-[11px] text-muted-foreground">
-                      <span className="text-[hsl(38_65%_72%)]">{d.from} → {d.to}</span>
-                      {" · "}{d.title}
-                      {d.file_path ? ` (${d.file_path})` : ""}
-                      {" · "}{d.reason}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            {finalAudit.summary?.validation_downgrades && finalAudit.summary.validation_downgrades.length > 0 && (() => {
+              const entries = finalAudit.summary.validation_downgrades!;
+              const rejected = entries.filter((d) => d.disposition === "rejected_unsupported" || d.published === false).length;
+              const rescored = entries.length - rejected;
+              return (
+                <div className="mt-4 rounded-md border border-border/60 bg-surface-2 p-3">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
+                    Evidence validation — {entries.length} entr{entries.length === 1 ? "y" : "ies"} ({rejected} rejected, {rescored} rescored)
+                  </p>
+                  <ul className="mt-2 space-y-1">
+                    {entries.map((d, i) => {
+                      const isRejected = d.disposition === "rejected_unsupported" || d.published === false;
+                      return (
+                        <li key={i} className="font-mono text-[11px] text-muted-foreground">
+                          <span className={isRejected ? "text-[hsl(0_60%_72%)]" : "text-[hsl(38_65%_72%)]"}>
+                            {isRejected ? "REJECTED" : `${d.from} → ${d.to}`}
+                          </span>
+                          {" · "}{d.title}
+                          {d.file_path ? ` (${d.file_path})` : ""}
+                          {" · "}{d.reason}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              );
+            })()}
             {finalAudit.status === "clean" && !isImport && (
               <p className="mt-3 inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.22em] text-[hsl(160_45%_70%)]">
                 <Check className="h-4 w-4" /> Passed A–Z. Ship it.
