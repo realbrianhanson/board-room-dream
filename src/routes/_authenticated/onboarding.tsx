@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { ArrowRight, Lightbulb, Package } from "lucide-react";
@@ -146,8 +146,9 @@ function OnboardingPage() {
           </form>
         )}
         <p className="mt-6 text-xs text-muted-foreground">
-          Not sure yet? <Link to="/dashboard" className="underline hover:text-foreground">Go straight to your dashboard</Link>.
+          Pick one above to get started — either path is quick.
         </p>
+
       </div>
     </div>
   );

@@ -3,12 +3,15 @@ import { toast } from "sonner";
 import { ChevronDown, ChevronUp, Check, AlertTriangle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import {
+  RECOMMENDABLE_FIELDS,
+  RECOMMEND_PLACEHOLDER,
   STRATEGY_FIELDS,
   strategyCompleteness,
   normalizeStrategyForPersist,
   type ImportStrategyInput,
   type StrategyField,
 } from "@/lib/import-strategy";
+
 import { strategyPanelPhase } from "@/lib/strategy-panel-phase";
 
 type Props = { projectId: string; isOwner: boolean };
@@ -208,9 +211,10 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
           </span>
           {filled < total && (
             <span className="text-xs text-muted-foreground">
-              Optional — sharpens the plan later. Blanks stay blank; the board never invents answers.
+              Required before the A–Z audit. Blanks stay blank; the board never invents answers.
             </span>
           )}
+
         </div>
         {isOwner ? (
           <span className="inline-flex items-center gap-1 text-xs text-foreground/80">
@@ -236,9 +240,24 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
                   placeholder={meta.placeholder}
                   className="mt-1 w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
                 />
+                {RECOMMENDABLE_FIELDS.includes(k) && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setValues((prev) => ({
+                        ...(prev as ImportStrategyInput),
+                        [k]: RECOMMEND_PLACEHOLDER,
+                      }))
+                    }
+                    className="mt-1.5 text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+                  >
+                    Not decided — Board should recommend
+                  </button>
+                )}
               </label>
             );
           })}
+
           {error && (
             <p className="text-xs text-destructive" role="alert">
               {error}

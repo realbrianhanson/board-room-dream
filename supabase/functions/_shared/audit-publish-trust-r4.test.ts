@@ -99,7 +99,7 @@ Deno.test("universal typecheck-helper claim without CALLER is REJECTED", () => {
   assert(downgrades.some((d) => d.disposition === "rejected_unsupported" && /CALLER/.test(d.reason)));
 });
 
-Deno.test("product acquisition finding with OWNER_CONTRACT but no RUNTIME_FAILURE is PUBLISHED as P2", () => {
+Deno.test("product acquisition finding with OWNER_CONTRACT preserves P1 (constitution parity)", () => {
   const finding = f({
     severity: "P1",
     file_path: "src/routes/index.tsx",
@@ -108,18 +108,18 @@ Deno.test("product acquisition finding with OWNER_CONTRACT but no RUNTIME_FAILUR
     evidence: 'QUOTE: "Get started" | WHY: generic. OWNER_CONTRACT: intake buyer = "solo Lovable founders shipping MVPs"',
     confidence: "high",
   });
-  const { findings: published, downgrades } = evaluateChairMergeCandidate({
+  const { findings: published } = evaluateChairMergeCandidate({
     verdict: "findings",
     summary: "",
     findings: [finding],
   });
-  // R4: OWNER_CONTRACT alone no longer keeps a product claim at P1 —
-  // downgraded to P2 but PUBLISHED (still a valid product-quality recommendation).
+  // R6 constitution parity: EITHER OWNER_CONTRACT: OR RUNTIME_FAILURE:
+  // preserves product-strategy severity. Only when BOTH are absent does
+  // the finding cap to P2.
   assertEquals(published.length, 1);
-  assertEquals(published[0].severity, "P2");
-  const rescored = downgrades.filter((d) => d.disposition === "rescored");
-  assert(rescored.some((d) => /RUNTIME_FAILURE/.test(d.reason)));
+  assertEquals(published[0].severity, "P1");
 });
+
 
 Deno.test("product flow with concrete RUNTIME_FAILURE remains P1 and PUBLISHED", () => {
   const finding = f({
