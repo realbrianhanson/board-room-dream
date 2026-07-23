@@ -53,6 +53,9 @@ function existing(no: number, overrides: Partial<ExistingBatchRow> = {}): Existi
     sent_at: null,
     built_at: null,
     compiled_at: null,
+    compiled_prompt_md: null,
+    compiled_verification_prompt_md: null,
+    compile_meta: null,
     outcome_md: null,
     ...overrides,
   };
