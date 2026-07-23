@@ -582,34 +582,43 @@ async function lockPlanAndQueueBlueprint(
     return;
   }
 
-  // Pre-lock owner-authority gate: independently load owner sources and run
-  // the high-impact validator over the exact artifacts we are about to lock.
-  // Chair/loop3 CANNOT override — a violation terminalizes the run before any
-  // downstream blueprint work is queued.
+  // Pre-lock owner-authority gate (R6 correction wrapper). Chair/loop3 CANNOT
+  // override — but a candidate that violates owner-authority is now sent
+  // through a bounded Chair authority-correction step (up to
+  // AUTHORITY_CORRECTION_MAX attempts) before the run is terminated. This is
+  // orthogonal to the 3-loop consensus protocol: dissent and loop_no are
+  // preserved verbatim on the run.
+  let authority: Awaited<ReturnType<typeof loadOwnerAuthority>>;
   try {
-    const authority = await loadOwnerAuthority(admin, {
+    authority = await loadOwnerAuthority(admin, {
       projectId: run.project_id,
       founderNotes: run.founder_notes ?? null,
     });
-    const preErr = preLockAuthorityError(
-      [{ label: `${planKind}.content_md (pending lock)`, text: contentMd }],
-      authority,
-    );
-    if (preErr) {
-      await failRun(admin, run, preErr);
+  } catch (e) {
+    await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
+    return;
+  }
+  const enforceRes = await enforceAuthorityOrCorrect({
+    admin,
+    run,
+    phase: "pre_lock_plan",
+    authority,
+    artifacts: [
+      { key: "content_md", label: `${planKind}.content_md (pending lock)`, text: contentMd },
+    ],
+    onTerminalFail: async (err) => {
+      await failRun(admin, run, err);
       await insertAlert(admin, {
         user_id: run.user_id,
         project_id: run.project_id,
         kind: "owner_authority_violation",
-        detail: { run_id: run.id, mode, phase: "pre_lock", excerpt: preErr.slice(0, 800) },
+        detail: { run_id: run.id, mode, phase: "pre_lock", excerpt: err.slice(0, 800) },
       });
-      return;
-    }
-  } catch (e) {
-    // Loader failure is safe-fail: block the lock, not the process.
-    await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
-    return;
-  }
+    },
+  });
+  if (enforceRes.status === "failed_terminal") return;
+  if (enforceRes.status === "pending") return;
+  contentMd = enforceRes.artifacts.find((a) => a.key === "content_md")!.text;
 
 
   // Atomically claim the lock transition: two concurrent ticks can both reach
