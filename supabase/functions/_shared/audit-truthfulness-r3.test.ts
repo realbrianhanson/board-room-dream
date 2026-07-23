@@ -131,7 +131,7 @@ Deno.test("regression: landing paid offer copy without OWNER_CONTRACT → P2", (
   assertEquals(findings[0].severity, "P2");
 });
 
-Deno.test("R4: landing paid offer with OWNER_CONTRACT alone → P2 (RUNTIME_FAILURE required to keep P1)", () => {
+Deno.test("R6: landing paid offer with OWNER_CONTRACT alone → stays P1 (constitution parity)", () => {
   const claim = f({
     severity: "P1",
     file_path: "src/routes/index.tsx",
@@ -141,8 +141,9 @@ Deno.test("R4: landing paid offer with OWNER_CONTRACT alone → P2 (RUNTIME_FAIL
       "QUOTE: <h1>App Blueprint</h1> | WHY: no monetization CTA. IMPACT: build_failure OWNER_CONTRACT: locked PRD § Product strategy requires paid_offer surfaced on the landing hero.",
   });
   const { findings } = downgradeUnsupported([claim]);
-  assertEquals(findings[0].severity, "P2");
+  assertEquals(findings[0].severity, "P1");
 });
+
 
 Deno.test("R4: product-strategy claim with RUNTIME_FAILURE marker → stays P1", () => {
   const claim = f({
