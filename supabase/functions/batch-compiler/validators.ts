@@ -393,18 +393,50 @@ export function classifyBatchLayer(compiled: string, touched: TouchedPath[]): Ba
   return "mixed";
 }
 
+// Direct-invocation signal: an action verb tied to the affected edge
+// function / endpoint / RPC within the same sentence. Merely mentioning
+// "edge function" or "run Deno tests" is NOT a direct invocation — Deno
+// tests may SUPPLEMENT the direct call but never SUBSTITUTE for it.
+const INVOCATION_VERB_RE = /\b(invoke|invoking|invokes|call|calling|calls|request|requesting|requests|hit|hitting|hits|fetch|fetching|fetches|POST|GET|PUT|DELETE|PATCH|test(?:ing|s)?\s+(?:the\s+)?endpoint)\b/i;
+const INVOCATION_TARGET_RE = /\b(edge[-\s]?function|endpoint|\/functions\/v1\/|route\s+handler|the\s+rpc|rpc\s+[a-z_][a-z0-9_]*|[a-z_][a-z0-9_-]+\s+rpc|[a-z_][a-z0-9_-]+\s+edge[-\s]?function|api\s+call)\b/i;
+
+export function hasDirectInvocation(text: string): boolean {
+  if (!text) return false;
+  const sentences = text.split(/(?<=[.\n;!?])\s+/);
+  for (const raw of sentences) {
+    const s = raw.trim();
+    if (!s) continue;
+    if (/\bcurl\b/i.test(s)) return true;
+    if (INVOCATION_VERB_RE.test(s) && INVOCATION_TARGET_RE.test(s)) return true;
+  }
+  return false;
+}
+
+const EDGE_SUCCESS_RE = /\b(success(?:ful(?:ly)?)?|succeed(?:s|ed)?|returns?\s+(?:a\s+)?2\d{2}|\b2\d{2}\b|authorized|authenticated|valid\s+(?:token|auth|caller|signature|jwt)|as\s+(?:an?\s+)?(?:authorized|authenticated|signed[-\s]?in)\s+user|happy\s+path|allowed)\b/i;
+const EDGE_FAILURE_RE = /\b(fail(?:s|ure|ed|ing)?|reject(?:s|ed|ion)?|\b4\d{2}\b|unauthorized|unauthenticated|forbidden|denied|invalid\s+(?:token|auth|caller|signature|jwt)|missing\s+(?:auth|token|jwt|signature)|without\s+(?:auth|a\s+token|credentials|a\s+jwt)|as\s+(?:an?\s+)?anon(?:ymous)?)\b/i;
+
 /**
  * Reject verification prompts that require an unrelated layer (edge/RPC/Deno
  * edge tests on a pure DB batch) or omit the layer's real checks.
+ *
+ * db_only  → pgTAP / migration / RLS positive + negative; no edge/RPC/Deno req.
+ * edge_only → direct invocation (verb tied to endpoint/RPC, or curl) AND
+ *             explicit success/authorized case AND explicit failure/
+ *             unauthorized/auth-negative case. Deno tests may supplement.
+ * mixed    → DB signal + DB positive + negative AND direct edge invocation +
+ *             edge success + failure/unauthorized. Both layers explicit.
  */
 export function verificationScopeError(vp: string, layer: BatchLayer): string | null {
   const text = vp ?? "";
   const requiresEdge = /\bedge[-\s]?function(?:s)?\b/i.test(text);
   const requiresDenoEdge = /\bdeno\s+(?:edge\s+)?test/i.test(text);
-  const requiresRpcCall = /\b(?:invoke|call|hit|run)\b[^.]*\brpc\b/i.test(text) || /\brpc[s]?\b[^.]*\b(?:with|success|failure)\b/i.test(text);
+  const requiresRpcCall = /\brpc\b/i.test(text);
   const dbSignal = /(pg[_\s-]?tap|migration|schema|rls|polic(?:y|ies)|grant|revoke|psql|\bselect\s|owner|anon|cross[-\s]?tenant|another user|different (?:user|tenant))/i.test(text);
   const hasPositive = /\bpositive\b|as (?:the )?owner|owner\s+can|succeed(?:s)?\b/i.test(text);
   const hasNegative = /\bnegative\b|as (?:an )?anon|as (?:another|a different) user|cross[-\s]?tenant|zero rows|blocked\b|deni(?:ed|es)|forbidden/i.test(text);
+  const directInvocation = hasDirectInvocation(text);
+  const edgeSuccess = EDGE_SUCCESS_RE.test(text);
+  const edgeFailure = EDGE_FAILURE_RE.test(text);
 
   if (layer === "db_only") {
     if (requiresEdge || requiresDenoEdge || requiresRpcCall) {
@@ -418,16 +450,34 @@ export function verificationScopeError(vp: string, layer: BatchLayer): string | 
     }
     return null;
   }
+
   if (layer === "edge_only") {
-    if (!(requiresEdge || requiresRpcCall || requiresDenoEdge)) {
-      return `supabase edge/RPC batch verification must directly invoke each affected edge function or RPC with success AND failure/auth cases.`;
+    if (!directInvocation) {
+      return `supabase edge/RPC batch verification must directly invoke each affected edge function or RPC (e.g., "invoke <fn> with …", "curl …", "call the <name> RPC") — merely mentioning "edge function" or telling Lovable to "run Deno tests" is NOT a direct invocation. Deno tests may supplement but never substitute a direct call.`;
+    }
+    if (!edgeSuccess) {
+      return `supabase edge/RPC batch verification must include an explicit success / authorized case for the direct invocation (e.g., "as an authenticated user … returns 200"). Deno tests may supplement but never substitute a direct call.`;
+    }
+    if (!edgeFailure) {
+      return `supabase edge/RPC batch verification must include an explicit failure / unauthorized / auth-negative case (e.g., "without a token … returns 401", "as anon … rejected"). Deno tests may supplement but never substitute a direct call.`;
     }
     return null;
   }
-  // mixed: require at least one signal from each layer
-  const edgeSignal = requiresEdge || requiresRpcCall || requiresDenoEdge;
-  if (!(dbSignal && edgeSignal)) {
-    return `supabase mixed batch verification must exercise BOTH the DB layer (pgTAP/RLS positive+negative) AND the edge/RPC layer (direct invocation with success+failure) as separate checks.`;
+
+  // mixed: require explicit DB positive+negative AND direct edge invocation
+  // with success + failure/unauthorized. Signals from a single layer alone
+  // (or a vague mention of the other) is not enough.
+  if (!dbSignal) {
+    return `supabase mixed batch verification must exercise BOTH the DB layer (pgTAP/RLS positive+negative) AND the edge/RPC layer (direct invocation with success+failure) — DB-layer signal missing.`;
+  }
+  if (!hasPositive || !hasNegative) {
+    return `supabase mixed batch verification must exercise BOTH the DB layer and the edge/RPC layer — explicit DB positive AND negative permission cases (owner allowed; anon or cross-tenant blocked) are missing.`;
+  }
+  if (!directInvocation) {
+    return `supabase mixed batch verification must exercise BOTH the DB layer and the edge/RPC layer — direct invocation of each affected edge function or RPC is missing (use a call/invoke/curl verb tied to the endpoint or RPC; mentioning "edge function" alone is insufficient).`;
+  }
+  if (!edgeSuccess || !edgeFailure) {
+    return `supabase mixed batch verification must exercise BOTH the DB layer and the edge/RPC layer — explicit edge/RPC success AND failure/unauthorized cases are missing alongside the DB positive+negative cases.`;
   }
   return null;
 }
