@@ -1053,6 +1053,15 @@ ${shape}`,
     request: {
       json_output: true,
       temperature: 0.2,
+      // BATCH-REVIEW-LOW-REASONING-R1: live run b67878e0 truncated
+      // batches_review_inspector at tokens_out 2,486 / response 301 chars,
+      // ended inside issue.text — same reasoning-budget starvation as the
+      // now-fixed batches_revise_chair. These reviewer jobs are bounded
+      // schema validation (max 8 issues, 280 chars each, <=4,500 serialized
+      // chars) — low reasoning leaves the entire 2,500 output budget for the
+      // concise JSON. batches_chair keeps "high"; batches_revise_chair
+      // keeps "low".
+      reasoning_effort: "low",
       max_tokens: 2500,
 
       messages: [
