@@ -138,6 +138,21 @@ function Landing() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
+  // Landing-scoped smooth scrolling for in-page anchor links.
+  // Restored on unmount so authenticated routes aren't affected.
+  React.useEffect(() => {
+    const reduce = window.matchMedia?.(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    if (reduce) return;
+    const root = document.documentElement;
+    const prev = root.style.scrollBehavior;
+    root.style.scrollBehavior = "smooth";
+    return () => {
+      root.style.scrollBehavior = prev;
+    };
+  }, []);
+
   return (
     <div className="relative min-h-dvh bg-background text-foreground">
       {/* soft brass corner wash — the only decorative flourish */}
@@ -245,7 +260,7 @@ function Hero() {
           as="h1"
           delay={80}
           id="hero-title"
-          className="font-display text-5xl leading-[1.02] text-foreground sm:text-6xl md:text-[5.25rem] lg:text-[6.25rem]"
+          className="font-display text-5xl leading-[1.04] text-foreground sm:text-5xl md:text-6xl lg:text-[4.75rem]"
         >
           The{" "}
           <span className="italic text-primary/95">quality layer</span>{" "}
