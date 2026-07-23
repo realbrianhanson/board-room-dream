@@ -11,6 +11,7 @@ import {
   normalizeStrategyForPersist,
 } from "@/lib/import-strategy";
 import { initialModeFromSearch } from "@/lib/dashboard-search";
+import { DeleteProjectDialog } from "@/components/delete-project-dialog";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   // Lightweight validator — tolerate any value; the pure helper below decides
@@ -653,16 +654,9 @@ function DashboardPage() {
                 key={p.id}
                 project={p}
                 onOpen={(id) => resume(id, p, navigate)}
-                onDelete={async (id) => {
-                  if (!confirm(`Delete "${p.name}"? This removes all its runs, plans, batches, and audits. This cannot be undone.`)) return;
-                  const { error } = await supabase.from("projects").delete().eq("id", id);
-                  if (error) {
-                    toast.error(error.message);
-                    return;
-                  }
-                  toast.success("Project deleted.");
-                  setProjects((prev) => (prev ?? []).filter((x) => x.id !== id));
-                }}
+                onDeleted={(id) =>
+                  setProjects((prev) => (prev ?? []).filter((x) => x.id !== id))
+                }
               />
             ))}
           </div>
@@ -678,12 +672,12 @@ async function resume(
   navigate: ReturnType<typeof useNavigate>,
 ) {
   const status = project.status;
-  if (project.is_import) {
+    if (project.is_import) {
     if (!project.github_repo) {
       navigate({ to: "/audits/$projectId", params: { projectId } });
       return;
     }
-    if (!project.has_final_audit) {
+    if (!project.has_import_audit) {
       navigate({ to: "/audits/$projectId", params: { projectId } });
       return;
     }
