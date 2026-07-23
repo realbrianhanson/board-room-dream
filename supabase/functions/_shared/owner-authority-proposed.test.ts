@@ -10,7 +10,11 @@ import {
   assertEquals,
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { loadOwnerAuthority, validateProvenance } from "../_shared/owner-authority.ts";
+import {
+  extractProvenanceMarkers,
+  findUnauthorizedHighImpact,
+  loadOwnerAuthority,
+} from "../_shared/owner-authority.ts";
 
 function fakeAdmin(cr?: { description?: string | null }) {
   return {
