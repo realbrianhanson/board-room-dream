@@ -257,20 +257,37 @@ Deno.test("static — boardroom-orchestrator finalize paths route through the co
   assert(src.includes("findAwaitedCorrectionStep("), "afterStepComplete must detect awaited correction steps");
 });
 
-Deno.test("nextCorrectionRound — floors below the protocol-safe minimum", async () => {
+Deno.test("nextCorrectionRound — attempt-aware floor when DB max unavailable", async () => {
   const { nextCorrectionRound } = await import("./authority-correction.ts");
+  // attempt 1: floor 7 for null / zero / below-floor max.
+  assertEquals(nextCorrectionRound(null, 1), 7);
+  assertEquals(nextCorrectionRound(0, 1), 7);
+  assertEquals(nextCorrectionRound(5, 1), 7);
+  // attempt 2: floor 8 for null / below-floor max — attempt 2 must sort
+  // after attempt 1 even when the max query fails or returns nothing.
+  assertEquals(nextCorrectionRound(null, 2), 8);
+  assertEquals(nextCorrectionRound(0, 2), 8);
+  assertEquals(nextCorrectionRound(7, 2), 8);
+  // Default attempt (unspecified) behaves like attempt 1.
   assertEquals(nextCorrectionRound(null), 7);
-  assertEquals(nextCorrectionRound(0), 7);
-  assertEquals(nextCorrectionRound(5), 7);
 });
 
-Deno.test("nextCorrectionRound — monotonic above the floor (attempt 2 sorts after attempt 1)", async () => {
+Deno.test("nextCorrectionRound — DB max wins with max+1 above the floor", async () => {
   const { nextCorrectionRound } = await import("./authority-correction.ts");
-  const r1 = nextCorrectionRound(6);          // attempt 1 lands at 7
-  assertEquals(r1, 7);
-  const r2 = nextCorrectionRound(r1);         // attempt 2 must land at 8
+  assertEquals(nextCorrectionRound(6, 1), 7);
+  const r1 = nextCorrectionRound(6, 1);
+  const r2 = nextCorrectionRound(r1, 2); // max=7 => 8
   assertEquals(r2, 8);
   assert(r2 > r1);
-  // Corrections queued after a later protocol round still monotonic.
-  assertEquals(nextCorrectionRound(12), 13);
+  // A real max always wins; attempt floor never demotes it.
+  assertEquals(nextCorrectionRound(12, 1), 13);
+  assertEquals(nextCorrectionRound(12, 2), 13);
+});
+
+Deno.test("nextCorrectionRound — DB error path (caller passes null) stays monotonic across attempts", async () => {
+  // The correction call site checks res.error explicitly and passes null on
+  // failure. Simulate both attempts landing on distinct rounds via the floor.
+  const { nextCorrectionRound } = await import("./authority-correction.ts");
+  assertEquals(nextCorrectionRound(null, 1), 7);
+  assertEquals(nextCorrectionRound(null, 2), 8);
 });
