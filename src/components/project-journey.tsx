@@ -1,6 +1,7 @@
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { JourneyStage } from "@/lib/project-journey";
+import type { UseProjectJourneyResult } from "@/hooks/use-project-journey";
 
 export function ProjectJourney({
   stages,
@@ -57,4 +58,48 @@ export function ProjectJourney({
       })}
     </ol>
   );
+}
+
+/**
+ * Renders the ProjectJourney strip with truthful loading/error states.
+ * Journey is supplementary — an error surfaces as a small inline notice
+ * with Retry and never blocks the primary page content.
+ */
+export function ProjectJourneyStrip({
+  result,
+  className,
+}: {
+  result: UseProjectJourneyResult;
+  className?: string;
+}) {
+  if (result.loading) {
+    return (
+      <div
+        aria-hidden
+        className={cn("h-5 w-64 animate-pulse rounded-md bg-surface-2/60", className)}
+      />
+    );
+  }
+  if (result.error) {
+    return (
+      <div
+        role="status"
+        className={cn(
+          "inline-flex items-center gap-3 rounded-md border border-border/60 bg-surface-1 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground",
+          className,
+        )}
+      >
+        Journey unavailable
+        <button
+          type="button"
+          onClick={result.retry}
+          className="rounded-sm border border-border px-2 py-0.5 text-[10px] normal-case tracking-normal text-foreground/80 hover:border-primary/40 hover:text-foreground"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+  if (!result.stages) return null;
+  return <ProjectJourney stages={result.stages} className={className} />;
 }
