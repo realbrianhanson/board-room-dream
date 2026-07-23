@@ -497,11 +497,9 @@ function RunwayPage() {
           </Link>
           <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">Build Runway</h1>
           <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">{project.name}</p>
-          {journey && (
-            <div className="mt-4 mb-2">
-              <ProjectJourney stages={journey} />
-            </div>
-          )}
+          <div className="mt-4 mb-2">
+            <ProjectJourneyStrip result={journey} />
+          </div>
         </div>
         {total > 0 && (
           <div className="flex items-center gap-3 rounded-xl border border-border bg-surface-1 px-4 py-2">
