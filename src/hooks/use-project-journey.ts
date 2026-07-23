@@ -1,13 +1,33 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { buildJourney, type JourneyFlags, type JourneyStage } from "@/lib/project-journey";
 import { classifyAudits, parseTimestamp } from "@/lib/audit-classification";
 
-export function useProjectJourney(projectId: string): JourneyStage[] | null {
+/**
+ * Journey is supplementary. A load failure must surface as a truthful
+ * `error` state (never conflated with `loading`) so callers can render a
+ * small "Journey unavailable · Retry" indicator without blocking the
+ * primary page content.
+ */
+export type UseProjectJourneyResult = {
+  stages: JourneyStage[] | null;
+  loading: boolean;
+  error: string | null;
+  retry: () => void;
+};
+
+export function useProjectJourney(projectId: string): UseProjectJourneyResult {
   const [stages, setStages] = useState<JourneyStage[] | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+
+  const retry = useCallback(() => setTick((n) => n + 1), []);
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setError(null);
     (async () => {
       const [projRes, pvRes, batchRes, auditRes] = await Promise.all([
         supabase
@@ -32,20 +52,28 @@ export function useProjectJourney(projectId: string): JourneyStage[] | null {
           .eq("kind", "final_az"),
       ]);
       if (cancelled) return;
+      if (projRes.error) {
+        setStages(null);
+        setError(projRes.error.message || "Failed to load project");
+        setLoading(false);
+        return;
+      }
       const proj = projRes.data as
         | { is_import?: boolean; github_repo?: string | null; status?: string }
         | null;
       if (!proj) {
         setStages(null);
+        setError(null);
+        setLoading(false);
         return;
       }
-      // Surface secondary query errors instead of silently computing false
-      // stages: a failed plan_versions/batches/audits query would otherwise
-      // hide behind "everything upcoming" and mislead the owner. We keep
-      // stages null (loading), which lets the caller render its own
-      // skeleton or error state rather than a false journey.
-      if (pvRes.error || batchRes.error || auditRes.error) {
+      // A failed secondary query is a truthful error, not "loading forever"
+      // and not a false "everything upcoming".
+      const firstErr = pvRes.error || batchRes.error || auditRes.error;
+      if (firstErr) {
         setStages(null);
+        setError(firstErr.message || "Failed to load project journey");
+        setLoading(false);
         return;
       }
       const pvs = (pvRes.data ?? []) as Array<{ kind: string; locked_at: string }>;
@@ -81,11 +109,13 @@ export function useProjectJourney(projectId: string): JourneyStage[] | null {
         has_final_audit,
       };
       setStages(buildJourney(flags));
+      setError(null);
+      setLoading(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, tick]);
 
-  return stages;
+  return { stages, loading, error, retry };
 }
