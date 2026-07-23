@@ -8,7 +8,7 @@ import { buildJourney } from "@/lib/project-journey";
 import { classifyAudits, parseTimestamp } from "@/lib/audit-classification";
 import { projectStatusLine } from "@/lib/project-status-line";
 import {
-  isImportReady,
+  isImportCoreReady,
   missingImportFields,
   normalizeStrategyForPersist,
   RECOMMEND_PLACEHOLDER,
@@ -18,6 +18,7 @@ import {
 } from "@/lib/import-strategy";
 import { initialModeFromSearch } from "@/lib/dashboard-search";
 import { DeleteProjectDialog } from "@/components/delete-project-dialog";
+
 
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
