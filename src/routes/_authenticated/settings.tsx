@@ -667,7 +667,7 @@ function SettingsPage() {
         Settings
       </span>
       <h1 className="mt-3 font-display text-4xl leading-tight text-foreground">
-        Set the terms.
+        Settings
       </h1>
       <p className="mt-2 text-sm text-muted-foreground">
         Keys, providers, and — if you have the gavel — the board's own configuration.
