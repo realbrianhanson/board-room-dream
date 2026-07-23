@@ -1008,8 +1008,12 @@ function CompileBanner({ batch }: { batch: Batch }) {
       </p>
       <details className="mt-2 group">
         <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground">
-          Why this prompt is safe to paste ({touched.length} touched · {evidence.length} evidence{drift.length ? ` · ${drift.length} drift` : ""})
+          Preflight evidence for this prompt ({touched.length} touched · {evidence.length} evidence{drift.length ? ` · ${drift.length} drift` : ""})
         </summary>
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          This checks the compiled prompt before implementation. The build is verified only after the post-build checks and audit pass.
+        </p>
+
         <div className="mt-3 space-y-3">
           {touched.length > 0 && (
             <div>
@@ -1569,10 +1573,11 @@ function AuditModal({
       : `Audit Batch ${modal.batch.batch_no}`;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 p-6" onClick={onClose}>
-      <div className="w-full max-w-xl rounded-xl border border-border bg-surface-1 p-6" onClick={(e) => e.stopPropagation()}>
+      <div className="relative w-full max-w-xl rounded-xl border border-border bg-surface-1 p-6" onClick={(e) => e.stopPropagation()}>
         <button onClick={onClose} className="absolute right-3 top-3 rounded-md p-1 text-muted-foreground hover:text-foreground" aria-label="Close">
           <X className="h-4 w-4" />
         </button>
+
         <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(38_65%_70%)]">The board reviews code</p>
         <h3 className="mt-2 font-display text-2xl text-foreground">{title}</h3>
 

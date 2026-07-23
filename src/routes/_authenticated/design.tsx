@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { ArrowRight, Palette } from "lucide-react";
 
@@ -13,26 +13,41 @@ function DesignIndex() {
   const navigate = useNavigate();
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [lockedIds, setLockedIds] = useState<Set<string>>(new Set());
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoadError(null);
+    setProjects(null);
+    const { data: rows, error: pErr } = await supabase
+      .from("projects")
+      .select("id, name, status, created_at")
+      .order("created_at", { ascending: false });
+    if (pErr) {
+      setLoadError(pErr.message);
+      return;
+    }
+    const projs = (rows ?? []) as Project[];
+    setProjects(projs);
+    if (projs.length) {
+      const { data: pvs, error: pvErr } = await supabase
+        .from("plan_versions")
+        .select("project_id")
+        .eq("kind", "plan")
+        .eq("is_build_safe", true)
+        .in("project_id", projs.map((p) => p.id));
+      if (pvErr) {
+        setLoadError(pvErr.message);
+        return;
+      }
+      setLockedIds(new Set((pvs ?? []).map((r: any) => r.project_id)));
+    } else {
+      setLockedIds(new Set());
+    }
+  }, []);
 
   useEffect(() => {
-    (async () => {
-      const { data: rows } = await supabase
-        .from("projects")
-        .select("id, name, status, created_at")
-        .order("created_at", { ascending: false });
-      const projects = (rows ?? []) as Project[];
-      setProjects(projects);
-      if (projects.length) {
-        const { data: pvs } = await supabase
-          .from("plan_versions")
-          .select("project_id")
-          .eq("kind", "plan")
-          .eq("is_build_safe", true)
-          .in("project_id", projects.map((p) => p.id));
-        setLockedIds(new Set((pvs ?? []).map((r: any) => r.project_id)));
-      }
-    })();
-  }, []);
+    void load();
+  }, [load]);
 
 
   return (
@@ -44,7 +59,24 @@ function DesignIndex() {
       </p>
 
       <div className="mt-10">
-        {projects === null ? (
+        {loadError ? (
+          <div
+            role="alert"
+            className="flex items-start gap-3 rounded-xl border border-destructive/40 bg-destructive/10 p-6 text-sm text-destructive"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="font-medium">Couldn't load your projects.</p>
+              <p className="mt-1 break-words text-destructive/80">{loadError}</p>
+              <button
+                type="button"
+                onClick={() => void load()}
+                className="mt-3 inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        ) : projects === null ? (
           <div className="h-32 animate-pulse rounded-xl bg-surface-1" />
         ) : projects.length === 0 ? (
           <div className="rounded-xl border border-dashed border-border bg-surface-1/40 px-8 py-16 text-center">
@@ -58,6 +90,7 @@ function DesignIndex() {
               Go to dashboard
             </button>
           </div>
+
         ) : (
           <div className="grid gap-3">
             {projects.map((p) => {

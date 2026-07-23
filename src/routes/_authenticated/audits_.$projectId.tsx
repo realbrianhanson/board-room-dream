@@ -1,12 +1,16 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { ArrowRight, Check, ScrollText, ShieldCheck, RotateCcw } from "lucide-react";
 import { CodeSourcePicker } from "@/components/code-source-picker";
 import { GitHubRepoCard } from "@/components/github-repo-card";
 import { ProjectJourney } from "@/components/project-journey";
-import { StrategyContextPanel } from "@/components/strategy-context-panel";
+import {
+  StrategyContextPanel,
+  type StrategyPanelHandle,
+  type StrategyPanelValidity,
+} from "@/components/strategy-context-panel";
 import { useProjectJourney } from "@/hooks/use-project-journey";
 import { extractFunctionsErrorMessage } from "@/lib/functions-error";
 import {
@@ -15,6 +19,8 @@ import {
   previousFinals as pickPreviousFinals,
   startCtaLabel,
 } from "@/lib/audit-retry";
+import { groupOpenFindingsByAudit } from "@/lib/audit-findings-grouping";
+
 
 export const Route = createFileRoute("/_authenticated/audits_/$projectId")({
   component: AuditCenterPage,
@@ -81,6 +87,13 @@ function AuditCenterPage() {
   const [showPaste, setShowPaste] = useState(false);
   const [pasted, setPasted] = useState("");
   const [showRetry, setShowRetry] = useState(false);
+  const [strategyValidity, setStrategyValidity] = useState<StrategyPanelValidity | null>(null);
+  const strategyPanelRef = useRef<StrategyPanelHandle | null>(null);
+
+  // Only import projects require the strategy-context gate; greenfield
+  // projects never see the panel and are unblocked by default.
+  const strategyGateBlocked = isImport && (!strategyValidity || !strategyValidity.valid);
+
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -209,6 +222,30 @@ function AuditCenterPage() {
     [findings],
   );
 
+  // Group open findings by originating audit so each source is labeled
+  // truthfully (current final / previous final / batch N). See
+  // src/lib/audit-findings-grouping.ts for the pure grouping logic.
+  const openFindingGroups = useMemo(
+    () => groupOpenFindingsByAudit(
+      audits.map((a) => ({
+        id: a.id,
+        batch_id: a.batch_id,
+        kind: a.kind,
+        created_at: a.created_at,
+        head_sha: a.head_sha,
+      })),
+      openFindings.map((f) => ({ id: f.id, audit_id: f.audit_id, status: f.status })),
+      batches.map((b) => ({ id: b.id, batch_no: b.batch_no })),
+    ),
+    [audits, openFindings, batches],
+  );
+  const findingById = useMemo(() => {
+    const m = new Map<string, Finding>();
+    for (const f of openFindings) m.set(f.id, f);
+    return m;
+  }, [openFindings]);
+
+
   async function dismiss(f: Finding) {
     if (f.severity !== "P2" && f.severity !== "P3") {
       toast.error("P0/P1 findings resolve only through re-audit.");
@@ -248,7 +285,39 @@ function AuditCenterPage() {
           <ProjectJourney stages={journey} />
         </div>
       )}
-      {isImport && <StrategyContextPanel projectId={projectId} isOwner={isOwner} />}
+      {isImport && (
+        <StrategyContextPanel
+          ref={strategyPanelRef}
+          projectId={projectId}
+          isOwner={isOwner}
+          onValidityChange={setStrategyValidity}
+        />
+      )}
+      {isImport && isOwner && strategyGateBlocked && strategyValidity && (
+        <div
+          role="status"
+          className="mt-3 rounded-md border border-primary/30 bg-primary/[0.06] p-3 text-xs text-foreground/85"
+          data-testid="strategy-gate-notice"
+        >
+          <p>
+            The A–Z audit is blocked until your strategy context is complete.
+            {strategyValidity.missingLabels.length > 0 && (
+              <>
+                {" "}Still needed:{" "}
+                <span className="font-medium">{strategyValidity.missingLabels.join(", ")}</span>.
+              </>
+            )}
+          </p>
+          <button
+            type="button"
+            onClick={() => strategyPanelRef.current?.focus()}
+            className="mt-2 inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs text-foreground hover:border-primary/60"
+          >
+            Fill in strategy context
+          </button>
+        </div>
+      )}
+
 
       {/* Open findings */}
       <section className="mt-10">
@@ -256,48 +325,65 @@ function AuditCenterPage() {
         {openFindings.length === 0 ? (
           <p className="mt-3 text-sm text-muted-foreground">The board has no open issues for you right now.</p>
         ) : (
-          <div className="mt-4 space-y-2">
-            {openFindings.map((f) => (
-              <div key={f.id} className="rounded-lg border border-border bg-surface-1 p-4">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${SEV_STYLE[f.severity]}`}>
-                    {f.severity}
-                  </span>
-                  <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${
-                    f.confidence === "high" ? "border-[hsl(160_45%_48%/0.4)] text-[hsl(160_45%_72%)] bg-[hsl(160_45%_28%/0.15)]"
-                    : f.confidence === "low" ? "border-border text-muted-foreground bg-surface-2"
-                    : "border-primary/35 text-[hsl(38_65%_75%)] bg-primary/10"
-                  }`}>
-                    {f.confidence} confidence
-                  </span>
-                  {f.seat && <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">{f.seat}</span>}
-                  {f.file_path && (
-                    <span className="font-mono text-[11px] text-muted-foreground">
-                      {f.file_path}
-                      {f.line_start ? `:${f.line_start}${f.line_end && f.line_end !== f.line_start ? `-${f.line_end}` : ""}` : ""}
-                    </span>
-                  )}
-                  {f.status === "fix_drafted" && (
-                    <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[hsl(38_65%_72%)]">Fix batch drafted</span>
-                  )}
+          <div className="mt-4 space-y-6">
+            {openFindingGroups.map((group) => (
+              <div key={group.auditId}>
+                <p
+                  className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground"
+                  data-testid="finding-group-label"
+                >
+                  {group.label}
+                </p>
+                <div className="mt-2 space-y-2">
+                  {group.findings.map((gf) => {
+                    const f = findingById.get(gf.id);
+                    if (!f) return null;
+                    return (
+                      <div key={f.id} className="rounded-lg border border-border bg-surface-1 p-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${SEV_STYLE[f.severity]}`}>
+                            {f.severity}
+                          </span>
+                          <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${
+                            f.confidence === "high" ? "border-[hsl(160_45%_48%/0.4)] text-[hsl(160_45%_72%)] bg-[hsl(160_45%_28%/0.15)]"
+                            : f.confidence === "low" ? "border-border text-muted-foreground bg-surface-2"
+                            : "border-primary/35 text-[hsl(38_65%_75%)] bg-primary/10"
+                          }`}>
+                            {f.confidence} confidence
+                          </span>
+                          {f.seat && <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">{f.seat}</span>}
+                          {f.file_path && (
+                            <span className="font-mono text-[11px] text-muted-foreground">
+                              {f.file_path}
+                              {f.line_start ? `:${f.line_start}${f.line_end && f.line_end !== f.line_start ? `-${f.line_end}` : ""}` : ""}
+                            </span>
+                          )}
+                          {f.status === "fix_drafted" && (
+                            <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[hsl(38_65%_72%)]">Fix batch drafted</span>
+                          )}
+                        </div>
+                        <p className="mt-2 text-sm text-foreground">{f.title}</p>
+                        {f.description && <p className="mt-1 text-xs text-muted-foreground">{f.description}</p>}
+                        {f.evidence && (
+                          <p className="mt-2 border-l border-border pl-3 font-mono text-[11px] text-muted-foreground/90">
+                            Evidence — {f.evidence}
+                          </p>
+                        )}
+                        {(f.severity === "P2" || f.severity === "P3") && f.status === "open" && (
+                          <button
+                            onClick={() => dismiss(f)}
+                            className="mt-3 rounded-md border border-border bg-surface-2 px-3 py-1.5 text-xs text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                          >
+                            Dismiss
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-                <p className="mt-2 text-sm text-foreground">{f.title}</p>
-                {f.description && <p className="mt-1 text-xs text-muted-foreground">{f.description}</p>}
-                {f.evidence && (
-                  <p className="mt-2 border-l border-border pl-3 font-mono text-[11px] text-muted-foreground/90">
-                    Evidence — {f.evidence}
-                  </p>
-                )}
-                {(f.severity === "P2" || f.severity === "P3") && f.status === "open" && (
-                  <button
-                    onClick={() => dismiss(f)}
-                    className="mt-3 rounded-md border border-border bg-surface-2 px-3 py-1.5 text-xs text-muted-foreground hover:border-primary/40 hover:text-foreground"
-                  >
-                    Dismiss
-                  </button>
-                )}
               </div>
             ))}
+
           </div>
         )}
       </section>
@@ -369,7 +455,7 @@ function AuditCenterPage() {
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => startFinalAudit("github")}
-                  disabled={!startAllowed || !ghRepo}
+                  disabled={!startAllowed || !ghRepo || strategyGateBlocked}
                   className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
                 >
                   {starting ? "Opening the audit…" : ghRepo ? "Run the A–Z audit" : "Link a repo first"}
@@ -394,7 +480,7 @@ function AuditCenterPage() {
                 <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={5_000_000} />
                 <button
                   onClick={() => startFinalAudit("paste")}
-                  disabled={!startAllowed || !pasted.trim()}
+                  disabled={!startAllowed || !pasted.trim() || strategyGateBlocked}
                   className="mt-3 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
                 >
                   {starting ? "Opening the audit…" : "Run the A–Z audit on this code"}
@@ -490,7 +576,7 @@ function AuditCenterPage() {
                     <div className="flex flex-wrap items-center gap-2">
                       <button
                         onClick={() => startFinalAudit("github")}
-                        disabled={!startAllowed || !ghRepo}
+                        disabled={!startAllowed || !ghRepo || strategyGateBlocked}
                         data-testid="final-retry-github"
                         className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
                       >
@@ -521,7 +607,7 @@ function AuditCenterPage() {
                         <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={5_000_000} />
                         <button
                           onClick={() => startFinalAudit("paste")}
-                          disabled={!startAllowed || !pasted.trim()}
+                          disabled={!startAllowed || !pasted.trim() || strategyGateBlocked}
                           data-testid="final-retry-paste"
                           className="mt-3 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
                         >

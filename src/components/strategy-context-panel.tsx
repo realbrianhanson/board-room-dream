@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ChevronDown, ChevronUp, Check, AlertTriangle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -6,15 +6,32 @@ import {
   RECOMMENDABLE_FIELDS,
   RECOMMEND_PLACEHOLDER,
   STRATEGY_FIELDS,
+  STRATEGY_FIELD_LABELS,
   strategyCompleteness,
   normalizeStrategyForPersist,
+  validateImportStrategy,
   type ImportStrategyInput,
   type StrategyField,
 } from "@/lib/import-strategy";
 
 import { strategyPanelPhase } from "@/lib/strategy-panel-phase";
 
-type Props = { projectId: string; isOwner: boolean };
+export type StrategyPanelHandle = {
+  focus: () => void;
+};
+
+export type StrategyPanelValidity = {
+  valid: boolean;
+  missingLabels: string[];
+  missingFields: StrategyField[];
+};
+
+type Props = {
+  projectId: string;
+  isOwner: boolean;
+  onValidityChange?: (v: StrategyPanelValidity) => void;
+};
+
 
 const FIELD_LABEL: Record<StrategyField, { label: string; placeholder: string }> = {
   buyer: {
@@ -60,7 +77,10 @@ function readStrategy(answers: Record<string, unknown> | null): ImportStrategyIn
   return out;
 }
 
-export function StrategyContextPanel({ projectId, isOwner }: Props) {
+export const StrategyContextPanel = forwardRef<StrategyPanelHandle, Props>(function StrategyContextPanel(
+  { projectId, isOwner, onValidityChange },
+  ref,
+) {
   const [intakeId, setIntakeId] = useState<string | null>(null);
   const [answers, setAnswers] = useState<Record<string, unknown> | null>(null);
   const [values, setValues] = useState<ImportStrategyInput | null>(null);
@@ -70,12 +90,18 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Request-sequence guard: every load() call bumps requestSeqRef and captures
-  // its own ticket. Only the most-recent ticket may write state, so an unmount
-  // or a Retry that starts before the previous fetch resolves cannot cause a
-  // stale setState. useRef survives re-renders; the effect cleanup below bumps
-  // the sequence so any in-flight ticket is invalidated.
   const requestSeqRef = useRef(0);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const firstInputRef = useRef<HTMLInputElement | null>(null);
+
+  useImperativeHandle(ref, () => ({
+    focus: () => {
+      setOpen(true);
+      containerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      // Focus the first input once the panel has expanded.
+      requestAnimationFrame(() => firstInputRef.current?.focus());
+    },
+  }), []);
 
   const load = useCallback(async () => {
     const ticket = ++requestSeqRef.current;
@@ -104,10 +130,32 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
   useEffect(() => {
     void load();
     return () => {
-      // Invalidate any in-flight ticket so its post-await writes are ignored.
       requestSeqRef.current++;
     };
   }, [load]);
+
+  // Compute + publish validity to any parent that needs to gate audit start.
+  // Uses the canonical validateImportStrategy so we cannot drift from the
+  // server gate.
+  const validity: StrategyPanelValidity = useMemo(() => {
+    if (!values) return { valid: false, missingLabels: [], missingFields: [] };
+    const problems = validateImportStrategy(values);
+    const missingFields = problems.map((p) => p.field);
+    return {
+      valid: problems.length === 0,
+      missingFields,
+      missingLabels: missingFields.map((f) => STRATEGY_FIELD_LABELS[f]),
+    };
+  }, [values]);
+
+  useEffect(() => {
+    if (!onValidityChange) return;
+    // Only publish when the load actually resolved to a state that reflects
+    // real intake data (or its absence). Skip while loading so the parent
+    // doesn't briefly see a false "invalid" snapshot.
+    if (loading) return;
+    onValidityChange(validity);
+  }, [validity, loading, onValidityChange]);
 
   const phase = strategyPanelPhase({ loading, error: loadError, intakeId });
 
@@ -152,11 +200,8 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
     );
   }
 
-  // phase === "ready" — values is non-null here.
   const readyValues = values as ImportStrategyInput;
   const { filled, total } = strategyCompleteness(readyValues);
-
-
 
   async function save() {
     if (!intakeId) {
@@ -168,8 +213,6 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
     try {
       const normalized = normalizeStrategyForPersist(values!);
       const merged = { ...(answers ?? {}), ...normalized };
-      // Only answers is updated — DB triggers reject any client-side change
-      // to verdict/validation_scores, so those cannot be touched here.
       const { error: err } = await supabase
         .from("intakes")
         .update({ answers: merged })
@@ -188,12 +231,13 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
   }
 
   return (
-    <div className="mt-6 rounded-lg border border-border bg-surface-1 p-4">
+    <div ref={containerRef} className="mt-6 rounded-lg border border-border bg-surface-1 p-4">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center justify-between gap-3 text-left"
         aria-expanded={open}
+        data-testid="strategy-panel-toggle"
       >
         <div className="flex items-center gap-3">
           <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
@@ -201,24 +245,23 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
           </span>
           <span
             className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${
-              filled === total
+              validity.valid
                 ? "border-[hsl(160_45%_48%/0.4)] bg-[hsl(160_45%_28%/0.15)] text-[hsl(160_45%_72%)]"
                 : "border-border bg-surface-2 text-muted-foreground"
             }`}
           >
-            {filled === total ? <Check className="h-3 w-3" /> : null}
+            {validity.valid ? <Check className="h-3 w-3" /> : null}
             {filled}/{total}
           </span>
-          {filled < total && (
+          {!validity.valid && (
             <span className="text-xs text-muted-foreground">
               Required before the A–Z audit. Blanks stay blank; the board never invents answers.
             </span>
           )}
-
         </div>
         {isOwner ? (
           <span className="inline-flex items-center gap-1 text-xs text-foreground/80">
-            {open ? "Hide" : filled < total ? "Fill in" : "Edit"}
+            {open ? "Hide" : validity.valid ? "Edit" : "Fill in"}
             {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
           </span>
         ) : null}
@@ -226,12 +269,13 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
 
       {open && isOwner && (
         <div className="mt-4 space-y-4 border-t border-border/60 pt-4">
-          {STRATEGY_FIELDS.map((k) => {
+          {STRATEGY_FIELDS.map((k, idx) => {
             const meta = FIELD_LABEL[k];
             return (
               <label key={k} className="block">
                 <span className="text-xs text-muted-foreground">{meta.label}</span>
                 <input
+                  ref={idx === 0 ? firstInputRef : undefined}
                   type="text"
                   value={readyValues[k]}
                   onChange={(e) =>
@@ -243,6 +287,7 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
                 {RECOMMENDABLE_FIELDS.includes(k) && (
                   <button
                     type="button"
+                    aria-label={`Set ${meta.label} to Board should recommend`}
                     onClick={() =>
                       setValues((prev) => ({
                         ...(prev as ImportStrategyInput),
@@ -251,7 +296,7 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
                     }
                     className="mt-1.5 text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
                   >
-                    Not decided — Board should recommend
+                    Board should recommend
                   </button>
                 )}
               </label>
@@ -288,4 +333,5 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
       )}
     </div>
   );
-}
+});
+

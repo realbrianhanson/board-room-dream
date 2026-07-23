@@ -8,7 +8,7 @@ import { buildJourney } from "@/lib/project-journey";
 import { classifyAudits, parseTimestamp } from "@/lib/audit-classification";
 import { projectStatusLine } from "@/lib/project-status-line";
 import {
-  isImportReady,
+  isImportCoreReady,
   missingImportFields,
   normalizeStrategyForPersist,
   RECOMMEND_PLACEHOLDER,
@@ -18,6 +18,7 @@ import {
 } from "@/lib/import-strategy";
 import { initialModeFromSearch } from "@/lib/dashboard-search";
 import { DeleteProjectDialog } from "@/components/delete-project-dialog";
+
 
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
@@ -342,17 +343,20 @@ function DashboardPage() {
     wow_moment: impWow,
     positioning: impPositioning,
   };
-  const importMissingFields = missingImportFields(strategyValues);
-  const importReady = isImportReady({
+  // Fast-import gate: only the three identity fields are required to CREATE
+  // the project. All eight strategy fields remain required before the A–Z
+  // audit itself can start (enforced in Audit Center UI + server gate).
+  const importCoreReady = isImportCoreReady({
     name: impName,
     description: impDescription,
     goals: impGoals,
-    strategy: strategyValues,
   });
+  const importMissingStrategy = missingImportFields(strategyValues);
+
 
   async function createImport(e: React.FormEvent) {
     e.preventDefault();
-    if (!importReady) return;
+    if (!importCoreReady) return;
     setCreating(true);
     try {
       const { data: userData } = await supabase.auth.getUser();
@@ -396,8 +400,9 @@ function DashboardPage() {
       });
       if (iErr) throw iErr;
       toast.success(
-        "Project imported. Link GitHub and run the A–Z audit next — add strategy context from the Audit Center anytime.",
+        "Project opened. Fill in strategy context and link GitHub in the Audit Center — the full A–Z audit requires valid strategy context on all eight fields.",
       );
+
       const newProjectId = proj.id;
       resetForms();
       await load();
@@ -583,15 +588,16 @@ function DashboardPage() {
               })}
             </div>
           </div>
-          <details open className="rounded-lg border border-border bg-surface-2/40 p-4">
+          <details className="rounded-lg border border-border bg-surface-2/40 p-4">
             <summary className="cursor-pointer list-none">
               <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
-                Strategy context — required before the A–Z audit
+                Strategy context — optional here, required before the A–Z audit
               </span>
               <p className="mt-2 text-xs text-muted-foreground">
-                The board never invents strategy. All eight fields are
-                required so the audit reads your code against real owner
-                intent. For price and upgrade trigger you can tap
+                You can open the project now and fill these in from the Audit
+                Center. All eight fields are required before the expensive
+                A–Z audit itself can start. For price and upgrade trigger
+                you can tap
                 <span className="mx-1 font-mono text-foreground/80">Board should recommend</span>
                 if you'd rather have the board propose one.
               </p>
@@ -651,14 +657,14 @@ function DashboardPage() {
               />
             </div>
           </details>
-          {!importReady && importMissingFields.length > 0 && (
+          {importCoreReady && importMissingStrategy.length > 0 && (
             <div
               role="status"
               className="rounded-md border border-border bg-surface-2/60 px-4 py-3 text-xs text-muted-foreground"
             >
-              Still needed before the audit can start:{" "}
+              You can open the project now. Still needed before the A–Z audit can start:{" "}
               <span className="text-foreground">
-                {importMissingFields
+                {importMissingStrategy
                   .map((f: StrategyField) => STRATEGY_FIELD_LABELS[f])
                   .join(", ")}
               </span>
@@ -668,11 +674,13 @@ function DashboardPage() {
           <div className="flex gap-2">
             <button
               type="submit"
-              disabled={creating || !importReady}
+              disabled={creating || !importCoreReady}
+              data-testid="import-create-submit"
               className="rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
             >
-              {creating ? "Importing…" : "Import and open the Audit Center"}
+              {creating ? "Opening…" : "Open the project"}
             </button>
+
             <button
               type="button"
               onClick={resetForms}
