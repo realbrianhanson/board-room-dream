@@ -353,3 +353,108 @@ export function skeletonError(
   }
   return null;
 }
+
+// ============================================================================
+// Verification prompt: layer-awareness + never-weaken invariant.
+// See PROMPT-CONTRACT-R5 (2026-07-23). A verification prompt must (a) exercise
+// the layer(s) the current batch actually touches, and (b) never instruct
+// Lovable to rewrite/weaken tests or "match" existing insecure behavior.
+// ============================================================================
+
+export type BatchLayer = "db_only" | "edge_only" | "mixed";
+
+/**
+ * Classify what layer a batch actually touches based on touched_paths and
+ * compiled prompt content. Used to route verification requirements.
+ *
+ * - db_only: touched paths are exclusively under supabase/migrations/ or
+ *   supabase/tests/ and the compiled prompt does not invoke an RPC / create a
+ *   Postgres function. Verification is pgTAP + explicit positive/negative RLS
+ *   checks; DO NOT require an edge-function invocation or a Deno edge test.
+ * - edge_only: touched paths under supabase/functions/ (or the compiled prompt
+ *   invokes an RPC / defines a function) and no DB-only or app-level paths.
+ *   Verification directly invokes each affected endpoint/RPC with success and
+ *   failure/auth cases.
+ * - mixed: both layers, or app-level paths alongside DB/edge work.
+ */
+export function classifyBatchLayer(compiled: string, touched: TouchedPath[]): BatchLayer {
+  const paths = (touched ?? []).map((t) => t.path);
+  const hasEdgePath = paths.some((p) => p.startsWith("supabase/functions/"));
+  const hasDbPath = paths.some(
+    (p) => p.startsWith("supabase/migrations/") || p.startsWith("supabase/tests/"),
+  );
+  const hasAppPath = paths.some((p) => p && !p.startsWith("supabase/"));
+  const rpcOrFn = /\.rpc\s*\(|\bCREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\b|\bcall(?:ing)?\s+(?:the\s+)?[a-z_][a-z0-9_]*\s+RPC\b/i.test(
+    compiled ?? "",
+  );
+  if ((hasEdgePath || rpcOrFn) && (hasDbPath || hasAppPath)) return "mixed";
+  if (hasEdgePath || rpcOrFn) return "edge_only";
+  if (hasDbPath && !hasAppPath) return "db_only";
+  return "mixed";
+}
+
+/**
+ * Reject verification prompts that require an unrelated layer (edge/RPC/Deno
+ * edge tests on a pure DB batch) or omit the layer's real checks.
+ */
+export function verificationScopeError(vp: string, layer: BatchLayer): string | null {
+  const text = vp ?? "";
+  const requiresEdge = /\bedge[-\s]?function(?:s)?\b/i.test(text);
+  const requiresDenoEdge = /\bdeno\s+(?:edge\s+)?test/i.test(text);
+  const requiresRpcCall = /\b(?:invoke|call|hit|run)\b[^.]*\brpc\b/i.test(text) || /\brpc[s]?\b[^.]*\b(?:with|success|failure)\b/i.test(text);
+  const dbSignal = /(pg[_\s-]?tap|migration|schema|rls|polic(?:y|ies)|grant|revoke|psql|\bselect\s|owner|anon|cross[-\s]?tenant|another user|different (?:user|tenant))/i.test(text);
+  const hasPositive = /\bpositive\b|as (?:the )?owner|owner\s+can|succeed(?:s)?\b/i.test(text);
+  const hasNegative = /\bnegative\b|as (?:an )?anon|as (?:another|a different) user|cross[-\s]?tenant|zero rows|blocked\b|deni(?:ed|es)|forbidden/i.test(text);
+
+  if (layer === "db_only") {
+    if (requiresEdge || requiresDenoEdge || requiresRpcCall) {
+      return `compiled_verification_prompt_md requires edge-function / RPC / Deno edge-test steps, but this batch's touched paths are DB-only (supabase/migrations|tests). Layer-scope drift is rejected — pgTAP / migration / RLS checks only.`;
+    }
+    if (!dbSignal) {
+      return `supabase DB-only batch verification must invoke pgTAP / migration / RLS checks (positive AND negative cases).`;
+    }
+    if (!hasPositive || !hasNegative) {
+      return `supabase DB-only batch verification must include explicit positive AND negative RLS/permission cases (owner allowed; anon or cross-tenant blocked).`;
+    }
+    return null;
+  }
+  if (layer === "edge_only") {
+    if (!(requiresEdge || requiresRpcCall || requiresDenoEdge)) {
+      return `supabase edge/RPC batch verification must directly invoke each affected edge function or RPC with success AND failure/auth cases.`;
+    }
+    return null;
+  }
+  // mixed: require at least one signal from each layer
+  const edgeSignal = requiresEdge || requiresRpcCall || requiresDenoEdge;
+  if (!(dbSignal && edgeSignal)) {
+    return `supabase mixed batch verification must exercise BOTH the DB layer (pgTAP/RLS positive+negative) AND the edge/RPC layer (direct invocation with success+failure) as separate checks.`;
+  }
+  return null;
+}
+
+/**
+ * Reject verification prompts that would weaken a real invariant. A verifier
+ * may repair a reproduced defect it caused, but must never rewrite tests to
+ * "match" existing insecure behavior or delete a failing assertion. If a
+ * security invariant fails and the batch forbids policy/runtime changes, the
+ * verifier must report the reproduction and stop.
+ */
+export function verificationWeakeningError(vp: string): string | null {
+  const text = vp ?? "";
+  if (!text) return null;
+  const patterns: RegExp[] = [
+    /fix\s+(?:the\s+)?tests?\s+to\s+(?:match|pass|make|conform|reflect)/i,
+    /(?:rewrite|weaken|relax|loosen|soften|remove|delete|disable|comment\s+out|skip)\s+(?:the\s+)?(?:failing\s+)?(?:tests?|assertions?|invariants?|checks?)/i,
+    /make\s+(?:the\s+)?tests?\s+(?:green|pass)\s+by\s+(?:changing|updating|weakening|removing)/i,
+    /(?:match|conform\s+to)\s+(?:the\s+)?(?:existing|current)\s+(?:rls\s+)?polic(?:y|ies)/i,
+    /adjust\s+(?:the\s+)?tests?\s+to\s+(?:reflect|match)\s+(?:current|existing)/i,
+    /update\s+(?:the\s+)?tests?\s+to\s+match\s+(?:current|existing)/i,
+  ];
+  for (const p of patterns) {
+    const m = text.match(p);
+    if (m) {
+      return `compiled_verification_prompt_md contains a test-weakening directive ("${m[0]}"). A failing security invariant must be reported and stopped for a separate owner-reviewed fix batch — never made green by rewriting the expected invariant.`;
+    }
+  }
+  return null;
+}
