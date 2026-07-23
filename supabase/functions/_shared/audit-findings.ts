@@ -4,6 +4,8 @@
 // finalize). Any change to the schema or hard caps must land here so all
 // stages agree.
 
+import { isMonetizationOwnerInputUnset } from "./import-strategy.ts";
+
 export type Severity = "P0" | "P1" | "P2" | "P3";
 export type Confidence = "high" | "medium" | "low";
 
@@ -458,6 +460,16 @@ export function looksLikeUnauthorizedMonetizationClaim(
   return UNAUTHORIZED_MONETIZATION_CLAIM_RX.test(`${title}\n${description}`);
 }
 
+const AFFIRMATIVE_MONETIZATION_OWNER_CONTRACT_RX =
+  /\bOWNER_CONTRACT:\s*[^|\n]*(?:[$£€]\s*\d|\d+\s*(?:\/|per\s+)?(?:mo|month|seat|project|user|year)|checkout|payment|paid\s+offer|price\s*anchor|upgrade\s*trigger|subscription|billing|plan|tier)\b/i;
+
+export function hasAffirmativeMonetizationOwnerContract(evidence: string): boolean {
+  const ev = String(evidence ?? "");
+  if (!hasOwnerContractMarker(ev)) return false;
+  if (isMonetizationOwnerInputUnset(ev)) return false;
+  return AFFIRMATIVE_MONETIZATION_OWNER_CONTRACT_RX.test(ev);
+}
+
 export function downgradeUnsupported(
   findings: CleanFinding[],
   ownerContract?: AuditOwnerContract,
@@ -549,14 +561,16 @@ export function downgradeUnsupported(
     // generic "app has no money path / pricing CTA / checkout / upgrade
     // path" findings CANNOT publish as P0/P1 — the owner has explicitly
     // deferred that decision. Cap to P2 with a blocked-by-owner-decision
-    // reason. A real broken EXISTING owner-authorized flow (OWNER_CONTRACT:
-    // or RUNTIME_FAILURE: markers present) still publishes at its severity.
+    // reason. A real broken EXISTING owner-authorized flow (affirmative
+    // monetization OWNER_CONTRACT: or RUNTIME_FAILURE: evidence) still
+    // publishes at its severity. OWNER_CONTRACT: text that merely says the
+    // decision is not set / deferred / approval-needed is NOT authorization.
     const monetizationBlocked = ownerContract
       && (ownerContract.priceAnchorUnset || ownerContract.upgradeTriggerUnset);
     if ((sev === "P0" || sev === "P1")
         && monetizationBlocked
         && looksLikeUnauthorizedMonetizationClaim(f.title, f.description, f.file_path)
-        && !hasOwnerContractMarker(f.evidence)
+        && !hasAffirmativeMonetizationOwnerContract(f.evidence)
         && !hasRuntimeFailureMarker(f.evidence)) {
       push(sev, "P2", "monetization surface (money path / pricing CTA / checkout / upgrade path) blocked-by-owner-decision — owner has not authorized price_anchor / upgrade_trigger; approval needed before this can be P0/P1");
       return { ...f, severity: "P2" as Severity };

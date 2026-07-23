@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   isFieldValid,
+  isMonetizationOwnerInputUnset,
   isOptionalMonetizationField,
   OPTIONAL_MONETIZATION_FIELDS,
   RECOMMEND_PLACEHOLDER,
@@ -44,6 +45,27 @@ Deno.test("parity — recommend placeholder only valid on recommendable fields",
   assert(isFieldValid("price_anchor", RECOMMEND_PLACEHOLDER));
   assert(isFieldValid("upgrade_trigger", RECOMMEND_PLACEHOLDER));
   assert(!isFieldValid("buyer", RECOMMEND_PLACEHOLDER));
+});
+
+Deno.test("parity — monetization unset helper recognizes canonical and legacy owner-decision phrases", () => {
+  const legacyPrice = "Not set by owner — the Board must recommend a price and clearly label the recommendation as an assumption.";
+  const legacyUpgrade = "Not set by owner — the Board must recommend a clear project- or usage-based upgrade trigger and label it as an assumption.";
+  for (const v of [
+    "",
+    RECOMMEND_PLACEHOLDER,
+    legacyPrice,
+    legacyUpgrade,
+    "Not supplied by owner",
+    "[OWNER DECISION REQUIRED] choose later",
+    "proposal_requires_owner_approval",
+    "Board should recommend",
+  ]) {
+    assert(isMonetizationOwnerInputUnset(v), v);
+    assert(isFieldValid("price_anchor", v), v);
+    assert(isFieldValid("upgrade_trigger", v), v);
+  }
+  assert(!isMonetizationOwnerInputUnset("$29/month"));
+  assert(!isMonetizationOwnerInputUnset("Upgrade after second project"));
 });
 
 Deno.test("parity — blank accepted only on optional fields", () => {

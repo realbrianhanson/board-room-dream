@@ -39,8 +39,18 @@ export const OPTIONAL_MONETIZATION_FIELDS: readonly StrategyField[] = [
 export const RECOMMEND_PLACEHOLDER = "Not set — Board should recommend";
 export const RECOMMENDABLE_FIELDS: readonly StrategyField[] = OPTIONAL_MONETIZATION_FIELDS;
 
+const MONETIZATION_OWNER_UNSET_RX =
+  /(?:not\s+set\s+by\s+owner|not\s+supplied\s+by\s+owner|\[?owner\s+decision\s+required\]?|proposal_requires_owner_approval|board\s+(?:must|should)\s+recommend|approval\s+required|deferred|not\s+approved|unapproved)/i;
+
 export function isRecommendPlaceholder(value: string | null | undefined): boolean {
   return (value ?? "").trim().toLowerCase() === RECOMMEND_PLACEHOLDER.toLowerCase();
+}
+
+export function isMonetizationOwnerInputUnset(value: string | null | undefined): boolean {
+  const v = t(value);
+  if (v.length === 0) return true;
+  if (isRecommendPlaceholder(v)) return true;
+  return MONETIZATION_OWNER_UNSET_RX.test(v);
 }
 
 export function isOptionalMonetizationField(field: StrategyField): boolean {
@@ -80,7 +90,7 @@ export function isFieldValid(field: StrategyField, value: string | null | undefi
   const v = t(value);
   const optional = isOptionalMonetizationField(field);
   if (v.length === 0) return optional;
-  if (isRecommendPlaceholder(v)) return optional;
+  if (isMonetizationOwnerInputUnset(v)) return optional;
   if (isRepeatedSingleChar(v)) return false;
   if (isPunctuationOnly(v)) return false;
   if (FILLER_PLACEHOLDERS.has(normFiller(v))) return false;
@@ -101,7 +111,7 @@ export function validateImportStrategy(
       if (!optional) out.push({ field: f, reason: "missing" });
       continue;
     }
-    if (isRecommendPlaceholder(v)) {
+    if (isMonetizationOwnerInputUnset(v)) {
       if (!optional) out.push({ field: f, reason: "placeholder-not-allowed" });
       continue;
     }
