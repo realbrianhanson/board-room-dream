@@ -433,13 +433,11 @@ function IntakePage() {
                 onBlur={() => persist(answers)}
               />
               <TextInput
-                label="What makes them buy now, renew, or move up?"
-                hint="One trigger — a deadline, an outcome they hit, a moment of pain."
+                label="What makes them buy now, renew, or move up? (optional)"
+                hint="Leave blank if you'd rather the Board propose one — it will recommend a project- or usage-based upgrade trigger. If you already have a trigger in mind, one line is enough: a deadline, an outcome they hit, or a moment of pain."
                 value={answers.upgrade_trigger ?? ""}
                 onChange={(v) => setAnswers((a) => ({ ...a, upgrade_trigger: v }))}
                 onBlur={() => persist(answers)}
-                required
-                missing={!trimmed(answers.upgrade_trigger)}
               />
             </div>
           </div>

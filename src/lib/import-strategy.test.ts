@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  isImportCoreReady,
   isImportReady,
   isImportStrategyReady,
+  missingImportFields,
   missingStrategyFields,
   normalizeStrategyForPersist,
   strategyCompleteness,
+  isRecommendPlaceholder,
+  RECOMMEND_PLACEHOLDER,
   STRATEGY_FIELDS,
   type ImportStrategyInput,
 } from "./import-strategy";
@@ -20,20 +24,52 @@ const full: ImportStrategyInput = {
   positioning: "Unlike PDFs, flags client-specific risk",
 };
 
-describe("import readiness (core identity only)", () => {
-  it("accepts when name + description + at least one goal are present", () => {
-    expect(isImportReady({ name: "App", description: "Does X.", goals: ["code_audit"] })).toBe(true);
+describe("core-identity readiness", () => {
+  it("accepts name + description + at least one goal", () => {
+    expect(isImportCoreReady({ name: "App", description: "Does X.", goals: ["code_audit"] })).toBe(true);
+  });
+  it("rejects when any is missing", () => {
+    expect(isImportCoreReady({ name: "", description: "x", goals: ["code_audit"] })).toBe(false);
+    expect(isImportCoreReady({ name: "App", description: "  ", goals: ["code_audit"] })).toBe(false);
+    expect(isImportCoreReady({ name: "App", description: "x", goals: [] })).toBe(false);
+  });
+});
+
+describe("isImportReady (core + strategy context required)", () => {
+  it("requires all 8 strategy fields alongside core identity", () => {
+    expect(isImportReady({ name: "App", description: "x", goals: ["code_audit"] })).toBe(false);
+    expect(
+      isImportReady({ name: "App", description: "x", goals: ["code_audit"], strategy: full }),
+    ).toBe(true);
   });
 
-  it("rejects when name or description or goals are missing", () => {
-    expect(isImportReady({ name: "", description: "x", goals: ["code_audit"] })).toBe(false);
-    expect(isImportReady({ name: "App", description: "  ", goals: ["code_audit"] })).toBe(false);
-    expect(isImportReady({ name: "App", description: "x", goals: [] })).toBe(false);
+  it("accepts the RECOMMEND placeholder for price_anchor and upgrade_trigger", () => {
+    const withPlaceholders: ImportStrategyInput = {
+      ...full,
+      price_anchor: RECOMMEND_PLACEHOLDER,
+      upgrade_trigger: RECOMMEND_PLACEHOLDER,
+    };
+    expect(
+      isImportReady({ name: "App", description: "x", goals: ["code_audit"], strategy: withPlaceholders }),
+    ).toBe(true);
   });
 
-  it("does NOT require strategy fields", () => {
-    // Even with every strategy field blank, core identity alone is enough.
-    expect(isImportReady({ name: "App", description: "x", goals: ["code_audit"] })).toBe(true);
+  it("still rejects when a non-recommendable field is blank", () => {
+    expect(
+      isImportReady({
+        name: "App",
+        description: "x",
+        goals: ["code_audit"],
+        strategy: { ...full, positioning: "" },
+      }),
+    ).toBe(false);
+  });
+
+  it("missingImportFields lists the exact remaining fields", () => {
+    expect(missingImportFields({ ...full, buyer: "", wow_moment: " " }).sort()).toEqual(
+      ["buyer", "wow_moment"].sort(),
+    );
+    expect(missingImportFields(full)).toEqual([]);
   });
 });
 
@@ -42,37 +78,42 @@ describe("strategy completeness helper", () => {
     expect(strategyCompleteness(full)).toEqual({ filled: 8, total: 8 });
     expect(missingStrategyFields(full)).toEqual([]);
   });
-
   it("returns every field name when empty", () => {
     expect(missingStrategyFields({})).toEqual([...STRATEGY_FIELDS]);
     expect(strategyCompleteness({})).toEqual({ filled: 0, total: 8 });
   });
+});
 
-  it("reports the specific missing field names", () => {
-    const partial = { ...full, acquisition_channel: "", wow_moment: "  " };
-    expect(missingStrategyFields(partial).sort()).toEqual(["acquisition_channel", "wow_moment"].sort());
-    expect(strategyCompleteness(partial)).toEqual({ filled: 6, total: 8 });
+describe("recommend placeholder helper", () => {
+  it("detects the canonical placeholder case-insensitively", () => {
+    expect(isRecommendPlaceholder(RECOMMEND_PLACEHOLDER)).toBe(true);
+    expect(isRecommendPlaceholder(RECOMMEND_PLACEHOLDER.toUpperCase())).toBe(true);
+    expect(isRecommendPlaceholder("  " + RECOMMEND_PLACEHOLDER + "  ")).toBe(true);
+    expect(isRecommendPlaceholder("$29/mo")).toBe(false);
+    expect(isRecommendPlaceholder("")).toBe(false);
   });
 });
 
-describe("strategy persist normalization", () => {
-  it("trims values and preserves blanks as empty strings (never fabricates)", () => {
+describe("persist normalization", () => {
+  it("trims values and preserves blanks as empty strings", () => {
     const out = normalizeStrategyForPersist({ ...full, buyer: "  ", positioning: "  X  " });
     expect(out.buyer).toBe("");
     expect(out.positioning).toBe("X");
   });
-
-  it("always returns all 8 keys so downstream code can treat missing as explicit blanks", () => {
+  it("always returns all 8 keys", () => {
     const out = normalizeStrategyForPersist({});
     for (const k of STRATEGY_FIELDS) expect(out[k]).toBe("");
   });
 });
 
-describe("legacy isImportStrategyReady (full strategy)", () => {
-  it("still true when everything filled", () => {
+describe("legacy isImportStrategyReady (strict)", () => {
+  it("true when everything filled with real values", () => {
     expect(isImportStrategyReady(full)).toBe(true);
   });
-  it("false when anything blank — kept for callers that need the 'complete' signal", () => {
+  it("false for placeholder values (strict gate does not accept 'recommend')", () => {
+    expect(isImportStrategyReady({ ...full, price_anchor: RECOMMEND_PLACEHOLDER })).toBe(false);
+  });
+  it("false when anything blank", () => {
     expect(isImportStrategyReady({ ...full, positioning: "" })).toBe(false);
   });
 });

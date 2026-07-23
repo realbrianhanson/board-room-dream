@@ -34,14 +34,15 @@ describe("canProceedFromIntakeStep — five-step persistence of the new required
     expect(canProceedFromIntakeStep("pain", { ...filled, pain: "" })).toBe(false);
   });
 
-  it("step 4 (money) requires money + paid_offer + upgrade_trigger; price_anchor is optional", () => {
+  it("step 4 (money) requires money + paid_offer; price_anchor AND upgrade_trigger are optional", () => {
     expect(canProceedFromIntakeStep("money", filled)).toBe(true);
     expect(canProceedFromIntakeStep("money", { ...filled, paid_offer: "" })).toBe(false);
-    // price_anchor is INTENTIONALLY optional — owners may leave it unset
-    // so the Board can propose a starting price. Blank must not block.
+    // Both monetization inputs are INTENTIONALLY optional so the Board
+    // can propose them. Blanks must not block.
     expect(canProceedFromIntakeStep("money", { ...filled, price_anchor: "" })).toBe(true);
     expect(canProceedFromIntakeStep("money", { ...filled, price_anchor: undefined })).toBe(true);
-    expect(canProceedFromIntakeStep("money", { ...filled, upgrade_trigger: "" })).toBe(false);
+    expect(canProceedFromIntakeStep("money", { ...filled, upgrade_trigger: "" })).toBe(true);
+    expect(canProceedFromIntakeStep("money", { ...filled, upgrade_trigger: undefined })).toBe(true);
     expect(canProceedFromIntakeStep("money", { ...filled, money: undefined })).toBe(false);
   });
 
@@ -61,7 +62,6 @@ describe("shared MIN_STRATEGY_CHARS minimum", () => {
     expect(canProceedFromIntakeStep("idea", { ...filled, positioning: tooShort })).toBe(false);
     expect(canProceedFromIntakeStep("buyer", { ...filled, acquisition_channel: tooShort })).toBe(false);
     expect(canProceedFromIntakeStep("money", { ...filled, paid_offer: tooShort })).toBe(false);
-    expect(canProceedFromIntakeStep("money", { ...filled, upgrade_trigger: tooShort })).toBe(false);
     expect(canProceedFromIntakeStep("inspiration", { ...filled, activation_moment: tooShort })).toBe(false);
     expect(canProceedFromIntakeStep("inspiration", { ...filled, wow_moment: tooShort })).toBe(false);
   });
