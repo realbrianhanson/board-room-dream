@@ -6,9 +6,9 @@ import { X } from "lucide-react";
  *
  * Contract:
  *   • Backdrop click closes.
- *   • Escape closes (either as a keydown on the focused backdrop OR at the
- *     document level — some browsers do not deliver key events to a
- *     programmatically focused div reliably during test).
+ *   • Escape closes via a single document-level listener. A duplicate
+ *     backdrop onKeyDown would double-fire onClose because a real key
+ *     event on the focused backdrop bubbles up to document.
  *   • Image click stays open (stopPropagation).
  *   • Close-button click closes exactly once (stopPropagation prevents the
  *     backdrop from double-firing onClose).
@@ -38,9 +38,7 @@ export function DesignLightbox({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
-    // Document-level Escape guarantees the modal closes even when focus
-    // has shifted (some browsers won't fire keydown on a
-    // programmatically-focused div reliably).
+    // Single global Escape path — no duplicate backdrop onKeyDown.
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
@@ -55,9 +53,6 @@ export function DesignLightbox({
       tabIndex={-1}
       className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 p-6 outline-none"
       onClick={onClose}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") onClose();
-      }}
     >
       <img
         data-testid="lightbox-image"
