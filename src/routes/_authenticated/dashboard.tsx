@@ -199,16 +199,21 @@ function DashboardPage() {
     let planSet = new Set<string>();
     const fixInfo = new Map<string, number>();
     const allPassedSet = new Set<string>();
-    let finalAuditSet = new Set<string>();
+    const importAuditSet = new Set<string>();
+    const finalAuditSet = new Set<string>();
     if (ids.length) {
       const [{ data: pvs }, { data: bs }, { data: au }] = await Promise.all([
-        supabase.from("plan_versions").select("project_id, kind").in("project_id", ids).eq("is_build_safe", true),
+        supabase.from("plan_versions").select("project_id, kind, locked_at").in("project_id", ids).eq("is_build_safe", true),
         supabase.from("batches").select("project_id, batch_no, status").in("project_id", ids),
-        supabase.from("audits").select("project_id, kind, status").in("project_id", ids).eq("kind", "final_az").in("status", ["clean", "findings"]),
+        supabase.from("audits").select("project_id, kind, status, created_at").in("project_id", ids).eq("kind", "final_az").in("status", ["clean", "findings"]),
       ]);
-      for (const r of (pvs ?? []) as Array<{ project_id: string; kind: string }>) {
+      const planLockedAt = new Map<string, number>();
+      for (const r of (pvs ?? []) as Array<{ project_id: string; kind: string; locked_at: string }>) {
         if (r.kind === "design") designSet.add(r.project_id);
-        if (r.kind === "plan") planSet.add(r.project_id);
+        if (r.kind === "plan") {
+          planSet.add(r.project_id);
+          planLockedAt.set(r.project_id, new Date(r.locked_at).getTime());
+        }
       }
 
       const byProject = new Map<string, Array<{ batch_no: number; status: string }>>();
@@ -225,7 +230,16 @@ function DashboardPage() {
           allPassedSet.add(pid);
         }
       }
-      finalAuditSet = new Set((au ?? []).map((r: { project_id: string }) => r.project_id));
+      // Split successful final_az into pre-plan (import) vs post-lock (final
+      // verification) using the locked-plan timestamp. A single audit row can
+      // only ever satisfy ONE of these — the pre-plan Audit stage on imports
+      // and the post-build ship gate stay truly distinct.
+      for (const r of (au ?? []) as Array<{ project_id: string; created_at: string }>) {
+        const lockedAt = planLockedAt.get(r.project_id);
+        const auditAt = new Date(r.created_at).getTime();
+        if (lockedAt == null || auditAt < lockedAt) importAuditSet.add(r.project_id);
+        else finalAuditSet.add(r.project_id);
+      }
     }
     setProjects(
       rows.map((r) => ({
@@ -236,6 +250,7 @@ function DashboardPage() {
         has_fix_needed: fixInfo.has(r.id),
         fix_batch_no: fixInfo.get(r.id),
         all_passed: allPassedSet.has(r.id),
+        has_import_audit: importAuditSet.has(r.id),
         has_final_audit: finalAuditSet.has(r.id),
       }) as Project),
     );
