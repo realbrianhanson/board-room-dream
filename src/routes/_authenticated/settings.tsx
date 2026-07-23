@@ -853,9 +853,14 @@ function FlywheelPanel() {
   const [addenda, setAddenda] = useState<string[]>([]);
   const [mining, setMining] = useState(false);
   const [acting, setActing] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   async function load() {
-    const [{ data: rows }, { data: setting }] = await Promise.all([
+    // Inspect both queries. Any failure must render an explicit error + Retry;
+    // silently coercing to [] would show "No pending proposals" and hide the
+    // real cause. Preserve last-good data on a background refresh failure so
+    // admins keep seeing what they already loaded.
+    const [propsRes, setRes] = await Promise.all([
       supabase
         .from("field_manual_proposals")
         .select("id, proposed_rule, rationale, status, created_at")
@@ -863,8 +868,13 @@ function FlywheelPanel() {
         .order("created_at", { ascending: false }),
       supabase.from("app_settings").select("value").eq("key", "field_manual_addenda").maybeSingle(),
     ]);
-    setProposals((rows ?? []) as Proposal[]);
-    const items = (setting?.value as { items?: unknown[] } | null)?.items;
+    if (propsRes.error || setRes.error) {
+      setLoadError(propsRes.error?.message ?? setRes.error?.message ?? "Failed to load field manual");
+      return;
+    }
+    setLoadError(null);
+    setProposals((propsRes.data ?? []) as Proposal[]);
+    const items = (setRes.data?.value as { items?: unknown[] } | null)?.items;
     setAddenda(Array.isArray(items) ? items.map(String) : []);
   }
   useEffect(() => { void load(); }, []);
