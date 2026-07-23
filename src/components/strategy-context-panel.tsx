@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ChevronDown, ChevronUp, Check, AlertTriangle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -6,15 +6,32 @@ import {
   RECOMMENDABLE_FIELDS,
   RECOMMEND_PLACEHOLDER,
   STRATEGY_FIELDS,
+  STRATEGY_FIELD_LABELS,
   strategyCompleteness,
   normalizeStrategyForPersist,
+  validateImportStrategy,
   type ImportStrategyInput,
   type StrategyField,
 } from "@/lib/import-strategy";
 
 import { strategyPanelPhase } from "@/lib/strategy-panel-phase";
 
-type Props = { projectId: string; isOwner: boolean };
+export type StrategyPanelHandle = {
+  focus: () => void;
+};
+
+export type StrategyPanelValidity = {
+  valid: boolean;
+  missingLabels: string[];
+  missingFields: StrategyField[];
+};
+
+type Props = {
+  projectId: string;
+  isOwner: boolean;
+  onValidityChange?: (v: StrategyPanelValidity) => void;
+};
+
 
 const FIELD_LABEL: Record<StrategyField, { label: string; placeholder: string }> = {
   buyer: {
