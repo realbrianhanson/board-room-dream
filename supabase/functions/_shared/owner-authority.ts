@@ -223,6 +223,9 @@ const CATEGORY_KEYWORDS: Record<UnauthorizedCategory, RegExp[]> = {
   payment_provider_or_checkout: [
     /stripe|paddle|paypal|lemon\s*squeezy|shopify|square|braintree|razorpay|payment|checkout|paywall|subscription|billing|charge|price|per[-\s]?seat/i,
   ],
+  monetization_scope: [
+    /pricing|price|paid\s+(?:offer|tier|plan)|money\s+path|revenue\s+path|monetiz|upgrade\s+(?:trigger|condition)|subscription|paywall|billing|checkout|charge/i,
+  ],
   new_external_integration: [
     /sendgrid|twilio|sentry|intercom|slack|openai|anthropic|resend|postmark|mailgun|segment|amplitude|posthog|mixpanel|pusher|algolia|cloudinary|s3|external|third[-\s]?party|integration|provider|api\s+key/i,
   ],
