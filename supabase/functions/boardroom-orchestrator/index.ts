@@ -1153,7 +1153,7 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
           .limit(1)
           .maybeSingle();
         const nextNo = Math.floor(Number(last?.batch_no ?? 0)) + 1;
-        await admin.from("batches").insert({
+        await insertModelAuthoredBatchOrAlert(admin, run, audit, {
           project_id: audit.project_id,
           user_id: audit.user_id,
           batch_no: nextNo,
