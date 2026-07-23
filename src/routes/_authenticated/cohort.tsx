@@ -474,6 +474,7 @@ function CohortPage() {
           </div>
         )}
       </section>
+      </>)}
     </div>
   );
 }
