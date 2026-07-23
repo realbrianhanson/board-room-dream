@@ -720,32 +720,43 @@ async function finalizeBlueprint(admin: any, run: any, steps: any[]) {
     ? extract!.response_json.features
     : Array.isArray(bp?.response_json?.features) ? bp!.response_json.features : [];
 
-  // Pre-finalization owner-authority gate: the PRD markdown + features are
-  // generated AFTER lockPlanAndQueueBlueprint and would otherwise bypass the
-  // deterministic gate. Independently load owner sources and validate both
-  // artifacts. On violation: do NOT update plan_versions, do NOT mark the
-  // run completed. Fail with proposal_requires_owner_approval + alert.
-  // Chair-ruled and consensus flows are treated identically.
+  // Pre-finalization owner-authority gate (R6 correction wrapper). PRD + features
+  // are generated AFTER lockPlanAndQueueBlueprint; block the row update behind
+  // the correction path so a fixable violation does not discard the plan.
+  let prdOut = prdMd;
+  let featuresOut: any = features;
   if (planVersionId && (prdMd || (features && features.length))) {
+    let authority: Awaited<ReturnType<typeof loadOwnerAuthority>>;
     try {
-      const authority = await loadOwnerAuthority(admin, {
+      authority = await loadOwnerAuthority(admin, {
         projectId: run.project_id,
         founderNotes: run.founder_notes ?? null,
       });
-      const preErr = finalizePlanAuthorityError(prdMd, features, authority);
-      if (preErr) {
+    } catch (e) {
+      await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
+      return;
+    }
+    const enforceRes = await enforceAuthorityOrCorrect({
+      admin,
+      run,
+      phase: "pre_finalize_blueprint",
+      authority,
+      artifacts: [
+        { key: "prd_md", label: "plan.prd_md (pending finalization)", text: String(prdMd ?? "") },
+        { key: "features_json", label: "plan.features (pending finalization)", text: JSON.stringify(features ?? []) },
+      ],
+      onTerminalFail: async (err) => {
         // Invalidate the plan_versions row that was inserted upstream: PRD
-        // failed the owner-authority gate, so this plan must not be used
-        // as a build-safe input by later design/batches/compiler reads.
-        if (planVersionId) {
-          try {
-            await admin
-              .from("plan_versions")
-              .update({ is_build_safe: false, invalidated_reason: "owner_authority_prd_gate_failed" })
-              .eq("id", planVersionId);
-          } catch { /* best-effort */ }
-        }
-        await failRun(admin, run, preErr);
+        // failed the owner-authority gate after AUTHORITY_CORRECTION_MAX
+        // attempts, so this plan must not be used as a build-safe input by
+        // later design/batches/compiler reads.
+        try {
+          await admin
+            .from("plan_versions")
+            .update({ is_build_safe: false, invalidated_reason: "owner_authority_prd_gate_failed" })
+            .eq("id", planVersionId);
+        } catch { /* best-effort */ }
+        await failRun(admin, run, err);
         await insertAlert(admin, {
           user_id: run.user_id,
           project_id: run.project_id,
@@ -754,22 +765,22 @@ async function finalizeBlueprint(admin: any, run: any, steps: any[]) {
             run_id: run.id,
             mode: finalStatus,
             phase: "pre_finalize_blueprint",
-            excerpt: preErr.slice(0, 800),
+            excerpt: err.slice(0, 800),
           },
         });
-        return;
-      }
-    } catch (e) {
-      await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
-      return;
-    }
-
+      },
+    });
+    if (enforceRes.status === "failed_terminal") return;
+    if (enforceRes.status === "pending") return;
+    prdOut = enforceRes.artifacts.find((a) => a.key === "prd_md")!.text;
+    const featuresText = enforceRes.artifacts.find((a) => a.key === "features_json")!.text;
+    try { featuresOut = JSON.parse(featuresText); } catch { featuresOut = features; }
   }
 
-  if (planVersionId && prdMd) {
+  if (planVersionId && prdOut) {
     await admin
       .from("plan_versions")
-      .update({ prd_md: prdMd, features })
+      .update({ prd_md: prdOut, features: featuresOut })
       .eq("id", planVersionId);
   }
   await admin
