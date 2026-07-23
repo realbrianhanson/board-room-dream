@@ -504,7 +504,7 @@ export function BoardroomSession(props: BoardroomSessionProps) {
             onClick={convene}
             disabled={convening || hasKey === false || !!gateReason}
             title={gateReason ?? (hasKey === false ? "Seat the board first — add your OpenRouter key in Settings." : undefined)}
-            className="rounded-md border border-primary/50 bg-primary/10 px-4 py-2 font-mono text-[11px] uppercase tracking-widest text-primary hover:bg-[hsl(38_65%_55%/0.14)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-md border border-primary/50 bg-primary/10 px-4 py-2 font-mono text-[11px] uppercase tracking-widest text-primary hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {convening
               ? "Reconvening…"
@@ -580,7 +580,7 @@ export function BoardroomSession(props: BoardroomSessionProps) {
 
 
       <style>{`
-        @keyframes consensusPulse { 0% { box-shadow: 0 0 0 0 hsl(38 65% 55% / 0.55); } 100% { box-shadow: 0 0 0 42px hsl(38 65% 55% / 0); } }
+        @keyframes consensusPulse { 0% { box-shadow: 0 0 0 0 hsl(var(--primary) / 0.55); } 100% { box-shadow: 0 0 0 42px hsl(var(--primary) / 0); } }
         .consensus-pulse { animation: consensusPulse 1.2s ease-out 1; border-radius: 9999px; }
         @keyframes transcriptEnter { 0% { opacity: 0; transform: translateY(8px); } 100% { opacity: 1; transform: translateY(0); } }
         .transcript-enter { animation: transcriptEnter 220ms ease-out both; }
@@ -661,7 +661,7 @@ function TheTable({
         })}
         <defs>
           <radialGradient id="tableGlow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="hsl(38 65% 55% / 0.08)" />
+            <stop offset="0%" stopColor="hsl(var(--primary) / 0.08)" />
             <stop offset="60%" stopColor="hsl(220 12% 14%)" />
             <stop offset="100%" stopColor="hsl(220 13% 11%)" />
           </radialGradient>

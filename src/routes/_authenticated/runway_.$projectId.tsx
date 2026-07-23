@@ -1243,7 +1243,7 @@ function BatchCard({
   return (
     <div
       className={`rounded-xl border bg-surface-1 transition-all ${
-        active ? "border-primary/50 shadow-[0_0_0_1px_hsl(38_65%_55%/0.15),0_20px_60px_-20px_hsl(38_65%_55%/0.25)]"
+        active ? "border-primary/50 shadow-[0_0_0_1px_hsl(var(--primary)/0.15),0_20px_60px_-20px_hsl(var(--primary)/0.25)]"
         : isPassed ? "border-success/35 opacity-90"
         : isSkipped ? "border-border opacity-60"
         : locked ? "border-border opacity-70"
