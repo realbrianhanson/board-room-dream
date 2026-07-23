@@ -213,7 +213,7 @@ export function normalize(s: string): string {
 // like `Do not add Stripe. Add Stripe checkout for $49.` (one line, two
 // sentences) still fires on the second sentence. Same for semicolon-
 // separated clauses: `Do not add Stripe; add Stripe checkout for $49.`
-const NEGATION_OR_PRESERVE = /\b(do\s+not|don['’]?t|never|avoid|reject|instead\s+of|keep\s+existing|preserve|preserving|already\s+exists|already\s+integrated|do not add|remove\s+the\s+dead|dead\s+import)\b/i;
+const NEGATION_OR_PRESERVE = /\b(do\s+not|don['’]?t|never|avoid|reject|instead\s+of|keep\s+existing|preserve|preserving|already\s+exists|already\s+integrated|do not add|remove\s+the\s+dead|dead\s+import|owner\s+decision\s+required)\b/i;
 
 // Category -> keyword vocabulary a marker quote must include to authorize
 // that category. Kept intentionally narrow: a "$49" quote cannot authorize
