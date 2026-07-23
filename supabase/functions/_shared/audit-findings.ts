@@ -512,14 +512,15 @@ export function downgradeUnsupported(
 
     // Rule 4c (severity-cap only): product-strategy / copy / positioning /
     // pricing / onboarding / buyer-reach findings are P2 by default. R6:
-    // path exclusion — backend infra paths are NEVER classified here, so a
-    // finding in supabase/functions/_shared/owner-authority.ts about a
-    // masked DROP TABLE / pay directive is not rescored away just because
-    // its evidence contains buyer/payment words. Rescored (not rejected).
+    // path exclusion — backend infra paths are NEVER classified here. Per
+    // the constitution, EITHER an OWNER_CONTRACT marker (verbatim owner
+    // intake / founder note / locked-PRD requirement) OR a RUNTIME_FAILURE
+    // marker preserves P0/P1. Only when BOTH are absent do we cap to P2.
     if ((sev === "P0" || sev === "P1")
         && looksLikeProductStrategyClaim(f.title, f.description, f.file_path)
-        && !hasRuntimeFailureMarker(f.evidence)) {
-      push(sev, "P2", "product-strategy/copy claim lacks RUNTIME_FAILURE: corroboration (OWNER_CONTRACT alone does not elevate)");
+        && !hasRuntimeFailureMarker(f.evidence)
+        && !hasOwnerContractMarker(f.evidence)) {
+      push(sev, "P2", "product-strategy/copy claim lacks OWNER_CONTRACT: or RUNTIME_FAILURE: corroboration");
       return { ...f, severity: "P2" as Severity };
     }
 
