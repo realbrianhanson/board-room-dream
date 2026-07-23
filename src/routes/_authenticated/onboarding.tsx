@@ -146,8 +146,9 @@ function OnboardingPage() {
           </form>
         )}
         <p className="mt-6 text-xs text-muted-foreground">
-          Not sure yet? <Link to="/dashboard" className="underline hover:text-foreground">Go straight to your dashboard</Link>.
+          Pick one above to get started — either path is quick.
         </p>
+
       </div>
     </div>
   );
