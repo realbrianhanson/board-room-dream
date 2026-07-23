@@ -212,6 +212,7 @@ function AuditCenterPage() {
           <ProjectJourney stages={journey} />
         </div>
       )}
+      {isImport && <StrategyContextPanel projectId={projectId} isOwner={isOwner} />}
 
       {/* Open findings */}
       <section className="mt-10">
