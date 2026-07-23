@@ -334,6 +334,26 @@ function IntakePage() {
       <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">{current.title}</h1>
       <p className="mt-3 text-sm text-muted-foreground">{current.hint}</p>
 
+      {step === 0 && keyHintMissing && (
+        <div
+          role="note"
+          className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-md border border-primary/30 bg-primary/5 px-4 py-3 text-xs text-foreground/85"
+        >
+          <span>
+            Boardroom prerequisite: the council needs your OpenRouter key to
+            debate this intake. You can finish the questions first and add it
+            before convening.
+          </span>
+          <Link
+            to="/settings"
+            className="rounded-md border border-primary/40 bg-primary/10 px-2.5 py-1 font-medium text-primary transition-colors hover:bg-primary/20"
+          >
+            Add in Settings
+          </Link>
+        </div>
+      )}
+
+
       <div className="mt-8 space-y-5">
         {current.kind === "idea" && (
           <>
