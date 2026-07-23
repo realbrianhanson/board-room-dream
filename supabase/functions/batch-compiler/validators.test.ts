@@ -23,9 +23,9 @@ const codeBatch = { title: "Runway Safety Gate UI", channel: "lovable", batch_no
 
 const validSupabaseVerification = [
   "Verify Batch 1 after implementation. Do not change product scope.",
-  "Directly call the affected RPCs (has_role, mark_finding_dismissed) with success AND failure cases.",
+  "Directly call the affected RPCs (has_role, mark_finding_dismissed) with success (200 authorized) AND failure (401 unauthorized) cases.",
   "Then run/add a Deno test under supabase/functions/audit-runner/ covering the new scanner module (edge function verification).",
-  "Include a permission check: confirm the new column on public.audit_findings can only be read/updated by an authenticated owner per RLS, and NOT by anon.",
+  "DB positive case: as the owner, SELECT on public.audit_findings returns the row. DB negative case: as anon, cross-tenant SELECT returns zero rows (blocked).",
   "If any assertion fails, fix only the reproduced failure and rerun the same check.",
 ].join(" ");
 
