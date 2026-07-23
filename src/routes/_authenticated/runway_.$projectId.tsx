@@ -8,7 +8,7 @@ import { GitHubRepoCard } from "@/components/github-repo-card";
 import { computeSkipSuffixIds } from "@/lib/runway-skip";
 import { startGithubConnect } from "@/lib/github-connect";
 import { selectDisplayedRun } from "@/lib/run-selection";
-import { ProjectJourney } from "@/components/project-journey";
+import { ProjectJourneyStrip } from "@/components/project-journey";
 import { useProjectJourney } from "@/hooks/use-project-journey";
 import {
   AlertTriangle,
