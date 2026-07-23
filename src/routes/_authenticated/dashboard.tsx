@@ -35,6 +35,7 @@ type Project = {
   fix_batch_no?: number;
   all_passed?: boolean;
   has_final_audit?: boolean;
+  has_import_audit?: boolean;
   has_locked_plan?: boolean;
 };
 
@@ -54,7 +55,8 @@ const NEXT_ACTION: Record<string, string> = {
 function nextActionLabel(p: Project): string {
   if (p.is_import) {
     if (!p.github_repo) return "Link your repo so the board can read the code";
-    if (!p.has_final_audit) return "Run the A–Z audit";
+    // Imports gate the Boardroom on the pre-plan A–Z audit specifically.
+    if (!p.has_import_audit) return "Run the A–Z audit";
     if (!p.has_locked_plan) return "Convene the improvement board";
   }
   if (p.status === "locked" && !p.has_design) return "Convene the Design Council";
