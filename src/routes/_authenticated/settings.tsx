@@ -40,8 +40,8 @@ async function callVault(action: string, payload: Record<string, unknown> = {}) 
 
 function StatusChip({ status }: { status: KeyRow["status"] }) {
   const map = {
-    valid: "border-[hsl(160_45%_42%/0.4)] bg-[hsl(160_45%_42%/0.12)] text-[hsl(160_45%_62%)]",
-    invalid: "border-[hsl(8_60%_45%/0.4)] bg-[hsl(8_60%_45%/0.12)] text-[hsl(8_60%_65%)]",
+    valid: "border-success/40 bg-success/15 text-success",
+    invalid: "border-destructive/40 bg-destructive/15 text-destructive",
     unverified: "border-border bg-surface-2 text-muted-foreground",
   } as const;
   return (
@@ -189,7 +189,7 @@ function OpenRouterCard() {
             <button
               onClick={del}
               disabled={busy}
-              className="rounded-md border border-[hsl(8_60%_45%/0.4)] px-4 py-2 text-sm text-[hsl(8_60%_65%)] transition-colors hover:bg-[hsl(8_60%_45%/0.12)] disabled:opacity-50"
+              className="rounded-md border border-destructive/40 px-4 py-2 text-sm text-destructive transition-colors hover:bg-destructive/15 disabled:opacity-50"
             >
               Delete
             </button>
@@ -306,9 +306,9 @@ function GitHubCard({ isAdmin }: { isAdmin: boolean }) {
   }
 
   const chip = state?.status === "valid"
-    ? "border-[hsl(160_45%_42%/0.4)] bg-[hsl(160_45%_42%/0.12)] text-[hsl(160_45%_62%)]"
+    ? "border-success/40 bg-success/15 text-success"
     : state?.status === "invalid"
-    ? "border-[hsl(8_60%_45%/0.4)] bg-[hsl(8_60%_45%/0.12)] text-[hsl(8_60%_65%)]"
+    ? "border-destructive/40 bg-destructive/15 text-destructive"
     : "border-border bg-surface-2 text-muted-foreground";
 
   return (
@@ -353,13 +353,13 @@ function GitHubCard({ isAdmin }: { isAdmin: boolean }) {
       ) : !state.connected ? (
         <div className="mt-6 space-y-3">
           {iframeNotice && (
-            <div className="rounded-md border border-dashed border-[hsl(38_65%_55%/0.4)] bg-[hsl(38_65%_55%/0.12)] p-4">
+            <div className="rounded-md border border-dashed border-primary/40 bg-primary/15 p-4">
               <p className="text-sm text-foreground">
                 GitHub can't open inside an embedded preview. Open the app in its own browser tab, then connect.
               </p>
               <button
                 onClick={() => window.open(window.location.href, "_blank")}
-                className="mt-3 rounded-md border border-[hsl(38_65%_55%/0.4)] px-4 py-2 text-sm font-medium text-[hsl(38_70%_62%)] transition-colors hover:bg-[hsl(38_65%_55%/0.16)]"
+                className="mt-3 rounded-md border border-primary/40 px-4 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
               >
                 Open in new tab
               </button>
@@ -392,7 +392,7 @@ function GitHubCard({ isAdmin }: { isAdmin: boolean }) {
             <button
               onClick={disconnect}
               disabled={busy}
-              className="rounded-md border border-[hsl(8_60%_45%/0.4)] px-4 py-2 text-sm text-[hsl(8_60%_65%)] transition-colors hover:bg-[hsl(8_60%_45%/0.12)] disabled:opacity-50"
+              className="rounded-md border border-destructive/40 px-4 py-2 text-sm text-destructive transition-colors hover:bg-destructive/15 disabled:opacity-50"
             >
               Disconnect
             </button>
@@ -879,7 +879,7 @@ function FlywheelPanel() {
       {addenda.length > 0 && (
         <div className="mt-4 space-y-1">
           {addenda.map((a, i) => (
-            <p key={i} className="border-l-2 border-[hsl(160_45%_48%)] pl-3 text-sm text-foreground/90">{a}</p>
+            <p key={i} className="border-l-2 border-success pl-3 text-sm text-foreground/90">{a}</p>
           ))}
         </div>
       )}
@@ -898,7 +898,7 @@ function FlywheelPanel() {
                 <button
                   onClick={() => decide(p, "approved")}
                   disabled={acting === p.id}
-                  className="rounded-md border border-[hsl(160_45%_48%/0.5)] bg-[hsl(160_45%_28%/0.3)] px-3 py-1.5 text-xs text-foreground hover:brightness-110 disabled:opacity-60"
+                  className="rounded-md border border-success/50 bg-success/30 px-3 py-1.5 text-xs text-foreground hover:brightness-110 disabled:opacity-60"
                 >
                   Adopt into the manual
                 </button>

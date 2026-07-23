@@ -51,9 +51,9 @@ type FindingRow = {
 };
 
 const SEVERITY_TONE: Record<string, string> = {
-  P0: "text-[hsl(8_60%_55%)] border-[hsl(8_60%_55%)]/40 bg-[hsl(8_60%_55%)]/10",
-  P1: "text-[hsl(8_60%_55%)] border-[hsl(8_60%_55%)]/40 bg-[hsl(8_60%_55%)]/10",
-  P2: "text-[hsl(38_65%_55%)] border-[hsl(38_65%_55%)]/40 bg-[hsl(38_65%_55%)]/10",
+  P0: "text-destructive border-destructive/40 bg-destructive/10",
+  P1: "text-destructive border-destructive/40 bg-destructive/10",
+  P2: "text-primary border-primary/40 bg-primary/10",
   P3: "text-muted-foreground border-border/40",
 };
 
@@ -248,7 +248,7 @@ function CohortProjectPage() {
                       <span className="font-mono text-muted-foreground">#{b.batch_no}</span>{" "}
                       {b.title}
                       {b.is_fix && (
-                        <span className="ml-2 rounded-full border border-[hsl(8_60%_55%)]/40 px-2 py-0.5 font-mono text-[9px] uppercase text-[hsl(8_60%_55%)]">
+                        <span className="ml-2 rounded-full border border-destructive/40 px-2 py-0.5 font-mono text-[9px] uppercase text-destructive">
                           fix
                         </span>
                       )}
@@ -271,7 +271,7 @@ function CohortProjectPage() {
         <div className="rounded-xl border border-border/40 bg-surface-1">
           {findings.length === 0 ? (
             <div className="flex items-center gap-3 p-8 text-sm text-muted-foreground">
-              <ShieldCheck className="h-4 w-4 text-[hsl(160_45%_48%)]" /> No open findings.
+              <ShieldCheck className="h-4 w-4 text-success" /> No open findings.
             </div>
           ) : (
             <ul className="divide-y divide-border/20">

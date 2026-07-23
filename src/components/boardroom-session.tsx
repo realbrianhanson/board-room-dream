@@ -423,7 +423,7 @@ export function BoardroomSession(props: BoardroomSessionProps) {
           <div className="flex items-center justify-between font-mono text-[11px] text-muted-foreground">
             <span>Budget</span>
             <span>
-              <span className={overBudget ? "text-[hsl(8_60%_65%)]" : "text-foreground"}>
+              <span className={overBudget ? "text-destructive" : "text-foreground"}>
                 ${Number(run.spent_usd).toFixed(4)}
               </span>{" "}
               / ${Number(run.budget_usd).toFixed(2)}
@@ -434,7 +434,7 @@ export function BoardroomSession(props: BoardroomSessionProps) {
               className="h-full transition-all duration-300"
               style={{
                 width: `${Math.min(100, (Number(run.spent_usd) / Math.max(0.0001, Number(run.budget_usd))) * 100)}%`,
-                background: overBudget ? "hsl(8 60% 55%)" : "hsl(38 65% 55%)",
+                background: overBudget ? "hsl(var(--destructive))" : "hsl(var(--primary))",
               }}
             />
           </div>
@@ -474,10 +474,10 @@ export function BoardroomSession(props: BoardroomSessionProps) {
       {locked && !isLegacy && run && lockCard?.(run)}
 
       {isLegacy && run && (
-        <div className="mt-8 flex items-start gap-3 rounded-xl border border-[hsl(38_65%_55%/0.4)] bg-[hsl(38_65%_55%/0.06)] p-5">
-          <AlertTriangle className="mt-0.5 h-4 w-4 text-[hsl(38_65%_70%)]" />
+        <div className="mt-8 flex items-start gap-3 rounded-xl border border-primary/40 bg-primary/5 p-5">
+          <AlertTriangle className="mt-0.5 h-4 w-4 text-primary" />
           <div className="min-w-0 flex-1">
-            <p className="font-mono text-[11px] uppercase tracking-widest text-[hsl(38_65%_70%)]">
+            <p className="font-mono text-[11px] uppercase tracking-widest text-primary">
               Legacy session — not build-safe under current founder-authority rules
             </p>
             <p className="mt-1 text-sm text-foreground">
@@ -489,10 +489,10 @@ export function BoardroomSession(props: BoardroomSessionProps) {
       )}
 
       {run?.status === "failed" && run.error && (
-        <div className="mt-8 flex items-start gap-3 rounded-xl border border-[hsl(8_60%_45%/0.4)] bg-[hsl(8_60%_45%/0.08)] p-5">
-          <AlertTriangle className="mt-0.5 h-4 w-4 text-[hsl(8_60%_65%)]" />
+        <div className="mt-8 flex items-start gap-3 rounded-xl border border-destructive/40 bg-destructive/10 p-5">
+          <AlertTriangle className="mt-0.5 h-4 w-4 text-destructive" />
           <div className="min-w-0 flex-1">
-            <p className="font-mono text-[11px] uppercase tracking-widest text-[hsl(8_60%_65%)]">Session failed</p>
+            <p className="font-mono text-[11px] uppercase tracking-widest text-destructive">Session failed</p>
             <p className="mt-1 text-sm text-foreground">{run.error}</p>
           </div>
         </div>
@@ -504,7 +504,7 @@ export function BoardroomSession(props: BoardroomSessionProps) {
             onClick={convene}
             disabled={convening || hasKey === false || !!gateReason}
             title={gateReason ?? (hasKey === false ? "Seat the board first — add your OpenRouter key in Settings." : undefined)}
-            className="rounded-md border border-[hsl(38_65%_55%/0.5)] bg-[hsl(38_65%_55%/0.08)] px-4 py-2 font-mono text-[11px] uppercase tracking-widest text-[hsl(38_65%_70%)] hover:bg-[hsl(38_65%_55%/0.14)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-md border border-primary/50 bg-primary/10 px-4 py-2 font-mono text-[11px] uppercase tracking-widest text-primary hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {convening
               ? "Reconvening…"
@@ -580,7 +580,7 @@ export function BoardroomSession(props: BoardroomSessionProps) {
 
 
       <style>{`
-        @keyframes consensusPulse { 0% { box-shadow: 0 0 0 0 hsl(38 65% 55% / 0.55); } 100% { box-shadow: 0 0 0 42px hsl(38 65% 55% / 0); } }
+        @keyframes consensusPulse { 0% { box-shadow: 0 0 0 0 hsl(var(--primary) / 0.55); } 100% { box-shadow: 0 0 0 42px hsl(var(--primary) / 0); } }
         .consensus-pulse { animation: consensusPulse 1.2s ease-out 1; border-radius: 9999px; }
         @keyframes transcriptEnter { 0% { opacity: 0; transform: translateY(8px); } 100% { opacity: 1; transform: translateY(0); } }
         .transcript-enter { animation: transcriptEnter 220ms ease-out both; }
@@ -625,7 +625,7 @@ function TheTable({
         {!showSegments && (
           <ellipse
             cx={cx} cy={cy} rx={ringRx} ry={ringRy} fill="none"
-            stroke="hsl(38 65% 55%)" strokeWidth="1.5" strokeLinecap="round"
+            stroke="hsl(var(--primary))" strokeWidth="1.5" strokeLinecap="round"
             strokeDasharray={`${ellipsePerimeter(ringRx, ringRy) * consensusFill} ${ellipsePerimeter(ringRx, ringRy)}`}
             transform={`rotate(-90 ${cx} ${cy})`}
             style={{ transition: "stroke-dasharray 400ms ease-out" }}
@@ -648,7 +648,7 @@ function TheTable({
           // failure is destructive (semantic token). Chair-ruled uses a
           // muted brass to distinguish it from clean consensus.
           const stroke = seg === "brass"
-            ? (chairRuled ? "hsl(38 45% 45%)" : "hsl(var(--primary))")
+            ? (chairRuled ? "hsl(var(--primary))" : "hsl(var(--primary))")
             : "hsl(var(--destructive))";
           return (
             <path
@@ -661,7 +661,7 @@ function TheTable({
         })}
         <defs>
           <radialGradient id="tableGlow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="hsl(38 65% 55% / 0.08)" />
+            <stop offset="0%" stopColor="hsl(var(--primary) / 0.08)" />
             <stop offset="60%" stopColor="hsl(220 12% 14%)" />
             <stop offset="100%" stopColor="hsl(220 13% 11%)" />
           </radialGradient>
@@ -731,7 +731,7 @@ function RollCall({
         <div ref={consensusRingRef}>
           <svg width="36" height="36" viewBox="0 0 36 36" aria-label={`Round ${round}, ${completed} of ${total} drafts in`}>
             <circle cx="18" cy="18" r={r} fill="none" stroke="hsl(40 15% 24% / 0.5)" strokeWidth="2" />
-            <circle cx="18" cy="18" r={r} fill="none" stroke="hsl(38 65% 55%)" strokeWidth="2" strokeLinecap="round"
+            <circle cx="18" cy="18" r={r} fill="none" stroke="hsl(var(--primary))" strokeWidth="2" strokeLinecap="round"
               strokeDasharray={c} strokeDashoffset={c * (1 - consensusFill)} transform="rotate(-90 18 18)"
               style={{ transition: "stroke-dashoffset 400ms ease-out" }} />
           </svg>
@@ -863,7 +863,7 @@ function TranscriptCard({
           </div>
         ) : failed ? (
           <div className="space-y-3">
-            <p className="text-sm text-[hsl(8_60%_70%)]">{step.error ?? "Step failed."}</p>
+            <p className="text-sm text-destructive">{step.error ?? "Step failed."}</p>
             {isOwner && (
               <button onClick={onRetry} className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-surface-2">
                 <RotateCcw className="h-3.5 w-3.5" /> Retry
@@ -883,7 +883,7 @@ function StepBody({ step, rubric }: { step: SessionStep; rubric: readonly string
   const invalid = json && typeof json === "object" && json.invalid === true;
   if (invalid) {
     return (
-      <div className="rounded-md border border-[hsl(8_60%_45%/0.35)] bg-[hsl(8_60%_45%/0.06)] p-3 font-mono text-[11px] text-[hsl(8_60%_75%)]">
+      <div className="rounded-md border border-destructive/35 bg-destructive/5 p-3 font-mono text-[11px] text-destructive">
         Response failed structured validation. Raw output preserved.
       </div>
     );
@@ -904,8 +904,8 @@ function StepBody({ step, rubric }: { step: SessionStep; rubric: readonly string
 }
 
 function severityStyle(sev: string) {
-  if (sev === "blocking") return "border-l-[hsl(8_60%_55%)] text-[hsl(8_60%_80%)]";
-  if (sev === "major") return "border-l-[hsl(38_65%_55%)] text-[hsl(38_65%_75%)]";
+  if (sev === "blocking") return "border-l-destructive text-destructive";
+  if (sev === "major") return "border-l-primary text-primary";
   return "border-l-[hsl(40_10%_45%)] text-muted-foreground";
 }
 
@@ -925,7 +925,7 @@ function Round2Body({ json }: { json: any }) {
       {steals.length > 0 && (
         <div className="space-y-1">
           {steals.map((s, i) => (
-            <p key={i} className="font-mono text-[11px] text-[hsl(160_45%_62%)]">
+            <p key={i} className="font-mono text-[11px] text-success">
               STEAL: <span className="text-foreground/90">{String(s.idea ?? "")}</span>
               <span className="text-muted-foreground"> — from {String(s.from_seat ?? "?")}</span>
             </p>
@@ -948,7 +948,7 @@ function Round3Body({ json }: { json: any }) {
       {steals.length > 0 && (
         <div className="space-y-1">
           {steals.map((s, i) => (
-            <p key={i} className="font-mono text-[11px] text-[hsl(160_45%_62%)]">
+            <p key={i} className="font-mono text-[11px] text-success">
               STEAL ADOPTED: <span className="text-foreground/90">{String(s)}</span>
             </p>
           ))}
@@ -960,7 +960,7 @@ function Round3Body({ json }: { json: any }) {
           {log.map((d, i) => (
             <div key={i} className="rounded border border-border/60 bg-surface-1 p-2">
               <p className="font-mono text-[10px] uppercase tracking-widest">
-                {String(d.from_seat ?? "?")} · <span className={d.decision === "accepted" ? "text-[hsl(160_45%_62%)]" : "text-[hsl(8_60%_70%)]"}>{String(d.decision ?? "?")}</span>
+                {String(d.from_seat ?? "?")} · <span className={d.decision === "accepted" ? "text-success" : "text-destructive"}>{String(d.decision ?? "?")}</span>
               </p>
               <p className="mt-1 text-foreground/90">{String(d.objection ?? "")}</p>
               {d.reason && <p className="mt-1 text-xs text-muted-foreground">{String(d.reason)}</p>}
@@ -983,7 +983,7 @@ function Round4Body({ json, rubric }: { json: any; rubric: readonly string[] }) 
           const n = scores[k];
           const good = typeof n === "number" && n >= 8;
           return (
-            <div key={k} className={`flex items-center justify-between rounded-md border px-3 py-2 font-mono text-[11px] ${good ? "border-[hsl(160_45%_42%/0.4)] text-[hsl(160_45%_62%)]" : "border-[hsl(8_60%_45%/0.4)] text-[hsl(8_60%_70%)]"}`}>
+            <div key={k} className={`flex items-center justify-between rounded-md border px-3 py-2 font-mono text-[11px] ${good ? "border-success/40 text-success" : "border-destructive/40 text-destructive"}`}>
               <span className="uppercase tracking-widest text-muted-foreground">{k.replace(/_/g, " ")}</span>
               <span className="text-lg text-foreground">{typeof n === "number" ? n : "—"}</span>
             </div>
@@ -996,9 +996,9 @@ function Round4Body({ json, rubric }: { json: any; rubric: readonly string[] }) 
           {resolutions.map((r, i) => {
             const resolved = r?.status === "resolved";
             return (
-              <div key={i} className={`rounded-md border border-l-2 px-3 py-2 ${resolved ? "border-border border-l-[hsl(160_45%_48%)]" : "border-border border-l-[hsl(8_60%_55%)]"}`}>
+              <div key={i} className={`rounded-md border border-l-2 px-3 py-2 ${resolved ? "border-border border-l-success" : "border-border border-l-destructive"}`}>
                 <p className="text-sm text-foreground/90">
-                  <span className={`font-mono text-[10px] uppercase tracking-widest ${resolved ? "text-[hsl(160_45%_62%)]" : "text-[hsl(8_60%_70%)]"}`}>
+                  <span className={`font-mono text-[10px] uppercase tracking-widest ${resolved ? "text-success" : "text-destructive"}`}>
                     {resolved ? "Resolved" : "Standing"}
                   </span>{" "}
                   — {String(r?.objection ?? "")}
@@ -1015,7 +1015,7 @@ function Round4Body({ json, rubric }: { json: any; rubric: readonly string[] }) 
       )}
       {blocking.length > 0 && (
         <div className="space-y-1">
-          <p className="font-mono text-[10px] uppercase tracking-widest text-[hsl(8_60%_70%)]">Blocking objections</p>
+          <p className="font-mono text-[10px] uppercase tracking-widest text-destructive">Blocking objections</p>
           {blocking.map((b, i) => (
             <p key={i} className="text-sm text-foreground/90">— {b}</p>
           ))}
@@ -1033,8 +1033,8 @@ function FinalRulingBody({ json }: { json: any }) {
   return (
     <div className="space-y-4">
       {note && (
-        <div className="rounded-md border border-[hsl(38_65%_55%/0.35)] bg-[hsl(38_65%_55%/0.06)] p-3 text-sm text-foreground/90">
-          <p className="font-mono text-[10px] uppercase tracking-widest text-[hsl(38_65%_70%)]">Chair's ruling</p>
+        <div className="rounded-md border border-primary/35 bg-primary/5 p-3 text-sm text-foreground/90">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-primary">Chair's ruling</p>
           <p className="mt-1">{note}</p>
         </div>
       )}
@@ -1062,9 +1062,9 @@ function FinalRulingBody({ json }: { json: any }) {
 function StepStatusChip({ status }: { status: SessionStep["status"] }) {
   const map: Record<string, { label: string; cls: string }> = {
     queued: { label: "Queued", cls: "border-border text-muted-foreground" },
-    running: { label: "Speaking", cls: "border-[hsl(38_65%_55%/0.4)] text-[hsl(38_65%_70%)]" },
-    completed: { label: "On record", cls: "border-[hsl(160_45%_42%/0.4)] text-[hsl(160_45%_62%)]" },
-    failed: { label: "Failed", cls: "border-[hsl(8_60%_45%/0.4)] text-[hsl(8_60%_65%)]" },
+    running: { label: "Speaking", cls: "border-primary/40 text-primary" },
+    completed: { label: "On record", cls: "border-success/40 text-success" },
+    failed: { label: "Failed", cls: "border-destructive/40 text-destructive" },
     skipped: { label: "Skipped", cls: "border-border text-muted-foreground" },
   };
   const v = map[status] ?? map.queued;
@@ -1077,12 +1077,12 @@ function StatusPill({ run }: { run: SessionRun | null }) {
   }
   const map: Record<string, { label: string; cls: string }> = {
     queued: { label: "Queued", cls: "border-border text-muted-foreground" },
-    running: { label: "In session", cls: "border-[hsl(38_65%_55%/0.4)] text-[hsl(38_65%_70%)]" },
+    running: { label: "In session", cls: "border-primary/40 text-primary" },
     paused: { label: "Paused", cls: "border-border text-muted-foreground" },
-    paused_budget: { label: "Paused · budget", cls: "border-[hsl(8_60%_45%/0.4)] text-[hsl(8_60%_65%)]" },
-    consensus: { label: "Consensus", cls: "border-[hsl(38_65%_55%/0.5)] text-[hsl(38_65%_70%)]" },
-    chair_ruled: { label: "Chair ruled", cls: "border-[hsl(38_65%_55%/0.5)] text-[hsl(38_65%_70%)]" },
-    failed: { label: "Failed", cls: "border-[hsl(8_60%_45%/0.4)] text-[hsl(8_60%_65%)]" },
+    paused_budget: { label: "Paused · budget", cls: "border-destructive/40 text-destructive" },
+    consensus: { label: "Consensus", cls: "border-primary/50 text-primary" },
+    chair_ruled: { label: "Chair ruled", cls: "border-primary/50 text-primary" },
+    failed: { label: "Failed", cls: "border-destructive/40 text-destructive" },
   };
   const v = map[run.status] ?? { label: run.status, cls: "border-border text-muted-foreground" };
   return <span className={`rounded-full border bg-surface-2/60 px-3 py-1 font-mono text-[10px] uppercase tracking-widest ${v.cls}`}>{v.label}</span>;

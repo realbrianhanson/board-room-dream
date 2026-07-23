@@ -64,9 +64,9 @@ type Finding = {
 type Batch = { id: string; batch_no: number; title: string; status: string };
 
 const SEV_STYLE: Record<Finding["severity"], string> = {
-  P0: "border-[hsl(8_60%_55%/0.55)] bg-[hsl(8_60%_25%/0.35)] text-[hsl(8_60%_82%)]",
-  P1: "border-[hsl(8_60%_55%/0.35)] bg-[hsl(8_60%_25%/0.2)] text-[hsl(8_60%_78%)]",
-  P2: "border-primary/35 bg-primary/10 text-[hsl(38_65%_75%)]",
+  P0: "border-destructive/55 bg-destructive/35 text-destructive",
+  P1: "border-destructive/35 bg-destructive/20 text-destructive",
+  P2: "border-primary/35 bg-primary/10 text-primary",
   P3: "border-border bg-surface-2 text-muted-foreground",
 };
 
@@ -343,9 +343,9 @@ function AuditCenterPage() {
                             {f.severity}
                           </span>
                           <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${
-                            f.confidence === "high" ? "border-[hsl(160_45%_48%/0.4)] text-[hsl(160_45%_72%)] bg-[hsl(160_45%_28%/0.15)]"
+                            f.confidence === "high" ? "border-success/40 text-success bg-success/15"
                             : f.confidence === "low" ? "border-border text-muted-foreground bg-surface-2"
-                            : "border-primary/35 text-[hsl(38_65%_75%)] bg-primary/10"
+                            : "border-primary/35 text-primary bg-primary/10"
                           }`}>
                             {f.confidence} confidence
                           </span>
@@ -357,7 +357,7 @@ function AuditCenterPage() {
                             </span>
                           )}
                           {f.status === "fix_drafted" && (
-                            <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[hsl(38_65%_72%)]">Fix batch drafted</span>
+                            <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-primary">Fix batch drafted</span>
                           )}
                         </div>
                         <p className="mt-2 text-sm text-foreground">{f.title}</p>
@@ -403,8 +403,8 @@ function AuditCenterPage() {
                       {b ? `Batch ${b.batch_no}` : "Batch"} · loop {a.loop_no}
                     </span>
                     <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${
-                      a.status === "clean" ? "border-[hsl(160_45%_48%/0.4)] text-[hsl(160_45%_70%)] bg-[hsl(160_45%_28%/0.15)]"
-                      : a.status === "findings" ? "border-[hsl(8_60%_55%/0.4)] text-[hsl(8_60%_75%)] bg-[hsl(8_60%_25%/0.15)]"
+                      a.status === "clean" ? "border-success/40 text-success bg-success/15"
+                      : a.status === "findings" ? "border-destructive/40 text-destructive bg-destructive/15"
                       : "border-border text-muted-foreground bg-surface-2"
                     }`}>
                       {a.status}
@@ -435,7 +435,7 @@ function AuditCenterPage() {
       {/* Final A-Z */}
       <section className="mt-12">
         <div className="flex items-center gap-2">
-          <ShieldCheck className="h-5 w-5 text-[hsl(38_65%_70%)]" />
+          <ShieldCheck className="h-5 w-5 text-primary" />
           <h2 className="font-display text-xl text-foreground">Final A–Z audit</h2>
         </div>
         {!finalAudit ? (
@@ -490,9 +490,9 @@ function AuditCenterPage() {
           <div className="mt-4 rounded-lg border border-border bg-surface-1 p-5">
             <div className="flex flex-wrap items-center gap-2">
               <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${
-                finalAudit.status === "clean" ? "border-[hsl(160_45%_48%/0.4)] text-[hsl(160_45%_70%)] bg-[hsl(160_45%_28%/0.15)]"
-                : finalAudit.status === "findings" ? "border-[hsl(8_60%_55%/0.4)] text-[hsl(8_60%_75%)] bg-[hsl(8_60%_25%/0.15)]"
-                : finalAudit.status === "failed" ? "border-[hsl(8_60%_55%/0.55)] text-[hsl(8_60%_78%)] bg-[hsl(8_60%_25%/0.25)]"
+                finalAudit.status === "clean" ? "border-success/40 text-success bg-success/15"
+                : finalAudit.status === "findings" ? "border-destructive/40 text-destructive bg-destructive/15"
+                : finalAudit.status === "failed" ? "border-destructive/55 text-destructive bg-destructive/25"
                 : "border-border text-muted-foreground bg-surface-2"
               }`}>
                 {finalAudit.status}
@@ -507,8 +507,8 @@ function AuditCenterPage() {
               )}
             </div>
             {finalAudit.status === "failed" && (
-              <div className="mt-3 rounded-md border border-[hsl(8_60%_55%/0.35)] bg-[hsl(8_60%_25%/0.15)] p-3">
-                <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-[hsl(8_60%_78%)]">Why it failed</p>
+              <div className="mt-3 rounded-md border border-destructive/35 bg-destructive/15 p-3">
+                <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-destructive">Why it failed</p>
                 <p className="mt-1 font-mono text-[11px] text-foreground/85">
                   {(finalAudit.run_id && runErrors[finalAudit.run_id]) || "The audit did not complete. Retry to open a fresh run."}
                 </p>
@@ -534,7 +534,7 @@ function AuditCenterPage() {
                       const isRejected = d.disposition === "rejected_unsupported" || d.published === false;
                       return (
                         <li key={i} className="font-mono text-[11px] text-muted-foreground">
-                          <span className={isRejected ? "text-[hsl(0_60%_72%)]" : "text-[hsl(38_65%_72%)]"}>
+                          <span className={isRejected ? "text-destructive" : "text-primary"}>
                             {isRejected ? "REJECTED" : `${d.from} → ${d.to}`}
                           </span>
                           {" · "}{d.title}
@@ -548,7 +548,7 @@ function AuditCenterPage() {
               );
             })()}
             {finalAudit.status === "clean" && !isImport && (
-              <p className="mt-3 inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.22em] text-[hsl(160_45%_70%)]">
+              <p className="mt-3 inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.22em] text-success">
                 <Check className="h-4 w-4" /> Passed A–Z. Ship it.
               </p>
             )}
@@ -636,9 +636,9 @@ function AuditCenterPage() {
               {previousFinalAudits.map((a) => (
                 <li key={a.id} className="flex flex-wrap items-center gap-2 rounded-md border border-border/60 bg-surface-2 px-3 py-2">
                   <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${
-                    a.status === "clean" ? "border-[hsl(160_45%_48%/0.4)] text-[hsl(160_45%_70%)] bg-[hsl(160_45%_28%/0.15)]"
-                    : a.status === "findings" ? "border-[hsl(8_60%_55%/0.4)] text-[hsl(8_60%_75%)] bg-[hsl(8_60%_25%/0.15)]"
-                    : a.status === "failed" ? "border-[hsl(8_60%_55%/0.55)] text-[hsl(8_60%_78%)] bg-[hsl(8_60%_25%/0.25)]"
+                    a.status === "clean" ? "border-success/40 text-success bg-success/15"
+                    : a.status === "findings" ? "border-destructive/40 text-destructive bg-destructive/15"
+                    : a.status === "failed" ? "border-destructive/55 text-destructive bg-destructive/25"
                     : "border-border text-muted-foreground bg-surface-1"
                   }`}>{a.status}</span>
                   <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">

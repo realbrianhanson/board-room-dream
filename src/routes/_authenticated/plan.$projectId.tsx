@@ -316,8 +316,8 @@ function PlanWorkspacePage() {
               onSelect={(id) => setSelectedVersionId(id)}
             />
             {legacyPreview && (
-              <div className="rounded-xl border border-[hsl(8_60%_45%/0.35)] bg-[hsl(8_60%_45%/0.06)] p-6">
-                <p className="mb-4 font-mono text-[11px] uppercase tracking-widest text-[hsl(8_60%_75%)]">
+              <div className="rounded-xl border border-destructive/35 bg-destructive/5 p-6">
+                <p className="mb-4 font-mono text-[11px] uppercase tracking-widest text-destructive">
                   Legacy · read-only preview of v{legacyPreview.version}
                   {legacyPreview.invalidated_reason ? ` — ${legacyPreview.invalidated_reason}` : ""}
                 </p>
@@ -354,7 +354,7 @@ function PlanWorkspacePage() {
             v{current.version}
           </span>
           {current.is_chair_ruled && (
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-[hsl(38_65%_55%/0.4)] bg-[hsl(38_65%_55%/0.08)] px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-[hsl(38_65%_70%)]">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-primary">
               <Gavel className="h-3 w-3" />
               Chair ruled
             </span>
@@ -375,12 +375,12 @@ function PlanWorkspacePage() {
       </div>
 
       {isViewingOlder && !selectedUnsafe && (
-        <div className="mt-6 rounded-md border border-[hsl(38_65%_55%/0.35)] bg-[hsl(38_65%_55%/0.06)] px-4 py-2.5 font-mono text-[11px] text-[hsl(38_65%_75%)]">
+        <div className="mt-6 rounded-md border border-primary/35 bg-primary/5 px-4 py-2.5 font-mono text-[11px] text-primary">
           Viewing v{selected.version} — the board's current plan is v{current.version}.
         </div>
       )}
       {selectedUnsafe && (
-        <div className="mt-6 rounded-md border border-[hsl(38_65%_55%/0.35)] bg-[hsl(38_65%_55%/0.06)] px-4 py-2.5 font-mono text-[11px] text-[hsl(38_65%_75%)]">
+        <div className="mt-6 rounded-md border border-primary/35 bg-primary/5 px-4 py-2.5 font-mono text-[11px] text-primary">
           Legacy · not build-safe{selected.invalidated_reason ? ` — ${selected.invalidated_reason}` : ""}. Read-only. The current build-safe plan is v{current.version}.
         </div>
       )}
@@ -619,7 +619,7 @@ function FeatureGroup({
   if (features.length === 0) return null;
   const chipClass =
     tone === "brass"
-      ? "border-[hsl(38_65%_55%/0.4)] bg-[hsl(38_65%_55%/0.08)] text-[hsl(38_65%_70%)]"
+      ? "border-primary/40 bg-primary/10 text-primary"
       : "border-border bg-surface-2 text-muted-foreground";
   return (
     <div>
@@ -662,9 +662,9 @@ function DecisionsTab({ plan }: { plan: PlanVersion }) {
         const isRejected = d.decision === "rejected";
         const isCr = !!d.change_request_id;
         const borderColor = isAccepted
-          ? "border-l-[hsl(160_45%_48%)]"
+          ? "border-l-success"
           : isRejected
-            ? "border-l-[hsl(8_60%_55%)]"
+            ? "border-l-destructive"
             : "border-l-primary/60";
         return (
           <div
@@ -681,9 +681,9 @@ function DecisionsTab({ plan }: { plan: PlanVersion }) {
                 <span
                   className={`font-mono text-[10px] uppercase tracking-widest ${
                     isAccepted
-                      ? "text-[hsl(160_45%_65%)]"
+                      ? "text-success"
                       : isRejected
-                        ? "text-[hsl(8_60%_70%)]"
+                        ? "text-destructive"
                         : "text-primary"
                   }`}
                 >
@@ -768,7 +768,7 @@ function HistoryTab({
               <HistoryIcon className="h-4 w-4 text-muted-foreground" />
               <span className="font-display text-lg text-foreground">v{v.version}</span>
               {v.is_chair_ruled && (
-                <span className="inline-flex items-center gap-1 rounded-full border border-[hsl(38_65%_55%/0.4)] bg-[hsl(38_65%_55%/0.08)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[hsl(38_65%_70%)]">
+                <span className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-primary">
                   <Gavel className="h-2.5 w-2.5" />
                   Chair ruled
                 </span>
@@ -776,7 +776,7 @@ function HistoryTab({
               {!v.is_build_safe && (
                 <span
                   title={v.invalidated_reason ?? undefined}
-                  className="inline-flex items-center gap-1 rounded-full border border-[hsl(8_60%_45%/0.45)] bg-[hsl(8_60%_45%/0.08)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[hsl(8_60%_70%)]"
+                  className="inline-flex items-center gap-1 rounded-full border border-destructive/45 bg-destructive/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-destructive"
                 >
                   Legacy · not build-safe
                 </span>
@@ -993,10 +993,10 @@ function CRList({
         const isOpen = !!expanded[cr.id];
         const chip =
           cr.status === "approved"
-            ? "border-[hsl(160_45%_48%/0.4)] bg-[hsl(160_45%_48%/0.08)] text-[hsl(160_45%_65%)]"
+            ? "border-success/40 bg-success/10 text-success"
             : cr.status === "rejected"
-              ? "border-[hsl(8_60%_45%/0.4)] bg-[hsl(8_60%_45%/0.08)] text-[hsl(8_60%_70%)]"
-              : "border-[hsl(38_65%_55%/0.4)] bg-[hsl(38_65%_55%/0.08)] text-[hsl(38_65%_70%)]";
+              ? "border-destructive/40 bg-destructive/10 text-destructive"
+              : "border-primary/40 bg-primary/10 text-primary";
         const newVersion = cr.board_verdict?.new_plan_version_id
           ? versions.find((v) => v.id === cr.board_verdict!.new_plan_version_id) ?? null
           : null;
