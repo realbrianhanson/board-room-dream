@@ -59,20 +59,28 @@ function DebugRunsPage() {
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [selectedProject, setSelectedProject] = useState<string>("");
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
-    const { data: profile } = await supabase
+    setLoadError(null);
+    const { data: profile, error: profErr } = await supabase
       .from("profiles")
       .select("role")
       .maybeSingle();
+    if (profErr) {
+      setIsAdmin(false);
+      setLoadError(profErr.message);
+      setLoading(false);
+      return;
+    }
     const admin = profile?.role === "admin";
     setIsAdmin(admin);
     if (!admin) {
       setLoading(false);
       return;
     }
-    const [{ data: runsData }, { data: projData }] = await Promise.all([
+    const [runsRes, projRes] = await Promise.all([
       supabase
         .from("boardroom_runs")
         .select("id, project_id, kind, status, round_no, spent_usd, budget_usd, budget_warning, error, created_at")
@@ -80,9 +88,17 @@ function DebugRunsPage() {
         .limit(50),
       supabase.from("projects").select("id, name").order("created_at", { ascending: false }),
     ]);
-    setRuns((runsData ?? []) as RunRow[]);
-    setProjects((projData ?? []) as ProjectRow[]);
-    if (projData && projData[0] && !selectedProject) setSelectedProject(projData[0].id);
+    // A failed runs/projects query must surface as an explicit admin-facing
+    // load error with Retry. Collapsing errors to [] would render "No runs
+    // yet" / "No projects" and hide the real cause.
+    if (runsRes.error || projRes.error) {
+      setLoadError(runsRes.error?.message ?? projRes.error?.message ?? "Failed to load runs");
+      setLoading(false);
+      return;
+    }
+    setRuns((runsRes.data ?? []) as RunRow[]);
+    setProjects((projRes.data ?? []) as ProjectRow[]);
+    if (projRes.data && projRes.data[0] && !selectedProject) setSelectedProject(projRes.data[0].id);
     setLoading(false);
   }
 
