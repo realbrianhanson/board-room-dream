@@ -935,31 +935,48 @@ async function finalizeBatches(admin: any, run: any, batchesJson: any[]) {
     is_fix: false,
   }));
 
-  // Pre-promotion owner-authority gate: independently validate the complete
-  // batch set BEFORE any executable row is saved. Reviewer/reviser upstream
-  // signals are advisory; this is the deterministic last-line gate.
+  // Pre-promotion owner-authority gate (R6 correction wrapper): validate the
+  // complete batch set BEFORE any executable row is saved. A fixable violation
+  // now runs through a bounded Chair correction step before terminating.
+  let authority: Awaited<ReturnType<typeof loadOwnerAuthority>>;
   try {
-    const authority = await loadOwnerAuthority(admin, {
+    authority = await loadOwnerAuthority(admin, {
       projectId: run.project_id,
       founderNotes: run.founder_notes ?? null,
     });
-    const preErr = preLockAuthorityError(
-      rows.map((r) => ({ label: `batch[${r.batch_no}] "${r.title}".prompt_md`, text: r.prompt_md })),
-      authority,
-    );
-    if (preErr) {
-      await failRun(admin, run, preErr);
+  } catch (e) {
+    await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
+    return;
+  }
+  const artifacts: Artifact[] = rows.map((r) => ({
+    key: `batch_${r.batch_no}_prompt_md`,
+    label: `batch[${r.batch_no}] "${r.title}".prompt_md`,
+    text: r.prompt_md,
+  }));
+  const enforceRes = await enforceAuthorityOrCorrect({
+    admin,
+    run,
+    phase: "pre_promote_batches",
+    authority,
+    artifacts,
+    onTerminalFail: async (err) => {
+      await failRun(admin, run, err);
       await insertAlert(admin, {
         user_id: run.user_id,
         project_id: run.project_id,
         kind: "owner_authority_violation",
-        detail: { run_id: run.id, phase: "pre_promote_batches", excerpt: preErr.slice(0, 800) },
+        detail: { run_id: run.id, phase: "pre_promote_batches", excerpt: err.slice(0, 800) },
       });
-      return;
-    }
-  } catch (e) {
-    await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
-    return;
+    },
+  });
+  if (enforceRes.status === "failed_terminal") return;
+  if (enforceRes.status === "pending") return;
+  for (const a of enforceRes.artifacts) {
+    const m = /^batch_(\d+(?:\.\d+)?)_prompt_md$/.exec(a.key);
+    if (!m) continue;
+    const bno = Number(m[1]);
+    const r = rows.find((r) => r.batch_no === bno);
+    if (r) r.prompt_md = a.text;
   }
 
   const { error: insErr } = await admin.from("batches").insert(rows);
