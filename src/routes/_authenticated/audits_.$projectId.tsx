@@ -103,7 +103,7 @@ function AuditCenterPage() {
     setProjectName(proj?.name ?? "");
     setIsImport(!!proj?.is_import);
     setGhRepo(proj?.github_repo ?? null);
-    setIsOwner(!!proj?.user_id && proj.user_id === userData?.user?.id);
+    setIsOwner(!!proj?.user_id && proj.user_id === userData.data?.user?.id);
     const auditRows = (au ?? []) as Audit[];
     setAudits(auditRows);
     setBatches((bs ?? []) as Batch[]);
