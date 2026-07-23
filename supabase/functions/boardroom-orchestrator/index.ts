@@ -1225,22 +1225,18 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
     if (parent) {
       const parentNo = Math.floor(Number(parent.batch_no));
       const fixNo = Number((parentNo + 0.1 * Number(audit.loop_no ?? 1)).toFixed(2));
-      const { data: inserted } = await admin
-        .from("batches")
-        .insert({
-          project_id: audit.project_id,
-          user_id: audit.user_id,
-          batch_no: fixNo,
-          title: `Fix — ${parent.title}`,
-          channel: "lovable",
-          prompt_md: fixPrompt,
-          status: "pending",
-          is_fix: true,
-          parent_batch_id: audit.batch_id,
-        })
-        .select("id")
-        .single();
-      fixBatchId = inserted?.id ?? null;
+      const gated = await insertModelAuthoredBatchOrAlert(admin, run, audit, {
+        project_id: audit.project_id,
+        user_id: audit.user_id,
+        batch_no: fixNo,
+        title: `Fix — ${parent.title}`,
+        channel: "lovable",
+        prompt_md: fixPrompt,
+        status: "pending",
+        is_fix: true,
+        parent_batch_id: audit.batch_id,
+      });
+      fixBatchId = gated.inserted?.id ?? null;
     }
     await admin.from("batches").update({ status: "fix_needed" }).eq("id", audit.batch_id);
   }
