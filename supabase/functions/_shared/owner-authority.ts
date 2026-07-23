@@ -415,7 +415,13 @@ export function findUnauthorizedHighImpact(
       // noun (`checkout`/`$49`), not the earlier `Do not add Stripe`.
       const endOff = Math.min(ownLine.length - 1, Math.max(0, (start - lineStart) + m[0].length - 1));
       const sentence = sentenceForMatch(ownLine, endOff);
-      if (NEGATION_OR_PRESERVE.test(sentence)) continue;
+      // Clause-scoped negation: within the sentence, narrow further to the
+      // conjunctive sub-clause that actually contains the match so a
+      // preserve/negation elsewhere in the sentence cannot silence it.
+      const sentenceStart = ownLine.indexOf(sentence);
+      const clauseOffset = sentenceStart >= 0 ? Math.max(0, endOff - sentenceStart) : 0;
+      const clause = clauseForMatch(sentence, clauseOffset);
+      if (NEGATION_OR_PRESERVE.test(clause)) continue;
       if (rule.category === "monetary_amount" && /(?:\$|€|£|¥)\s*0(?![.,]?\d)/i.test(m[0])) continue;
       const directiveEntities = extractDirectiveEntities(rule.category, m[0]);
       // Marker coverage: same line or the immediately-following line, category
