@@ -47,6 +47,7 @@ describe("canProceedFromIntakeStep — five-step persistence of the new required
     expect(canProceedFromIntakeStep("inspiration", { ...filled, activation_moment: "" })).toBe(false);
     expect(canProceedFromIntakeStep("inspiration", { ...filled, wow_moment: "" })).toBe(false);
     expect(canProceedFromIntakeStep("inspiration", { ...filled, inspiration: "" })).toBe(false);
+  });
 });
 
 describe("shared MIN_STRATEGY_CHARS minimum", () => {
