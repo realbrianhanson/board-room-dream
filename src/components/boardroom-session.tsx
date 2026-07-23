@@ -158,11 +158,15 @@ export function BoardroomSession(props: BoardroomSessionProps) {
     if (retrying) return;
     setRetrying(true);
     try {
-      await loadRun();
+      // Reload project first so a project-load error clears; then reload run
+      // and steps. Both signal their own success/failure into runError.
+      const { proj } = await loadProject();
+      if (proj) await loadRun();
     } finally {
       setRetrying(false);
     }
-  }, [loadRun, retrying]);
+  }, [loadRun, loadProject, retrying]);
+
 
 
   const loadProject = useCallback(async () => {
