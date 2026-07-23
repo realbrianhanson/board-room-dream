@@ -280,11 +280,9 @@ function AuditCenterPage() {
       <Link to="/audits" className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground hover:text-foreground">← Audits</Link>
       <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">Audit Center</h1>
       <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">{projectName || "Project"}</p>
-      {journey && (
-        <div className="mt-4 mb-2">
-          <ProjectJourney stages={journey} />
-        </div>
-      )}
+      <div className="mt-4 mb-2">
+        <ProjectJourneyStrip result={journey} />
+      </div>
       {isImport && (
         <StrategyContextPanel
           ref={strategyPanelRef}
