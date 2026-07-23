@@ -301,6 +301,7 @@ function DebugRunsPage() {
           </tbody>
         </table>
       </div>
+      )}
     </div>
   );
 }
