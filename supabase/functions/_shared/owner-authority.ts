@@ -249,6 +249,15 @@ const HIGH_IMPACT: Array<{ category: UnauthorizedCategory; re: RegExp }> = [
     re: /\b(?:add|introduce|integrate|enable|adopt|switch\s+to|migrate\s+to|implement|launch(?:\s+with)?|charge\s+(?:via|through|with)?|create|build|require|configure|use|wire(?:\s+up)?|connect|set\s+up)\b[^.\n]{0,140}\b(?:stripe|paddle|paypal|lemon\s*squeezy|shopify|square|braintree|razorpay|payment\s+link|hosted\s+(?:checkout|payment)|checkout\s+session|billing\s+portal|paywall|subscription\s+billing|charge\s+customers?|per[-\s]?seat\s+pricing|price\s+per\s+\w+)\b/gi,
   },
   {
+    // Generic monetization/pricing scope — catches directives that commit
+    // the product to a paid offer, pricing surface, upgrade trigger, money
+    // path, subscription, paywall, billing, checkout, or "charge customers"
+    // even without naming a dollar amount or a specific payment provider.
+    // Owner must still authorize the concrete pricing/monetization decision.
+    category: "monetization_scope",
+    re: /\b(?:add|introduce|implement|create|build|launch|define|choose|set|publish|show|display|establish|require|enable|configure|use|wire(?:\s+up)?|connect|set\s+up|integrate|adopt)\b[^.\n]{0,160}\b(?:pricing(?:\s+(?:cta|call[-\s]?to[-\s]?action|page|tier|plan|anchor|section))?|price\s+(?:anchor|point|tag)|paid\s+(?:offer|tier|plan|product)|(?:concrete\s+)?money\s+path|revenue\s+path|monetization|upgrade\s+(?:trigger|condition|cta|path|prompt)|subscription(?!\s+billing)|paywall|billing(?!\s+portal)|checkout(?!\s+session)|charge\s+customers?)\b/gi,
+  },
+  {
     category: "new_external_integration",
     // Directive verb + external provider/service/API/integration keyword or a
     // named third-party service. Preserving/repairing an existing repo-proven
