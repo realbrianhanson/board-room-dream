@@ -8,10 +8,12 @@ import { toast } from "sonner";
 import { ArrowRight, Download, Palette, Upload, X } from "lucide-react";
 import { ProjectJourney } from "@/components/project-journey";
 import { useProjectJourney } from "@/hooks/use-project-journey";
+import { DesignLightbox } from "@/components/design-lightbox";
 
 export const Route = createFileRoute("/_authenticated/design_/$projectId")({
   component: DesignStudioPage,
 });
+
 
 const CONVENE_BLOCKED: Record<string, string> = {
   intake: "Finish the intake first.",
@@ -399,45 +401,10 @@ function ScreenshotsPanel({ projectId, userId }: { projectId: string; userId: st
       </div>
 
       {lightbox && (
-        <div
-          data-testid="lightbox-backdrop"
-          role="dialog"
-          aria-modal="true"
-          aria-label={`${lightbox.name} preview`}
-          tabIndex={-1}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-background/95 p-6"
-          onClick={() => setLightbox(null)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") setLightbox(null);
-          }}
-          ref={(el) => {
-            // Focus the backdrop so Escape reaches the handler without
-            // requiring the user to tab into it first.
-            if (el) el.focus();
-          }}
-        >
-          <img
-            data-testid="lightbox-image"
-            src={lightbox.url}
-            alt={lightbox.name}
-            className="max-h-full max-w-full rounded-lg"
-            // Clicks on the image content must NOT close the lightbox — only
-            // backdrop click or Escape should. Stops the event from bubbling
-            // up to the backdrop's onClick.
-            onClick={(e) => e.stopPropagation()}
-          />
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setLightbox(null);
-            }}
-            className="absolute right-4 top-4 rounded-md bg-surface-1 p-2"
-            aria-label="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
+        <DesignLightbox item={lightbox} onClose={() => setLightbox(null)} />
       )}
+
+
 
 
       {confirmDelete && (
