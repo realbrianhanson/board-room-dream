@@ -588,7 +588,7 @@ Compile THIS batch (batch_no=${batch.batch_no}, title="${batch.title}", channel=
     rationale: parsed.rationale,
     touched_paths: parsed.touched_paths,
     evidence: parsed.evidence,
-    target_repo_migrations: targetMigrationsProvenance,
+    target_repo_migrations: targetMigrationsMeta,
     target_inventory_ok: targetInvOk,
     target_inventory_reason: targetInvReason,
     schema_touching_batch: schemaTouching,
