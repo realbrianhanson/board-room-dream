@@ -899,7 +899,10 @@ OUTPUT DISCIPLINE (hard limits — the run FAILS if you exceed them):
 
 Rules for EVERY batch:
 - Numbered items with EXACT scope — no wishlists. Name exact routes, components, tables, and columns from the PRD in every item.
-- Code batches (channel 'lovable' or 'supabase') include an "Acceptance checks:" list — 2-4 numbered checks the student verifies in the preview with clicks only.
+- Acceptance checks MUST match the batch's actual layer. Never require preview clicks as the only proof for backend work.
+  * channel 'lovable' (UI/frontend): 2-4 observable preview interactions — clicks, form submits, visible state/copy, plus console/network checks when relevant.
+  * channel 'supabase' (backend/DB/RLS/edge): 2-4 concrete BACKEND checks — migration applied / schema query result, RLS positive + negative case, edge-function request/response, DB constraint or trigger behavior, logs, or automated test. NEVER a "click in the preview" check on a supabase-only batch.
+  * A mixed batch (UI wired to new backend) MUST include both layers as separate checks and stay single-concern.
 - Ends with the sentence: "Keep everything else identical."
 - Code batches (channel 'lovable' or 'supabase') also end with: "Typecheck when done."
 - Channel 'supabase' = pure database/schema/RLS/edge-function work. State access rules for every table in plain words.
@@ -918,8 +921,8 @@ Rules for EVERY batch:
   ...
 
   Acceptance checks:  ← omit for channel 'human'
-  1. <click-only check>
-  2. <click-only check>
+  1. <layer-appropriate check — preview interaction for 'lovable', backend query/RLS/edge/log/test for 'supabase'>
+  2. <same, second check>
 
   Keep everything else identical.
   Typecheck when done.  ← omit for channel 'human'
