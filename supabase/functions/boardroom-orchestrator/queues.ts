@@ -553,7 +553,7 @@ ${scoresShape}
     { "objection": "your Round-2 objection, restated", "status": "resolved"|"standing", "evidence_quote": "VERBATIM quote from the candidate that resolves it — required when status is resolved" }
   ],
   "blocking_objections": [ "..." ],
-  "comment": "One paragraph."
+  "comment": "One or two short sentences — 400 characters max."
 }
 
 Every score must be an integer 1-10. Score against the founder's actual intake — not the candidate in a vacuum.
