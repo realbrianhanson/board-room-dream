@@ -194,6 +194,7 @@ export function injectOwnerAuthority(
 export type UnauthorizedCategory =
   | "monetary_amount"
   | "payment_provider_or_checkout"
+  | "monetization_scope"
   | "new_external_integration"
   | "disable_or_retire_existing"
   | "destructive_sql"
