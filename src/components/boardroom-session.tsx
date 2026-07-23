@@ -106,19 +106,31 @@ export function BoardroomSession(props: BoardroomSessionProps) {
   const [isOwner, setIsOwner] = useState(false);
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   const [convening, setConvening] = useState(false);
+  // Distinguish load failure from empty. `runError` sticks until a successful
+  // reload clears it; when we already have a run in memory a subsequent
+  // failure is treated as a background/stale refresh (data stays on screen).
+  const [runError, setRunError] = useState<string | null>(null);
+  const [runStale, setRunStale] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const consensusPulseRef = useRef<HTMLDivElement | null>(null);
 
   const loadSteps = useCallback(async (runId: string) => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("run_steps")
       .select("id, run_id, step_key, round, seat, status, response_text, response_json, error, cost_usd, created_at, completed_at")
       .eq("run_id", runId)
       .order("created_at", { ascending: true });
+    if (error) {
+      // Preserve last good steps on failure; surface via stale banner.
+      setRunError(error.message);
+      setRunStale(true);
+      return;
+    }
     setSteps((data ?? []) as SessionStep[]);
   }, []);
 
   const loadRun = useCallback(async (): Promise<SessionRun | null> => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("boardroom_runs")
       .select("*")
       .eq("project_id", projectId)
@@ -126,11 +138,32 @@ export function BoardroomSession(props: BoardroomSessionProps) {
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
+    if (error) {
+      setRunError(error.message);
+      // Only mark stale when we have a run already loaded — otherwise this is
+      // an initial load failure and must render as an explicit error state,
+      // never as an empty "Preparing…" placeholder.
+      setRunStale((prev) => (run ? true : prev));
+      return run;
+    }
+    setRunError(null);
+    setRunStale(false);
     setRun((data as SessionRun) ?? null);
     if (data) await loadSteps(data.id);
     onRunLoaded?.((data as SessionRun) ?? null);
     return (data as SessionRun) ?? null;
-  }, [projectId, kind, loadSteps, onRunLoaded]);
+  }, [projectId, kind, loadSteps, onRunLoaded, run]);
+
+  const retryLoad = useCallback(async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      await loadRun();
+    } finally {
+      setRetrying(false);
+    }
+  }, [loadRun, retrying]);
+
 
   useEffect(() => {
     let cancelled = false;
