@@ -16,7 +16,7 @@ export function useProjectJourney(projectId: string): JourneyStage[] | null {
           .maybeSingle(),
         supabase
           .from("plan_versions")
-          .select("kind, created_at")
+          .select("kind, locked_at")
           .eq("project_id", projectId)
           .eq("is_build_safe", true)
           .in("kind", ["plan", "design"]),
