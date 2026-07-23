@@ -1468,6 +1468,17 @@ function FinalAuditCard({
             <Gavel className="h-4 w-4" /> {audit ? "Run the audit again" : "Run the A–Z audit"}
           </button>
         )}
+        {isOwner && clean && (
+          // Clean audits stay navigable — the audit center is where the
+          // re-run confirmation happens. Never auto-run or spend from here.
+          <Link
+            to="/audits/$projectId"
+            params={{ projectId }}
+            className="inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-4 py-2 text-sm text-[hsl(38_65%_78%)] transition-colors hover:border-primary/60"
+          >
+            <Gavel className="h-4 w-4" /> Run the audit again
+          </Link>
+        )}
         <Link
           to="/audits/$projectId"
           params={{ projectId }}
@@ -1476,6 +1487,7 @@ function FinalAuditCard({
           <ScrollText className="h-4 w-4" /> Open the audit center
         </Link>
       </div>
+
     </div>
   );
 }
