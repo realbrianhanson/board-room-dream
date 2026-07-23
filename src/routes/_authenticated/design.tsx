@@ -38,9 +38,9 @@ function DesignIndex() {
   return (
     <div className="mx-auto w-full max-w-4xl px-6 py-12 md:py-16">
       <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Design</span>
-      <h1 className="mt-3 font-display text-4xl leading-tight text-foreground md:text-5xl">The house style.</h1>
+      <h1 className="mt-3 font-display text-4xl leading-tight text-foreground md:text-5xl">Design Council</h1>
       <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-        Once the plan is locked, the board debates the look — palette, type, motion, and the one distinctive move.
+        Once the plan is locked, the council debates the look — palette, type, motion, and the one distinctive move.
       </p>
 
       <div className="mt-10">
