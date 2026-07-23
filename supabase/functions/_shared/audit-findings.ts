@@ -543,6 +543,25 @@ export function downgradeUnsupported(
       return { ...f, severity: to };
     }
 
+    // Rule 4e (OWNER-AUTHORITY monetization gate — runs BEFORE Rule 4c so
+    // its explicit blocked-by-owner-decision reason wins). When the owner
+    // contract marks price_anchor or upgrade_trigger as unset/unapproved,
+    // generic "app has no money path / pricing CTA / checkout / upgrade
+    // path" findings CANNOT publish as P0/P1 — the owner has explicitly
+    // deferred that decision. Cap to P2 with a blocked-by-owner-decision
+    // reason. A real broken EXISTING owner-authorized flow (OWNER_CONTRACT:
+    // or RUNTIME_FAILURE: markers present) still publishes at its severity.
+    const monetizationBlocked = ownerContract
+      && (ownerContract.priceAnchorUnset || ownerContract.upgradeTriggerUnset);
+    if ((sev === "P0" || sev === "P1")
+        && monetizationBlocked
+        && looksLikeUnauthorizedMonetizationClaim(f.title, f.description, f.file_path)
+        && !hasOwnerContractMarker(f.evidence)
+        && !hasRuntimeFailureMarker(f.evidence)) {
+      push(sev, "P2", "monetization surface (money path / pricing CTA / checkout / upgrade path) blocked-by-owner-decision — owner has not authorized price_anchor / upgrade_trigger; approval needed before this can be P0/P1");
+      return { ...f, severity: "P2" as Severity };
+    }
+
     // Rule 4c (severity-cap only): product-strategy / copy / positioning /
     // pricing / onboarding / buyer-reach findings are P2 by default. R6:
     // path exclusion — backend infra paths are NEVER classified here. Per
@@ -557,23 +576,7 @@ export function downgradeUnsupported(
       return { ...f, severity: "P2" as Severity };
     }
 
-    // Rule 4e (OWNER-AUTHORITY monetization gate): when the owner contract
-    // marks price_anchor or upgrade_trigger as unset/unapproved, generic
-    // "app has no money path / pricing CTA / checkout / upgrade path"
-    // findings CANNOT publish as P0/P1 — the owner has explicitly deferred
-    // that decision. Cap to P2 with a blocked-by-owner-decision reason.
-    // A real broken EXISTING owner-authorized flow (OWNER_CONTRACT: or
-    // RUNTIME_FAILURE: markers present) still publishes at its severity.
-    const monetizationBlocked = ownerContract
-      && (ownerContract.priceAnchorUnset || ownerContract.upgradeTriggerUnset);
-    if ((sev === "P0" || sev === "P1")
-        && monetizationBlocked
-        && looksLikeUnauthorizedMonetizationClaim(f.title, f.description, f.file_path)
-        && !hasOwnerContractMarker(f.evidence)
-        && !hasRuntimeFailureMarker(f.evidence)) {
-      push(sev, "P2", "monetization surface (money path / pricing CTA / checkout / upgrade path) blocked-by-owner-decision — owner has not authorized price_anchor / upgrade_trigger; approval needed before this can be P0/P1");
-      return { ...f, severity: "P2" as Severity };
-    }
+
 
 
     // Rule 5: speculative WHY hedge — reject at P0/P1.
