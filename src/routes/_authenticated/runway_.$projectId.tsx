@@ -406,25 +406,50 @@ function RunwayPage() {
   }
 
   async function advance(b: Batch, next: Batch["status"]) {
-    const patch: any = { status: next };
-    if (next === "sent") patch.sent_at = new Date().toISOString();
-    if (next === "built") patch.built_at = new Date().toISOString();
-    const { error } = await supabase.from("batches").update(patch).eq("id", b.id);
-    if (error) { toast.error(error.message); return; }
-    if (next === "passed") {
-      const nextNo = (batches ?? []).find((x) => x.batch_no > b.batch_no && !isTerminal(x.status))?.batch_no;
-      if (nextNo) await supabase.from("projects").update({ current_batch_no: Math.floor(nextNo) }).eq("id", projectId);
-      else await supabase.from("projects").update({ current_batch_no: b.batch_no, status: "auditing" }).eq("id", projectId);
+    // Human-channel batches are offline work the owner marks done directly —
+    // no code verification exists so the direct update is preserved.
+    if (b.channel === "human") {
+      const patch: any = { status: next };
+      if (next === "sent") patch.sent_at = new Date().toISOString();
+      if (next === "built") patch.built_at = new Date().toISOString();
+      const { error } = await supabase.from("batches").update(patch).eq("id", b.id);
+      if (error) { toast.error(error.message); return; }
+      if (next === "passed") {
+        const nextNo = (batches ?? []).find((x) => x.batch_no > b.batch_no && !isTerminal(x.status))?.batch_no;
+        if (nextNo) await supabase.from("projects").update({ current_batch_no: Math.floor(nextNo) }).eq("id", projectId);
+        else await supabase.from("projects").update({ current_batch_no: b.batch_no, status: "auditing" }).eq("id", projectId);
+      }
+      loadAll();
+      return;
     }
+    // PROMPT-CONTRACT-AND-STATE-R4: code-channel transitions go through the
+    // owner-authenticated set_batch_status RPC. The RPC rejects illegal
+    // transitions, enforces sequential dependencies, and advances
+    // current_batch_no / project status under SECURITY DEFINER so the
+    // browser cannot forge a "passed" without a supported audit outcome.
+    const { error } = await supabase.rpc("set_batch_status", {
+      p_batch_id: b.id,
+      p_next: next,
+      p_outcome: undefined,
+    });
+    if (error) { toast.error(error.message); return; }
     loadAll();
   }
 
-  // Sequential skip rule: skipping a batch also skips every later unbuilt
-  // batch (pending / fix_needed) so a downstream batch never silently
-  // assumes work that was never actually done. Built/passed/sent/skipped
-  // rows are left alone. Pure suffix computation lives in @/lib/runway-skip
-  // and is unit-tested.
+  // Sequential skip rule: the RPC applies skip-suffix atomically for code
+  // batches. Human batches still use the client-side computation.
   async function skipBatchAndSuffix(b: Batch) {
+    if (b.channel !== "human") {
+      const { error } = await supabase.rpc("set_batch_status", {
+        p_batch_id: b.id,
+        p_next: "skipped",
+        p_outcome: undefined,
+      });
+      if (error) { toast.error(error.message); return; }
+      toast.success("Skipped — later unbuilt batches were skipped too.");
+      loadAll();
+      return;
+    }
     const ids = computeSkipSuffixIds(batches ?? [], b.id);
     if (ids.length === 0) return;
     const { error } = await supabase

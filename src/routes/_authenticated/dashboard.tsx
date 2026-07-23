@@ -129,6 +129,7 @@ function DashboardPage() {
   const navigate = useNavigate();
   const search = Route.useSearch();
   const [projects, setProjects] = useState<Project[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [mode, setMode] = useState<NewMode>(() => initialModeFromSearch(search.new));
 
@@ -179,13 +180,16 @@ function DashboardPage() {
   }
 
   async function load() {
+    setLoadError(null);
     const { data, error } = await supabase
       .from("projects")
       .select("id, name, status, current_batch_no, created_at, is_import, github_repo, lovable_project_url")
       .order("created_at", { ascending: false });
     if (error) {
+      // Do NOT collapse a query failure into the empty state. That would
+      // hide a retryable network/RLS problem behind "No projects yet.".
       toast.error(error.message);
-      setProjects([]);
+      setLoadError(error.message);
       return;
     }
     const rows = (data ?? []) as Project[];
@@ -591,7 +595,19 @@ function DashboardPage() {
       )}
 
       <div className="mt-10">
-        {projects === null ? (
+        {loadError ? (
+          <div role="alert" className="rounded-xl border border-destructive/40 bg-destructive/10 px-6 py-6 text-sm text-destructive">
+            <p className="font-medium">Couldn't load your projects.</p>
+            <p className="mt-1 text-destructive/80">{loadError}</p>
+            <button
+              type="button"
+              onClick={() => { void load(); }}
+              className="mt-4 inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+            >
+              Retry
+            </button>
+          </div>
+        ) : projects === null ? (
           <div className="grid gap-4 md:grid-cols-2">
             {[0, 1].map((i) => (
               <div key={i} className="h-32 animate-pulse rounded-xl bg-surface-1" />

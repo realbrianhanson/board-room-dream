@@ -416,7 +416,7 @@ Authority rules (F1):
 - Keep the batch skeleton exactly (ENFORCED):
   * First line: \`Batch ${batch.batch_no} — <title semantically matching the current title>. Numbered items only, no scope creep.\`
   * Then the numbered items, each starting with \`1.\`, \`2.\`, … — no bullets, no free-form paragraphs.
-  * For code channels ("lovable" and "supabase"): include an "Acceptance" section with 2–4 click-only checks (one per line).
+  * For code channels ("lovable" and "supabase"): include an "Acceptance" section with 2–4 layer-appropriate checks (one per line). channel="lovable" → observable preview interactions (clicks, form submits, visible copy/state) plus console/network checks when relevant. channel="supabase" → concrete BACKEND checks (migration applied / schema query result, RLS positive AND negative case, edge-function request/response, DB constraint or trigger behavior, logs, or automated test). Never require preview clicks as the only proof on a supabase-only batch. A mixed UI-wired-to-backend batch MUST include BOTH layers as separate checks.
   * Ends EXACTLY with the two lines:\n    Keep everything else identical.\n    Typecheck when done.
   * Total length 900–3200 characters.
   * NEVER merely echo the original prompt when live reality (repo/schema) contradicts it — rewrite to match the live code.

@@ -41,6 +41,14 @@ Deno.serve(async (req) => {
   const userId = userData.user.id;
 
   const admin = adminClient();
+  // SERVER_AUTH: the flywheel miner is intentionally SYSTEM-ADMIN-ONLY. It
+  // mines de-identified workspace-wide learning signal (audit findings +
+  // batch outcomes) to propose additions to the shared field manual. It is
+  // NOT cohort-scoped and NEVER runs for instructors or ordinary users. The
+  // profile-role check below is the sole entry gate; every request without
+  // profiles.role = 'admin' must be rejected before any admin.from(...)
+  // read of audit_findings / batches. Do not weaken this to "instructor"
+  // without also cohort-scoping every query in this file.
   const { data: profile } = await admin.from("profiles").select("role").eq("id", userId).maybeSingle();
   if (profile?.role !== "admin") return j(403, { error: "Admins only" });
 

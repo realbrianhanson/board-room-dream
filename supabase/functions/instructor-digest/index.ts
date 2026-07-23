@@ -17,6 +17,8 @@ const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
 const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 const FROM_EMAIL = Deno.env.get("DIGEST_FROM_EMAIL") ?? "boardroom@example.com";
 
+import { escapeHtml } from "./escape.ts";
+
 function j(status: number, body: any) {
   return new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
 }
@@ -31,10 +33,10 @@ const KIND_TITLE: Record<string, string> = {
 function alertLine(a: any): string {
   const d = a.detail ?? {};
   switch (a.kind) {
-    case "stuck_48h": return `${d.hours_idle ?? "48+"}h idle`;
-    case "audit_loop": return `Loop ${d.loop_no ?? 2} on "${d.batch_title ?? "batch"}"`;
-    case "spend_cap": return `${d.run_kind ?? "run"} · $${Number(d.spent_usd ?? 0).toFixed(2)} / $${Number(d.budget_usd ?? 0).toFixed(2)}`;
-    case "never_locked": return `${d.days_since_created ?? 7}+ days since validated`;
+    case "stuck_48h": return `${escapeHtml(d.hours_idle ?? "48+")}h idle`;
+    case "audit_loop": return `Loop ${escapeHtml(d.loop_no ?? 2)} on "${escapeHtml(d.batch_title ?? "batch")}"`;
+    case "spend_cap": return `${escapeHtml(d.run_kind ?? "run")} · $${Number(d.spent_usd ?? 0).toFixed(2)} / $${Number(d.budget_usd ?? 0).toFixed(2)}`;
+    case "never_locked": return `${escapeHtml(d.days_since_created ?? 7)}+ days since validated`;
     default: return "";
   }
 }
@@ -114,13 +116,13 @@ Deno.serve(async (req) => {
 
     const alertListHtml = (alertRows ?? []).length
       ? `<ul style="padding-left:18px;margin:8px 0 0">${(alertRows ?? []).slice(0, 15).map((a: any) =>
-          `<li style="margin:6px 0"><strong>${KIND_TITLE[a.kind] ?? a.kind}</strong> — ${nameById.get(a.user_id) ?? "Member"} · ${projById.get(a.project_id) ?? "—"} <span style="color:#888">(${alertLine(a)})</span></li>`).join("")}</ul>`
+          `<li style="margin:6px 0"><strong>${escapeHtml(KIND_TITLE[a.kind] ?? a.kind)}</strong> — ${escapeHtml(nameById.get(a.user_id) ?? "Member")} · ${escapeHtml(projById.get(a.project_id) ?? "—")} <span style="color:#888">(${alertLine(a)})</span></li>`).join("")}</ul>`
       : `<p style="color:#888;margin:8px 0 0">Nobody is stuck. The board is calm.</p>`;
 
     const html = `<!doctype html><html><body style="background:#141519;font-family:Inter,Arial,sans-serif;color:#eee;padding:24px">
       <div style="max-width:560px;margin:0 auto;background:#1a1c22;border:1px solid #2a2d34;border-radius:12px;padding:24px">
         <p style="font-family:monospace;letter-spacing:.28em;font-size:11px;color:#888;text-transform:uppercase;margin:0">Boardroom · Daily digest</p>
-        <h1 style="font-family:'Fraunces',Georgia,serif;font-size:24px;color:#f2ecd8;margin:6px 0 4px">${c.name}</h1>
+        <h1 style="font-family:'Fraunces',Georgia,serif;font-size:24px;color:#f2ecd8;margin:6px 0 4px">${escapeHtml(c.name)}</h1>
         <p style="color:#aaa;margin:0 0 20px;font-size:13px">${totals.members} members · ${totals.projects} projects · ${totals.locked} locked · ${totals.done} shipped · ${totals.open_alerts} open alert${totals.open_alerts === 1 ? "" : "s"}</p>
         <h2 style="font-size:12px;font-family:monospace;letter-spacing:.22em;text-transform:uppercase;color:#888;margin:0 0 4px">Attention</h2>
         ${alertListHtml}
@@ -128,7 +130,7 @@ Deno.serve(async (req) => {
       </div>
     </body></html>`;
 
-    const subject = `Boardroom — ${c.name} · ${totals.open_alerts} alert${totals.open_alerts === 1 ? "" : "s"}`;
+    const subject = `Boardroom — ${escapeHtml(c.name)} · ${totals.open_alerts} alert${totals.open_alerts === 1 ? "" : "s"}`;
     const send = await sendDigest(to, subject, html);
     results.push({ cohort: c.name, to, ...totals, ...send });
   }

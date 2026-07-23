@@ -328,6 +328,19 @@ export function skeletonError(
     if (acceptLines.length < 2 || acceptLines.length > 4) {
       return `Acceptance section must have 2–4 checks (found ${acceptLines.length}).`;
     }
+    // Channel-appropriate acceptance-check content (PROMPT-CONTRACT-R4).
+    // supabase-only batches must NOT rely on preview clicks as the only proof.
+    if (batch.channel === "supabase") {
+      const joined = acceptLines.join("\n").toLowerCase();
+      const backendSignalRe = /(migration|schema|rls|policy|grant|revoke|edge[-\s]?function|invoke|rpc|select\s|insert\s|update\s|delete\s|trigger|constraint|deno\s+test|curl\s|http\s+\d{3}|logs?\b|log\s+line)/;
+      const hasBackendSignal = backendSignalRe.test(joined);
+      const isClickOnly = acceptLines.every((l) =>
+        /\b(click|press|tap|open the preview|visit\s+\/|navigate to|see\s+.*button|see the\b|type\s+into|scroll)\b/i.test(l),
+      );
+      if (isClickOnly || !hasBackendSignal) {
+        return `Supabase-only batches cannot verify with preview clicks alone. Include at least one concrete backend check (migration/schema query, RLS positive+negative, edge-function request/response, trigger/constraint behavior, log line, or deno test).`;
+      }
+    }
   }
   const trimmedEnd = text.trimEnd();
   if (!/Keep everything else identical\.\s*\n\s*Typecheck when done\.$/.test(trimmedEnd)) {
