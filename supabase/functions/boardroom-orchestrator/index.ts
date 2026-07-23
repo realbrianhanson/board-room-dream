@@ -46,6 +46,12 @@ import {
 import { BatchContextTooLarge, MarkdownCompactionImpossible, buildValidationRetryRequest } from "../_shared/batch-context.ts";
 import { tryCloseJsonTail, tryRecoverTrailingRedundantCloser } from "../_shared/audit-findings.ts";
 import {
+  decideConflictOutcome,
+  isUniqueViolation,
+  type ExistingBatchRow,
+  type PlannedBatchRow,
+} from "../_shared/batch-persist-idempotency.ts";
+import {
   absorbCorrectionStep,
   type Artifact,
   computeAuthorityViolationError,
@@ -990,20 +996,91 @@ async function finalizeBatches(admin: any, run: any, batchesJson: any[]) {
     if (r) r.prompt_md = a.text;
   }
 
-  const { error: insErr } = await admin.from("batches").insert(rows);
+  // Idempotent persistence + first-terminal-wins run finalization.
+  //
+  // Live run 0ed1f4e7 proved two ticks can concurrently reach this tail:
+  // worker A inserts six rows and marks the run "completed"; worker B's
+  // identical INSERT trips batches_project_id_batch_no_key and the old
+  // handler overwrote "completed" with "failed". Fix:
+  //   1. Bail out early if the run is already terminal (another worker
+  //      finished the job).
+  //   2. On duplicate-key conflict, re-read the persisted set and only
+  //      accept it if planned == existing on project/user/plan/batch_no/
+  //      title/channel/prompt_md AND every row is still in the safe
+  //      pre-execution shape (pending, uncompiled, unsent, no outcome).
+  //      Any mismatch fails loudly.
+  //   3. All boardroom_runs status writes are compare-and-set on the
+  //      non-terminal set, so a late loser can never demote "completed"
+  //      or overwrite a prior "failed".
+  //   4. projects.status only advances to "building" from the pre-build
+  //      set (locked/imported/auditing/validated) — a project that raced
+  //      further along the lifecycle is left alone.
+  const plannedRows: PlannedBatchRow[] = rows as PlannedBatchRow[];
 
-  if (insErr) {
-    await admin
-      .from("boardroom_runs")
-      .update({ status: "failed", error: `Failed to insert batches: ${insErr.message}` })
-      .eq("id", run.id);
+  const preRun = await getRun(admin, run.id);
+  if (preRun && (TERMINAL_RUN_STATUSES as readonly string[]).includes(preRun.status)) {
+    // Peer worker already finalized (success or failure). Do nothing.
     return;
   }
-  await admin.from("projects").update({ status: "building", current_batch_no: 1 }).eq("id", run.project_id);
+
+  const { error: insErr } = await admin.from("batches").insert(plannedRows);
+
+  if (insErr) {
+    if (!isUniqueViolation(insErr)) {
+      await failRun(admin, run, `Failed to insert batches: ${insErr.message ?? String(insErr)}`);
+      return;
+    }
+    // Duplicate-key: check for exact-match idempotency against the batches
+    // already persisted for THIS project + plan_version_id. We deliberately
+    // do not scope by user_id in the SELECT filter — the comparator itself
+    // verifies user_id per row, so a user mismatch is reported as such.
+    const { data: existingRaw, error: readErr } = await admin
+      .from("batches")
+      .select(
+        "project_id,user_id,plan_version_id,batch_no,title,channel,prompt_md,status,is_fix,sent_at,built_at,compiled_at,outcome_md",
+      )
+      .eq("project_id", run.project_id)
+      .eq("plan_version_id", plannedRows[0]?.plan_version_id ?? null)
+      .order("batch_no", { ascending: true });
+    if (readErr) {
+      await failRun(admin, run, `Failed to insert batches (conflict readback failed): ${readErr.message ?? String(readErr)}`);
+      return;
+    }
+    const decision = decideConflictOutcome(
+      plannedRows,
+      (existingRaw ?? []) as ExistingBatchRow[],
+    );
+    if (decision.kind === "reject") {
+      await failRun(
+        admin,
+        run,
+        `Failed to insert batches: duplicate_key_conflict_not_idempotent (${decision.reason})`,
+      );
+      return;
+    }
+    // Fall through — treat as if we just inserted the set ourselves.
+  }
+
+  // Advance the project only if it's still in a pre-build lifecycle state.
+  // A concurrent worker that already moved it past 'building' must not be
+  // rewound; a project that raced further (e.g. 'auditing') is left alone.
+  await admin
+    .from("projects")
+    .update({ status: "building", current_batch_no: 1 })
+    .eq("id", run.project_id)
+    .in("status", ["locked", "imported", "auditing", "validated"]);
+
+  // Compare-and-set: only mark completed if the run is still non-terminal.
+  // Prevents a losing worker from ever downgrading a peer's terminal write.
   await admin
     .from("boardroom_runs")
-    .update({ status: "completed", consensus: { batches_inserted: rows.length }, updated_at: new Date().toISOString() })
-    .eq("id", run.id);
+    .update({
+      status: "completed",
+      consensus: { batches_inserted: plannedRows.length },
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", run.id)
+    .not("status", "in", `(${TERMINAL_RUN_STATUSES.join(",")})`);
 }
 
 
