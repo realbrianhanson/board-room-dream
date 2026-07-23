@@ -201,7 +201,7 @@ export const StrategyContextPanel = forwardRef<StrategyPanelHandle, Props>(funct
   }
 
   const readyValues = values as ImportStrategyInput;
-  const { filled, total } = strategyCompleteness(readyValues);
+  const { required, optional } = strategyCompleteness(readyValues);
 
   async function save() {
     if (!intakeId) {
@@ -249,13 +249,14 @@ export const StrategyContextPanel = forwardRef<StrategyPanelHandle, Props>(funct
                 ? "border-success/40 bg-success/15 text-success"
                 : "border-border bg-surface-2 text-muted-foreground"
             }`}
+            title="Six required strategy fields · two optional owner decisions (price / upgrade trigger)"
           >
             {validity.valid ? <Check className="h-3 w-3" /> : null}
-            {filled}/{total}
+            {required.filled}/{required.total} req · {optional.filled}/{optional.total} opt
           </span>
           {!validity.valid && (
             <span className="text-xs text-muted-foreground">
-              Required before the A–Z audit. Blanks stay blank; the board never invents answers.
+              Six required fields needed before the A–Z audit. Price and upgrade trigger are optional owner decisions — blank stays blank; the board never invents answers.
             </span>
           )}
         </div>

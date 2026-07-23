@@ -426,8 +426,41 @@ export function looksLikeTruncationClaim(title: string, description: string): bo
   return TRUNCATION_CLAIM_RX.test(t);
 }
 
+/**
+ * OWNER-AUTHORITY severity gate context. When set, the deterministic
+ * post-merge validator caps generic "no money path / pricing CTA /
+ * checkout / upgrade path" findings to P2 with an explicit
+ * blocked-by-owner-decision reason, because the owner has explicitly
+ * deferred that decision and the board cannot publish it as a serious
+ * regression. Real broken owner-authorized payment flows (OWNER_CONTRACT:
+ * or RUNTIME_FAILURE:) still publish at their original severity.
+ */
+export type AuditOwnerContract = {
+  priceAnchorUnset?: boolean;
+  upgradeTriggerUnset?: boolean;
+};
+
+// Matches generic "the app has no way to charge / no pricing CTA / no
+// checkout / no upgrade path / no concrete money path" claims. Deliberately
+// narrow — a real broken CTA on an EXISTING owner-authorized checkout still
+// carries OWNER_CONTRACT: or RUNTIME_FAILURE: markers and is allowed
+// through. The regression fixture "Landing page has no concrete money
+// path" must match here.
+const UNAUTHORIZED_MONETIZATION_CLAIM_RX =
+  /\b(?:(?:no|missing|lack(?:s|ing)?|absent|without)\s+(?:a\s+|any\s+|concrete\s+|clear\s+|explicit\s+|visible\s+)?)?(?:money\s+path|revenue\s+path|monetiz(?:ation|ing)\s+(?:path|flow|scope|surface)?|paywall|checkout(?:\s+flow)?|pricing(?:\s+(?:cta|call[-\s]?to[-\s]?action|page|section|tier|plan|hero|table))?|price\s+(?:anchor|point|tag|cta)|paid\s+(?:offer|tier|plan|conversion)|upgrade\s+(?:path|trigger|prompt|cta|flow|conversion))\b/i;
+
+export function looksLikeUnauthorizedMonetizationClaim(
+  title: string,
+  description: string,
+  filePath?: string | null,
+): boolean {
+  if (filePath !== undefined && isBackendInfraPath(filePath)) return false;
+  return UNAUTHORIZED_MONETIZATION_CLAIM_RX.test(`${title}\n${description}`);
+}
+
 export function downgradeUnsupported(
   findings: CleanFinding[],
+  ownerContract?: AuditOwnerContract,
 ): { findings: CleanFinding[]; downgrades: DowngradeRecord[]; rejectedIndices: Set<number> } {
   const downgrades: DowngradeRecord[] = [];
   const rejectedIndices = new Set<number>();
@@ -510,6 +543,25 @@ export function downgradeUnsupported(
       return { ...f, severity: to };
     }
 
+    // Rule 4e (OWNER-AUTHORITY monetization gate — runs BEFORE Rule 4c so
+    // its explicit blocked-by-owner-decision reason wins). When the owner
+    // contract marks price_anchor or upgrade_trigger as unset/unapproved,
+    // generic "app has no money path / pricing CTA / checkout / upgrade
+    // path" findings CANNOT publish as P0/P1 — the owner has explicitly
+    // deferred that decision. Cap to P2 with a blocked-by-owner-decision
+    // reason. A real broken EXISTING owner-authorized flow (OWNER_CONTRACT:
+    // or RUNTIME_FAILURE: markers present) still publishes at its severity.
+    const monetizationBlocked = ownerContract
+      && (ownerContract.priceAnchorUnset || ownerContract.upgradeTriggerUnset);
+    if ((sev === "P0" || sev === "P1")
+        && monetizationBlocked
+        && looksLikeUnauthorizedMonetizationClaim(f.title, f.description, f.file_path)
+        && !hasOwnerContractMarker(f.evidence)
+        && !hasRuntimeFailureMarker(f.evidence)) {
+      push(sev, "P2", "monetization surface (money path / pricing CTA / checkout / upgrade path) blocked-by-owner-decision — owner has not authorized price_anchor / upgrade_trigger; approval needed before this can be P0/P1");
+      return { ...f, severity: "P2" as Severity };
+    }
+
     // Rule 4c (severity-cap only): product-strategy / copy / positioning /
     // pricing / onboarding / buyer-reach findings are P2 by default. R6:
     // path exclusion — backend infra paths are NEVER classified here. Per
@@ -523,6 +575,9 @@ export function downgradeUnsupported(
       push(sev, "P2", "product-strategy/copy claim lacks OWNER_CONTRACT: or RUNTIME_FAILURE: corroboration");
       return { ...f, severity: "P2" as Severity };
     }
+
+
+
 
     // Rule 5: speculative WHY hedge — reject at P0/P1.
     if ((sev === "P0" || sev === "P1") && whyIsSpeculative(f.evidence)) {
@@ -605,13 +660,16 @@ export type ChairMergeEvaluation = {
   verdict: "clean" | "findings";
 };
 
-export function evaluateChairMergeCandidate(parsed: unknown): ChairMergeEvaluation {
+export function evaluateChairMergeCandidate(
+  parsed: unknown,
+  ownerContract?: AuditOwnerContract,
+): ChairMergeEvaluation {
   const obj = (parsed && typeof parsed === "object") ? (parsed as any) : {};
   const rawFindings = Array.isArray(obj.findings) ? obj.findings : [];
   const summary = typeof obj.summary === "string" ? obj.summary : "";
   const normalized = normalizeFindings(rawFindings);
   const deduped = dedupeFindings(normalized);
-  const { findings: downgraded, downgrades, rejectedIndices } = downgradeUnsupported(deduped);
+  const { findings: downgraded, downgrades, rejectedIndices } = downgradeUnsupported(deduped, ownerContract);
   // AUDIT-PUBLISH-TRUST-R4: omit findings whose downgrade disposition marks
   // them as factually unsupported. The full ledger (rescored + rejected)
   // remains on the audit summary for observability, but counts/verdict/

@@ -1185,7 +1185,36 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
   // so a violation here means someone bypassed the step path or a schema
   // drifted — we still fail closed rather than persist an oversized report.
   const { evaluateChairMergeCandidate } = await import("../_shared/audit-findings.ts");
-  const evaluation = evaluateChairMergeCandidate(parsed);
+  // OWNER-AUTHORITY monetization gate: load the project's most recent
+  // intake answers to detect whether price_anchor / upgrade_trigger were
+  // left unset (blank OR the canonical "Board should recommend" placeholder).
+  // When unset, generic "no money path / pricing CTA / checkout / upgrade
+  // path" findings are deterministically capped to P2 in the publication
+  // path so they never enter a fix batch. Real broken owner-authorized
+  // flows (OWNER_CONTRACT: / RUNTIME_FAILURE: markers) still publish.
+  let ownerContract: { priceAnchorUnset?: boolean; upgradeTriggerUnset?: boolean } | undefined;
+  try {
+    const { data: intakeRow } = await admin
+      .from("intakes")
+      .select("answers")
+      .eq("project_id", audit.project_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const { isRecommendPlaceholder } = await import("../_shared/import-strategy.ts");
+    const ans = (intakeRow?.answers ?? {}) as Record<string, unknown>;
+    const priceAnchor = typeof ans.price_anchor === "string" ? ans.price_anchor.trim() : "";
+    const upgradeTrigger = typeof ans.upgrade_trigger === "string" ? ans.upgrade_trigger.trim() : "";
+    ownerContract = {
+      priceAnchorUnset: priceAnchor.length === 0 || isRecommendPlaceholder(priceAnchor),
+      upgradeTriggerUnset: upgradeTrigger.length === 0 || isRecommendPlaceholder(upgradeTrigger),
+    };
+  } catch {
+    // Fail-open on lookup: absence of intake data means we cannot prove
+    // the owner authorized monetization, so treat both as unset (safer).
+    ownerContract = { priceAnchorUnset: true, upgradeTriggerUnset: true };
+  }
+  const evaluation = evaluateChairMergeCandidate(parsed, ownerContract);
   const { findings, downgrades, summary: mergedSummaryText } = evaluation;
   if (evaluation.error) {
     await admin

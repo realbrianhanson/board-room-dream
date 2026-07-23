@@ -841,7 +841,10 @@ Deno.serve(async (req) => {
           return j(400, {
             error:
               "Strategy context is incomplete — the A–Z audit needs credible " +
-              `owner context for every field before it can start. Fix: ${list}`,
+              "owner context on the six required fields (buyer, acquisition_channel, " +
+              "paid_offer, activation_moment, wow_moment, positioning). " +
+              "Price anchor and upgrade trigger are optional owner decisions; " +
+              `blank is accepted. Fix: ${list}`,
             missing_strategy_fields: issues,
             version: BUILD_VERSION,
           });

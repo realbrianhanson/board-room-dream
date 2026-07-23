@@ -1,7 +1,12 @@
-// Deno mirror of src/lib/import-strategy.ts field-level validation rules.
-// Kept dependency-free so audit-runner can enforce the same strategy-context
-// gate the client uses. A parity test (import-strategy-parity.test.ts) locks
-// the rules by exercising identical fixtures through both modules.
+// Deno mirror of src/lib/import-strategy.ts field-level validation.
+// ACTIVATION-FLOW-R4: only SIX fields are required for imported-app A–Z
+// readiness (buyer, acquisition_channel, paid_offer, activation_moment,
+// wow_moment, positioning). price_anchor and upgrade_trigger are owner
+// decisions — blank OR the canonical "Not set — Board should recommend"
+// value both pass. Blanks persist as empty strings so downstream audit
+// prompts treat them as explicit missing owner input, never as facts.
+// A parity test (import-strategy-parity.test.ts) locks the rules by
+// exercising identical fixtures through both modules.
 
 export const STRATEGY_FIELDS = [
   "buyer",
@@ -17,14 +22,29 @@ export const STRATEGY_FIELDS = [
 export type StrategyField = (typeof STRATEGY_FIELDS)[number];
 export type ImportStrategyInput = Record<StrategyField, string>;
 
-export const RECOMMEND_PLACEHOLDER = "Not set — Board should recommend";
-export const RECOMMENDABLE_FIELDS: readonly StrategyField[] = [
+export const REQUIRED_STRATEGY_FIELDS: readonly StrategyField[] = [
+  "buyer",
+  "acquisition_channel",
+  "paid_offer",
+  "activation_moment",
+  "wow_moment",
+  "positioning",
+];
+
+export const OPTIONAL_MONETIZATION_FIELDS: readonly StrategyField[] = [
   "price_anchor",
   "upgrade_trigger",
 ];
 
+export const RECOMMEND_PLACEHOLDER = "Not set — Board should recommend";
+export const RECOMMENDABLE_FIELDS: readonly StrategyField[] = OPTIONAL_MONETIZATION_FIELDS;
+
 export function isRecommendPlaceholder(value: string | null | undefined): boolean {
   return (value ?? "").trim().toLowerCase() === RECOMMEND_PLACEHOLDER.toLowerCase();
+}
+
+export function isOptionalMonetizationField(field: StrategyField): boolean {
+  return OPTIONAL_MONETIZATION_FIELDS.includes(field);
 }
 
 const t = (v: string | null | undefined) => (v ?? "").trim();
@@ -58,8 +78,9 @@ function isPunctuationOnly(v: string): boolean {
 
 export function isFieldValid(field: StrategyField, value: string | null | undefined): boolean {
   const v = t(value);
-  if (v.length === 0) return false;
-  if (isRecommendPlaceholder(v)) return RECOMMENDABLE_FIELDS.includes(field);
+  const optional = isOptionalMonetizationField(field);
+  if (v.length === 0) return optional;
+  if (isRecommendPlaceholder(v)) return optional;
   if (isRepeatedSingleChar(v)) return false;
   if (isPunctuationOnly(v)) return false;
   if (FILLER_PLACEHOLDERS.has(normFiller(v))) return false;
@@ -75,11 +96,13 @@ export function validateImportStrategy(
   const out: Array<{ field: StrategyField; reason: string }> = [];
   for (const f of STRATEGY_FIELDS) {
     const v = t(input[f]);
-    if (v.length === 0) { out.push({ field: f, reason: "missing" }); continue; }
+    const optional = isOptionalMonetizationField(f);
+    if (v.length === 0) {
+      if (!optional) out.push({ field: f, reason: "missing" });
+      continue;
+    }
     if (isRecommendPlaceholder(v)) {
-      if (!RECOMMENDABLE_FIELDS.includes(f)) {
-        out.push({ field: f, reason: "placeholder-not-allowed" });
-      }
+      if (!optional) out.push({ field: f, reason: "placeholder-not-allowed" });
       continue;
     }
     if (isRepeatedSingleChar(v)) { out.push({ field: f, reason: "filler" }); continue; }
