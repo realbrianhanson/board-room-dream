@@ -1029,7 +1029,11 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
   // counts.P0=0 but summary text said "P0". reconcileAuditSummaryText is
   // deterministic and only trims/replaces — never invents facts.
   const { reconcileAuditSummaryText } = await import("../_shared/audit-findings.ts");
-  const reconciledText = reconcileAuditSummaryText(mergedSummaryText, counts);
+  const rejectedTitles = (downgrades ?? [])
+    .filter((d: any) => d?.disposition === "rejected_unsupported" || d?.published === false)
+    .map((d: any) => String(d?.title ?? ""))
+    .filter((t: string) => t.length > 0);
+  const reconciledText = reconcileAuditSummaryText(mergedSummaryText, counts, rejectedTitles);
 
   const summary = {
     verdict,

@@ -355,9 +355,29 @@ export function looksLikeClientSurfaceSecurityClaim(
 // concerns. These are legitimate product-quality findings but must not carry
 // P0/P1 severity without an OWNER_CONTRACT (verbatim owner/PRD requirement)
 // or a RUNTIME_FAILURE marker.
+//
+// R6 — deterministic path exclusion. The default-P2 rule targets real
+// product recommendations, NOT backend security/authority/parser/
+// orchestration code that merely mentions buyer/payment/price-like words in
+// its evidence. Any finding whose file_path lives under a backend infra
+// path (supabase/functions/**, supabase/migrations/**, supabase/tests/**) is
+// excluded from product-strategy classification and follows the normal
+// severity gates instead.
 const PRODUCT_STRATEGY_RX =
   /\b(copy|wording|tone|positioning|value\s+prop(?:osition)?|acquisition|pricing|price\s+anchor|monetiz(?:e|ation|ing)|paid\s+offer|upgrade\s+trigger|onboarding|activation|first[- ]?90|wow\s+moment|buyer|hero\s+section|landing\s+(?:page|copy|hero)|CTA|call[- ]to[- ]action|cohort[- ]first|marketing)\b/i;
-export function looksLikeProductStrategyClaim(title: string, description: string): boolean {
+export function isBackendInfraPath(fp: string | null): boolean {
+  const t = String(fp ?? "").trim().toLowerCase().replace(/^\.?\/+/, "");
+  if (!t) return false;
+  return t.startsWith("supabase/functions/")
+    || t.startsWith("supabase/migrations/")
+    || t.startsWith("supabase/tests/");
+}
+export function looksLikeProductStrategyClaim(
+  title: string,
+  description: string,
+  filePath?: string | null,
+): boolean {
+  if (filePath !== undefined && isBackendInfraPath(filePath)) return false;
   const t = `${title}\n${description}`;
   return PRODUCT_STRATEGY_RX.test(t);
 }
@@ -392,7 +412,6 @@ export function downgradeUnsupported(
   const downgrades: DowngradeRecord[] = [];
   const rejectedIndices = new Set<number>();
   const out = findings.map((f, i) => {
-    if (f.severity !== "P0" && f.severity !== "P1") return f;
     let sev: Severity = f.severity;
     const push = (
       from: Severity,
@@ -413,94 +432,96 @@ export function downgradeUnsupported(
       if (rejected) rejectedIndices.add(i);
     };
 
-    // Rule 1 (P0 only): missing IMPACT marker → P0 becomes P1. Rescored,
-    // not rejected — the underlying finding may still be a valid P1 concern.
+    // Rule 1 (P0 only, rescored): missing IMPACT marker → P0 becomes P1.
     if (sev === "P0" && !hasImpactMarker(f.evidence)) {
       push("P0", "P1", "P0 evidence missing IMPACT: build_failure|data_loss|auth_bypass|secret_exposure marker");
       sev = "P1";
     }
 
-    // Rule 2: supabase/migrations/* P0/P1 requires CURRENT marker.
-    // Historical-migration claims without CURRENT are factually unsupported —
-    // reject rather than publish as P2 misinformation.
-    if ((sev === "P0" || sev === "P1") && isMigrationPath(f.file_path) && !hasCurrentMarker(f.evidence)) {
-      push(sev, "P2", "migrations/* claim missing CURRENT: corroboration of effective state", "rejected_unsupported");
-      return { ...f, severity: "P2" as Severity };
+    // R6 — Rules 2/3/4/4b/4d are SEVERITY-AGNOSTIC factual-proof gates. A
+    // P2/P3 finding that alleges a migration gap, missing schema object,
+    // universal-helper reachability, client-surface security bypass, or a
+    // truncated source is just as unsupported at P2 as it was at P1: false
+    // P2 is still bad advice. When the required proof marker is absent, the
+    // finding is REJECTED regardless of incoming severity.
+
+    // Rule 2: supabase/migrations/* requires CURRENT (any severity).
+    if (isMigrationPath(f.file_path) && !hasCurrentMarker(f.evidence)) {
+      // Cap severity to P2 on rejection so any published-array leak still
+      // reflects the demotion; the entry is filtered out by rejectedIndices.
+      const to: Severity = SEV_ORDER[sev] < SEV_ORDER["P2"] ? "P2" : sev;
+      push(sev, to, "migrations/* claim missing CURRENT: corroboration of effective state", "rejected_unsupported");
+      return { ...f, severity: to };
     }
 
     // Rule 3: missing-object claim requires SCHEMA_LEDGER or RUNTIME_FAILURE.
-    // Without corroboration this is a partial-chunk absence, not proof —
-    // reject rather than publish "table X does not exist" as advice.
-    if ((sev === "P0" || sev === "P1")
-        && looksLikeMissingObjectClaim(f.title, f.description)
+    if (looksLikeMissingObjectClaim(f.title, f.description)
         && !hasSchemaLedgerMarker(f.evidence)
         && !hasRuntimeFailureMarker(f.evidence)) {
-      push(sev, "P2", "missing-object claim lacks SCHEMA_LEDGER: or RUNTIME_FAILURE: corroboration", "rejected_unsupported");
-      return { ...f, severity: "P2" as Severity };
+      const to: Severity = SEV_ORDER[sev] < SEV_ORDER["P2"] ? "P2" : sev;
+      push(sev, to, "missing-object claim lacks SCHEMA_LEDGER: or RUNTIME_FAILURE: corroboration", "rejected_unsupported");
+      return { ...f, severity: to };
     }
 
-    // Rule 4: universal-helper claim requires CALLER corroboration. Reject.
-    if ((sev === "P0" || sev === "P1")
-        && looksLikeUniversalHelperClaim(f.title, f.description)
+    // Rule 4: universal-helper claim requires CALLER corroboration.
+    if (looksLikeUniversalHelperClaim(f.title, f.description)
         && !hasCallerMarker(f.evidence)) {
-      push(sev, "P2", "universal-helper claim lacks CALLER: corroboration from a reachable caller", "rejected_unsupported");
-      return { ...f, severity: "P2" as Severity };
+      const to: Severity = SEV_ORDER[sev] < SEV_ORDER["P2"] ? "P2" : sev;
+      push(sev, to, "universal-helper claim lacks CALLER: corroboration from a reachable caller", "rejected_unsupported");
+      return { ...f, severity: to };
     }
 
-    // Rule 4b (R3): client-surface security claim (frontend src/* alleging
-    // auth/admin/RLS/privilege/unauthorized/direct-SELECT bypass) requires a
-    // SERVER_AUTH marker quoting the current vulnerable server construct.
-    // Without it, this is a UI-only observation and is rejected — a false
-    // "admin bypass" P2 is still bad advice.
-    if ((sev === "P0" || sev === "P1")
-        && looksLikeClientSurfaceSecurityClaim(f.title, f.description, f.file_path)
+    // Rule 4b: client-surface security claim (frontend src/* alleging
+    // auth/admin/RLS/privilege/direct-SELECT bypass) requires SERVER_AUTH.
+    if (looksLikeClientSurfaceSecurityClaim(f.title, f.description, f.file_path)
         && !hasServerAuthMarker(f.evidence)) {
-      push(sev, "P2", "client-surface security claim lacks SERVER_AUTH: quote of the current vulnerable server construct", "rejected_unsupported");
-      return { ...f, severity: "P2" as Severity };
+      const to: Severity = SEV_ORDER[sev] < SEV_ORDER["P2"] ? "P2" : sev;
+      push(sev, to, "client-surface security claim lacks SERVER_AUTH: quote of the current vulnerable server construct", "rejected_unsupported");
+      return { ...f, severity: to };
     }
 
-    // Rule 4c (R4): product-strategy / copy / positioning / pricing /
-    // onboarding / buyer-reach findings are P2 by default. RUNTIME_FAILURE
-    // corroboration is REQUIRED to keep them P1 — OWNER_CONTRACT alone no
-    // longer promotes a product recommendation to serious severity. Rescored
-    // (not rejected): these remain valid product-quality suggestions at P2.
+    // Rule 4d: truncation / "file is malformed / cut off" claim requires
+    // FULL_SOURCE (or RUNTIME_FAILURE).
+    if (looksLikeTruncationClaim(f.title, f.description)
+        && !hasFullSourceMarker(f.evidence)
+        && !hasRuntimeFailureMarker(f.evidence)) {
+      const to: Severity = SEV_ORDER[sev] < SEV_ORDER["P2"] ? "P2" : sev;
+      push(sev, to, "truncation/incomplete-source claim lacks FULL_SOURCE: or RUNTIME_FAILURE: corroboration", "rejected_unsupported");
+      return { ...f, severity: to };
+    }
+
+    // Rule 4c (severity-cap only): product-strategy / copy / positioning /
+    // pricing / onboarding / buyer-reach findings are P2 by default. R6:
+    // path exclusion — backend infra paths are NEVER classified here, so a
+    // finding in supabase/functions/_shared/owner-authority.ts about a
+    // masked DROP TABLE / pay directive is not rescored away just because
+    // its evidence contains buyer/payment words. Rescored (not rejected).
     if ((sev === "P0" || sev === "P1")
-        && looksLikeProductStrategyClaim(f.title, f.description)
+        && looksLikeProductStrategyClaim(f.title, f.description, f.file_path)
         && !hasRuntimeFailureMarker(f.evidence)) {
       push(sev, "P2", "product-strategy/copy claim lacks RUNTIME_FAILURE: corroboration (OWNER_CONTRACT alone does not elevate)");
       return { ...f, severity: "P2" as Severity };
     }
 
-    // Rule 4d (R4): truncation / "file is malformed / cut off" claim requires
-    // a FULL_SOURCE marker (or RUNTIME_FAILURE). Rejected — fragment-boundary
-    // artifacts are not real defects and must not be published even at P2.
-    if ((sev === "P0" || sev === "P1")
-        && looksLikeTruncationClaim(f.title, f.description)
-        && !hasFullSourceMarker(f.evidence)
-        && !hasRuntimeFailureMarker(f.evidence)) {
-      push(sev, "P2", "truncation/incomplete-source claim lacks FULL_SOURCE: or RUNTIME_FAILURE: corroboration", "rejected_unsupported");
-      return { ...f, severity: "P2" as Severity };
-    }
-
-    // Rule 5: speculative WHY ("appears", "may", "could", "likely", "seems")
-    // cannot support P0/P1 no matter how well-formed the QUOTE looks.
-    // Speculative severity is not a fact — reject.
+    // Rule 5: speculative WHY hedge — reject at P0/P1.
     if ((sev === "P0" || sev === "P1") && whyIsSpeculative(f.evidence)) {
       push(sev, "P2", "WHY: uses speculative hedge ('appears/may/could/likely/seems')", "rejected_unsupported");
       return { ...f, severity: "P2" as Severity };
     }
 
-    // Baseline QUOTE/WHY + concrete-path/evidence/confidence gate.
-    // A P0/P1 without a concrete path, without QUOTE/WHY, or with low
-    // confidence is not evidence-backed — reject.
-    const reasons: string[] = [];
-    if (!isConcretePath(f.file_path)) reasons.push("missing concrete file_path");
-    if (!isConcreteEvidence(f.evidence)) reasons.push("evidence lacks concrete detail");
-    if (!hasQuoteWhyMarker(f.evidence)) reasons.push("evidence missing QUOTE:/WHY: marker");
-    if (f.confidence === "low") reasons.push("confidence low");
-    if (reasons.length > 0) {
-      push(sev, "P2", reasons.join("; "), "rejected_unsupported");
-      return { ...f, severity: "P2" as Severity };
+    // Baseline QUOTE/WHY + concrete-path/evidence/confidence gate (P0/P1).
+    // Legitimate product/design/copy P2s still publish — this gate only
+    // applies to serious severities.
+    if (sev === "P0" || sev === "P1") {
+      const reasons: string[] = [];
+      if (!isConcretePath(f.file_path)) reasons.push("missing concrete file_path");
+      if (!isConcreteEvidence(f.evidence)) reasons.push("evidence lacks concrete detail");
+      if (!hasQuoteWhyMarker(f.evidence)) reasons.push("evidence missing QUOTE:/WHY: marker");
+      if (f.confidence === "low") reasons.push("confidence low");
+      if (reasons.length > 0) {
+        push(sev, "P2", reasons.join("; "), "rejected_unsupported");
+        return { ...f, severity: "P2" as Severity };
+      }
     }
     return sev === f.severity ? f : { ...f, severity: sev };
   });
@@ -582,25 +603,57 @@ export function evaluateChairMergeCandidate(parsed: unknown): ChairMergeEvaluati
   return { error, findings: published, downgrades, summary, verdict };
 }
 
-// R3 — audit-summary reconciliation. Given the Chair's raw summary text and
-// the POST-downgrade severity counts persisted alongside it, guarantee the
-// persisted summary text never asserts a severity class that the counts do
-// not support. Live regression (audit 2d953efb): counts.P0 === 0 but the
-// summary text said "P0". Deterministic policy:
-//   - If counts.P0 === 0 and the raw text contains a "P0" token, drop the
-//     raw text entirely and replace it with a derived counts sentence so
-//     the persisted summary cannot mislead a reader about severity mix.
-//   - Otherwise, prefix the raw text with a compact counts sentence and
-//     truncate to the merge summary cap.
+// R3/R6 — audit-summary reconciliation. Given the Chair's raw summary text
+// and the POST-downgrade severity counts persisted alongside it, guarantee
+// the persisted summary text never asserts a severity class that the counts
+// do not support and never cites a rejected finding by title.
+//
+// Live regressions:
+//   - audit 2d953efb: counts.P0 === 0 but the summary text said "P0".
+//   - audit cef4de90: counts.P0 === 0 / P1 === 2 but the summary said
+//     "critical flaw" and named an owner-authority finding that had been
+//     rescored/rejected away.
+//
+// Deterministic policy:
+//   - Build a forbidden-word set from the counts: any severity class with
+//     count 0 forbids its own token ("P0"/"P1"/…) and, when P0===0, the
+//     word "critical"; when both P0 and P1 are 0, the words
+//     "high-severity"/"high severity"/"serious" as well.
+//   - Any rejected-finding title (case-insensitive substring match) is
+//     forbidden too — the summary must not name a finding that isn't
+//     published.
+//   - If any forbidden token appears in the raw text, DROP the raw text
+//     entirely and persist just the derived counts sentence.
+//   - Otherwise prefix the raw text with the counts sentence and cap length.
 export type AuditCounts = { P0: number; P1: number; P2: number; P3: number };
-export function reconcileAuditSummaryText(rawText: string, counts: AuditCounts): string {
+export function reconcileAuditSummaryText(
+  rawText: string,
+  counts: AuditCounts,
+  rejectedTitles: string[] = [],
+): string {
   const text = String(rawText ?? "").trim();
   const countsSentence =
     `Validated counts: P0=${counts.P0}, P1=${counts.P1}, P2=${counts.P2}, P3=${counts.P3}.`;
-  const mentionsP0 = /\bP0\b/.test(text);
-  if (counts.P0 === 0 && mentionsP0) {
-    // The Chair's summary claims a P0 the counts contradict — refuse to
-    // persist that. Use derived text alone.
+  const forbiddenPatterns: RegExp[] = [];
+  if (counts.P0 === 0) {
+    forbiddenPatterns.push(/\bP0\b/i);
+    forbiddenPatterns.push(/\bcritical\b/i);
+  }
+  if (counts.P1 === 0) {
+    forbiddenPatterns.push(/\bP1\b/i);
+  }
+  if (counts.P0 === 0 && counts.P1 === 0) {
+    forbiddenPatterns.push(/\bhigh[- ]severity\b/i);
+    forbiddenPatterns.push(/\bserious\b/i);
+  }
+  const rejectedHit = rejectedTitles.some((title) => {
+    const t = String(title ?? "").trim();
+    if (t.length < 6) return false;
+    return text.toLowerCase().includes(t.toLowerCase());
+  });
+  const forbiddenHit = forbiddenPatterns.some((rx) => rx.test(text));
+  if (rejectedHit || forbiddenHit) {
+    // Refuse to persist the stale narrative — counts sentence alone.
     return countsSentence.slice(0, CAPS.mergeSummaryMax);
   }
   const combined = text ? `${countsSentence} ${text}` : countsSentence;
