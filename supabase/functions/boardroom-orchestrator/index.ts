@@ -2107,11 +2107,12 @@ async function handleRequest(req: Request): Promise<Response> {
     if (action === "resume") {
       // Never trust arbitrary extra_budget_usd. Shared validator caps a
       // single addition at $10 and total run budget at $30. The separate
-      // server-enforced daily cap ($125) is unchanged. Rejects with
-      // structured 400 — do NOT silently clamp.
+      // server-enforced daily cap (runtime app_settings) is unchanged.
+      // Rejects with structured 400 — do NOT silently clamp.
       const { validateResumeBudget } = await import("../_shared/resume-budget.ts");
       const check = validateResumeBudget(body?.extra_budget_usd, Number(run.budget_usd ?? 0));
       if (!check.ok) return j(400, { error: check.error });
+
       const patch: any = { status: "queued", error: null };
       if (check.extra > 0) patch.budget_usd = check.newTotal;
       await admin.from("boardroom_runs").update(patch).eq("id", runId);

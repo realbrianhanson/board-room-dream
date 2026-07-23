@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Plus, ArrowRight, Lightbulb, Package, Trash2 } from "lucide-react";
 import { ProjectJourney } from "@/components/project-journey";
 import { buildJourney } from "@/lib/project-journey";
+import { classifyAudits, parseTimestamp } from "@/lib/audit-classification";
 import { projectStatusLine } from "@/lib/project-status-line";
 import {
   isImportReady,
@@ -12,6 +13,7 @@ import {
 } from "@/lib/import-strategy";
 import { initialModeFromSearch } from "@/lib/dashboard-search";
 import { DeleteProjectDialog } from "@/components/delete-project-dialog";
+
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   // Lightweight validator — tolerate any value; the pure helper below decides
@@ -197,33 +199,58 @@ function DashboardPage() {
     }
     const rows = (data ?? []) as Project[];
     const ids = rows.map((r) => r.id);
-    let designSet = new Set<string>();
-    let batchSet = new Set<string>();
-    let planSet = new Set<string>();
+    const designSet = new Set<string>();
+    const batchSet = new Set<string>();
+    const planSet = new Set<string>();
     const fixInfo = new Map<string, number>();
     const allPassedSet = new Set<string>();
     const importAuditSet = new Set<string>();
     const finalAuditSet = new Set<string>();
     if (ids.length) {
-      const [{ data: pvs }, { data: bs }, { data: au }] = await Promise.all([
+      const [pvsRes, bsRes, auRes] = await Promise.all([
         supabase.from("plan_versions").select("project_id, kind, locked_at").in("project_id", ids).eq("is_build_safe", true),
-        supabase.from("batches").select("project_id, batch_no, status").in("project_id", ids),
+        supabase.from("batches").select("project_id, batch_no, status, built_at, sent_at, created_at").in("project_id", ids),
         supabase.from("audits").select("project_id, kind, status, created_at").in("project_id", ids).eq("kind", "final_az").in("status", ["clean", "findings"]),
       ]);
-      const planLockedAt = new Map<string, number>();
-      for (const r of (pvs ?? []) as Array<{ project_id: string; kind: string; locked_at: string }>) {
+      // Secondary query failure MUST surface as a load error — silently
+      // computing all-false stages here is what recreated the wrong
+      // "shipped" journey. Bail out and let the user retry.
+      if (pvsRes.error || bsRes.error || auRes.error) {
+        const msg = pvsRes.error?.message ?? bsRes.error?.message ?? auRes.error?.message ?? "Failed to load project stages";
+        toast.error(msg);
+        setLoadError(msg);
+        return;
+      }
+      const planLockedAt = new Map<string, number | null>();
+      for (const r of (pvsRes.data ?? []) as Array<{ project_id: string; kind: string; locked_at: string }>) {
         if (r.kind === "design") designSet.add(r.project_id);
         if (r.kind === "plan") {
           planSet.add(r.project_id);
-          planLockedAt.set(r.project_id, new Date(r.locked_at).getTime());
+          planLockedAt.set(r.project_id, parseTimestamp(r.locked_at));
         }
       }
 
-      const byProject = new Map<string, Array<{ batch_no: number; status: string }>>();
-      for (const r of (bs ?? []) as Array<{ project_id: string; batch_no: number; status: string }>) {
+      const byProject = new Map<
+        string,
+        Array<{ batch_no: number; status: string; built_at: string | null; sent_at: string | null; created_at: string | null }>
+      >();
+      for (const r of (bsRes.data ?? []) as Array<{
+        project_id: string;
+        batch_no: number;
+        status: string;
+        built_at: string | null;
+        sent_at: string | null;
+        created_at: string | null;
+      }>) {
         batchSet.add(r.project_id);
         const list = byProject.get(r.project_id) ?? [];
-        list.push({ batch_no: r.batch_no, status: r.status });
+        list.push({
+          batch_no: r.batch_no,
+          status: r.status,
+          built_at: r.built_at,
+          sent_at: r.sent_at,
+          created_at: r.created_at,
+        });
         byProject.set(r.project_id, list);
       }
       for (const [pid, list] of byProject) {
@@ -233,15 +260,23 @@ function DashboardPage() {
           allPassedSet.add(pid);
         }
       }
-      // Split successful final_az into pre-plan (import) vs post-lock (final
-      // verification) using the locked-plan timestamp. A single audit row can
-      // only ever satisfy ONE of these — the pre-plan Audit stage on imports
-      // and the post-build ship gate stay truly distinct.
-      for (const r of (au ?? []) as Array<{ project_id: string; created_at: string }>) {
-        const lockedAt = planLockedAt.get(r.project_id);
-        const auditAt = new Date(r.created_at).getTime();
-        if (lockedAt == null || auditAt < lockedAt) importAuditSet.add(r.project_id);
-        else finalAuditSet.add(r.project_id);
+      // Group audits by project and run the SAME classifier the hook uses,
+      // so dashboard + boardroom/design/audit/runway pages can never drift
+      // on what counts as pre-plan vs post-build audit evidence.
+      const auditsByProject = new Map<string, Array<{ status: string; created_at: string }>>();
+      for (const r of (auRes.data ?? []) as Array<{ project_id: string; status: string; created_at: string }>) {
+        const list = auditsByProject.get(r.project_id) ?? [];
+        list.push({ status: r.status, created_at: r.created_at });
+        auditsByProject.set(r.project_id, list);
+      }
+      for (const pid of ids) {
+        const { has_import_audit, has_final_audit } = classifyAudits({
+          audits: auditsByProject.get(pid) ?? [],
+          planLockedAt: planLockedAt.get(pid) ?? null,
+          batches: byProject.get(pid) ?? [],
+        });
+        if (has_import_audit) importAuditSet.add(pid);
+        if (has_final_audit) finalAuditSet.add(pid);
       }
     }
     setProjects(
@@ -258,6 +293,7 @@ function DashboardPage() {
       }) as Project),
     );
   }
+
 
   useEffect(() => {
     load();

@@ -3,7 +3,9 @@
  * endpoint. Extracted so both the edge handler and unit tests share the
  * exact numeric contract. Never trust arbitrary `extra_budget_usd` from
  * the client — cap a single addition at $10 and total run budget at $30.
- * The separate server-enforced daily cap ($125) is unchanged.
+ * The separate server-enforced daily cap (a runtime app_settings value)
+ * is unchanged.
+
  */
 
 export const RESUME_ADD_MAX_USD = 10;
