@@ -127,7 +127,7 @@ function fireSelfTick(body: any = {}) {
 // Idempotent alert insert: skip if there's an OPEN alert for (project, kind).
 async function insertAlert(
   admin: any,
-  args: { user_id: string; project_id: string; kind: "stuck_48h" | "audit_loop" | "spend_cap" | "never_locked"; detail?: any },
+  args: { user_id: string; project_id: string; kind: "stuck_48h" | "audit_loop" | "spend_cap" | "never_locked" | "owner_authority_violation"; detail?: any },
 ) {
   try {
     const { data: proj } = await admin
