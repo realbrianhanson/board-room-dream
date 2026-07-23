@@ -6,6 +6,7 @@ import { ArrowRight, Check, ScrollText, ShieldCheck, RotateCcw } from "lucide-re
 import { CodeSourcePicker } from "@/components/code-source-picker";
 import { GitHubRepoCard } from "@/components/github-repo-card";
 import { ProjectJourney } from "@/components/project-journey";
+import { StrategyContextPanel } from "@/components/strategy-context-panel";
 import { useProjectJourney } from "@/hooks/use-project-journey";
 import { extractFunctionsErrorMessage } from "@/lib/functions-error";
 import {
