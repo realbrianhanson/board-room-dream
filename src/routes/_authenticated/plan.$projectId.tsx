@@ -234,12 +234,42 @@ function PlanWorkspacePage() {
       </div>
     );
   }
+  if (planError) {
+    return (
+      <div className="mx-auto w-full max-w-3xl px-6 py-16">
+        <Link
+          to="/boardroom/$projectId"
+          params={{ projectId }}
+          className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground hover:text-foreground"
+        >
+          ← Boardroom
+        </Link>
+        <div
+          role="alert"
+          className="mt-6 rounded-xl border border-destructive/40 bg-destructive/10 px-6 py-6 text-sm text-destructive"
+        >
+          <p className="font-medium">Couldn't load this plan.</p>
+          <p className="mt-1 text-destructive/80">{planError}</p>
+          <button
+            type="button"
+            onClick={() => setLoadTick((n) => n + 1)}
+            className="mt-4 inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/20"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (!project) return null;
 
-  // No build-safe plan yet: show the legacy warning + links. Do not surface
-  // an unsafe version as current, and do not render the CR form.
+  // No build-safe plan yet: show the legacy warning + a real preview of
+  // historical rows if any exist. Do not surface an unsafe version as
+  // current, and do not render the CR form.
   if (!current) {
-    const hasLegacy = (versions ?? []).length > 0;
+    const legacyList = versions ?? [];
+    const hasLegacy = legacyList.length > 0;
+    const legacyPreview = legacyList.find((v) => v.id === selectedVersionId) ?? legacyList[0] ?? null;
     return (
       <div className="mx-auto w-full max-w-3xl px-6 py-16">
         <Link
@@ -254,8 +284,8 @@ function PlanWorkspacePage() {
           <p className="mt-3 text-sm text-muted-foreground">
             Earlier plan versions exist but predate the current founder-authority rules
             and are marked <span className="font-mono text-foreground/80">legacy · not build-safe</span>.
-            Reconvene the board to produce a build-safe result before filing change requests
-            or generating batches.
+            You can read them below for reference. Reconvene the board to produce a
+            build-safe result before filing change requests or generating batches.
           </p>
         ) : (
           <p className="mt-3 text-sm text-muted-foreground">
@@ -279,12 +309,21 @@ function PlanWorkspacePage() {
           </Link>
         </div>
         {hasLegacy && (
-          <div className="mt-10">
+          <div className="mt-10 space-y-6">
             <HistoryTab
-              versions={versions ?? []}
-              selectedId=""
-              onSelect={() => { /* history-only preview elsewhere */ }}
+              versions={legacyList}
+              selectedId={legacyPreview?.id ?? ""}
+              onSelect={(id) => setSelectedVersionId(id)}
             />
+            {legacyPreview && (
+              <div className="rounded-xl border border-[hsl(8_60%_45%/0.35)] bg-[hsl(8_60%_45%/0.06)] p-6">
+                <p className="mb-4 font-mono text-[11px] uppercase tracking-widest text-[hsl(8_60%_75%)]">
+                  Legacy · read-only preview of v{legacyPreview.version}
+                  {legacyPreview.invalidated_reason ? ` — ${legacyPreview.invalidated_reason}` : ""}
+                </p>
+                <PlanTab plan={legacyPreview} projectName={project.name} />
+              </div>
+            )}
           </div>
         )}
       </div>
