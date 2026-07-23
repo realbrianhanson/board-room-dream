@@ -2,6 +2,7 @@ import { createFileRoute, redirect, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { BoardroomSession } from "@/components/boardroom-session";
+import { selectLoadError } from "@/lib/cohort-project-load";
 import { ArrowLeft, Github, Lock, ScrollText, ShieldCheck } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/cohort_/$projectId")({
@@ -75,29 +76,46 @@ function CohortProjectPage() {
       .eq("id", projectId)
       .maybeSingle();
     if (pErr) {
-      setLoadError(pErr.message);
+      setLoadError(selectLoadError([{ label: "Project", error: pErr }]));
       setLoading(false);
       return;
     }
-    setProject((p as any) ?? null);
-    if (p) {
-      const { data: prof } = await supabase.from("profiles").select("display_name").eq("id", (p as any).user_id).maybeSingle();
-      setOwner((prof as any)?.display_name ?? null);
+    if (!p) {
+      setProject(null);
+      setLoading(false);
+      return;
     }
-    const { data: bs } = await supabase
-      .from("batches")
-      .select("id, batch_no, title, channel, status, is_fix")
-      .eq("project_id", projectId)
-      .order("batch_no");
-    setBatches((bs ?? []) as any);
 
-    const { data: fs } = await supabase
-      .from("audit_findings")
-      .select("id, severity, title, file_path, status, audits!inner(project_id)")
-      .eq("audits.project_id", projectId)
-      .in("status", ["open", "fix_drafted"])
-      .order("severity");
-    setFindings((fs ?? []) as any);
+    const [profRes, bsRes, fsRes] = await Promise.all([
+      supabase.from("profiles").select("display_name").eq("id", (p as any).user_id).maybeSingle(),
+      supabase
+        .from("batches")
+        .select("id, batch_no, title, channel, status, is_fix")
+        .eq("project_id", projectId)
+        .order("batch_no"),
+      supabase
+        .from("audit_findings")
+        .select("id, severity, title, file_path, status, audits!inner(project_id)")
+        .eq("audits.project_id", projectId)
+        .in("status", ["open", "fix_drafted"])
+        .order("severity"),
+    ]);
+
+    const err = selectLoadError([
+      { label: "Owner profile", error: profRes.error },
+      { label: "Batches", error: bsRes.error },
+      { label: "Findings", error: fsRes.error },
+    ]);
+    if (err) {
+      setLoadError(err);
+      setLoading(false);
+      return;
+    }
+
+    setProject(p as any);
+    setOwner((profRes.data as any)?.display_name ?? null);
+    setBatches((bsRes.data ?? []) as any);
+    setFindings((fsRes.data ?? []) as any);
     setLoading(false);
   }, [projectId]);
 

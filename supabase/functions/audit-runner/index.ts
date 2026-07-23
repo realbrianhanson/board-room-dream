@@ -819,13 +819,21 @@ Deno.serve(async (req) => {
       // authority — a client that skips the panel cannot bypass this.
       if (project.is_import) {
         const { validateImportStrategy } = await import("../_shared/import-strategy.ts");
-        const { data: intake } = await admin
+        const { data: intake, error: intakeErr } = await admin
           .from("intakes")
           .select("answers")
           .eq("project_id", projectId)
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
+        if (intakeErr) {
+          return j(500, {
+            error:
+              "Could not load strategy context — the A–Z audit cannot start " +
+              `until the database is reachable. Details: ${intakeErr.message}`,
+            version: BUILD_VERSION,
+          });
+        }
         const answers = (intake?.answers ?? {}) as Record<string, string>;
         const issues = validateImportStrategy(answers);
         if (issues.length > 0) {
@@ -835,6 +843,7 @@ Deno.serve(async (req) => {
               "Strategy context is incomplete — the A–Z audit needs credible " +
               `owner context for every field before it can start. Fix: ${list}`,
             missing_strategy_fields: issues,
+            version: BUILD_VERSION,
           });
         }
       }
