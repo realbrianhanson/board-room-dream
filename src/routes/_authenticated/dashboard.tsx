@@ -180,13 +180,16 @@ function DashboardPage() {
   }
 
   async function load() {
+    setLoadError(null);
     const { data, error } = await supabase
       .from("projects")
       .select("id, name, status, current_batch_no, created_at, is_import, github_repo, lovable_project_url")
       .order("created_at", { ascending: false });
     if (error) {
+      // Do NOT collapse a query failure into the empty state. That would
+      // hide a retryable network/RLS problem behind "No projects yet.".
       toast.error(error.message);
-      setProjects([]);
+      setLoadError(error.message);
       return;
     }
     const rows = (data ?? []) as Project[];
