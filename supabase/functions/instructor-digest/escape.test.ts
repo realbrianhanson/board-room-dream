@@ -1,5 +1,5 @@
 import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { escapeHtml } from "./index.ts";
+import { escapeHtml } from "./escape.ts";
 
 Deno.test("escapeHtml: plain text passes through", () => {
   assertEquals(escapeHtml("Founders Cohort 1"), "Founders Cohort 1");
