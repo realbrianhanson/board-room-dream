@@ -1,34 +1,56 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import {
+  initialResetPasswordState,
+  reduceResetPassword,
+  type ResetPasswordEvent,
+  type ResetPasswordUiState,
+} from "@/lib/reset-password-state";
 
 export const Route = createFileRoute("/reset-password")({
   component: ResetPasswordPage,
 });
 
+// Threshold after which we soften copy to "taking longer than usual" without
+// ever claiming the link is expired. Bumped past the old 5s auto-expire so
+// slow but successful Supabase callbacks are never mislabeled.
+const SLOW_HINT_MS = 12_000;
+
 function ResetPasswordPage() {
   const navigate = useNavigate();
-  const [ready, setReady] = useState<"pending" | "ok" | "invalid">("pending");
+  const [ready, setReady] = useState<ResetPasswordUiState>(initialResetPasswordState());
+  const readyRef = useRef(ready);
+  readyRef.current = ready;
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ tone: "error" | "info"; text: string } | null>(null);
 
+  function dispatch(event: ResetPasswordEvent) {
+    setReady((prev) => reduceResetPassword(prev, event));
+  }
+
   useEffect(() => {
     const { data: sub } = supabase.auth.onAuthStateChange((event) => {
-      if (event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") setReady("ok");
+      dispatch({ type: "auth_event", event });
     });
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) setReady("ok");
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (data.session) dispatch({ type: "session_ready" });
+      // A getSession error alone is not proof the link is expired (network
+      // hiccups happen). We only demote to invalid on explicit auth failure,
+      // which surfaces via updateUser() below or via a specific error object.
+      if (error && /expired|invalid|malformed/i.test(error.message)) {
+        dispatch({ type: "auth_error", message: error.message });
+      }
     });
-    // Bounded wait: after 5s, if we still have no session, treat the link as
-    // invalid/expired and surface a real recovery path instead of spinning.
-    const timer = window.setTimeout(() => {
-      setReady((prev) => (prev === "pending" ? "invalid" : prev));
-    }, 5_000);
+    // Soft "taking longer" hint. Never flips state to invalid.
+    const slowTimer = window.setTimeout(() => {
+      dispatch({ type: "slow_threshold" });
+    }, SLOW_HINT_MS);
     return () => {
       sub.subscription.unsubscribe();
-      window.clearTimeout(timer);
+      window.clearTimeout(slowTimer);
     };
   }, []);
 
@@ -56,6 +78,13 @@ function ResetPasswordPage() {
     }
   }
 
+  function recheck() {
+    dispatch({ type: "recheck" });
+    void supabase.auth.getSession().then(({ data }) => {
+      if (data.session) dispatch({ type: "session_ready" });
+    });
+  }
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-background px-6 py-12">
       <div className="w-full max-w-md">
@@ -71,6 +100,8 @@ function ResetPasswordPage() {
           <p className="mt-2 text-sm text-muted-foreground">
             {ready === "ok" && "Choose a new password for your account."}
             {ready === "pending" && "Verifying your reset link…"}
+            {ready === "pending_slow" &&
+              "This is taking a little longer than usual. Your link may still be valid — hang on, or recheck below."}
             {ready === "invalid" && "This reset link is invalid or has expired."}
           </p>
 
@@ -123,6 +154,24 @@ function ResetPasswordPage() {
                 {loading ? "Updating…" : "Update password"}
               </button>
             </form>
+          )}
+
+          {ready === "pending_slow" && (
+            <div className="mt-6 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+              <button
+                type="button"
+                onClick={recheck}
+                className="rounded-md border border-border bg-surface-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:border-primary/40"
+              >
+                Recheck link
+              </button>
+              <Link
+                to="/auth"
+                className="text-xs text-primary transition-colors hover:brightness-125"
+              >
+                Or request a fresh reset email
+              </Link>
+            </div>
           )}
 
           {ready === "invalid" && (

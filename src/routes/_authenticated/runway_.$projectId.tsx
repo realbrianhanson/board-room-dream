@@ -2,7 +2,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { CodeSourcePicker } from "@/components/code-source-picker";
+import { CodeSourcePicker, formatBytes } from "@/components/code-source-picker";
+export const MAX_PASTE_BYTES = 5_000_000;
 import { GitHubRepoCard } from "@/components/github-repo-card";
 import { startGithubConnect } from "@/lib/github-connect";
 import { selectDisplayedRun } from "@/lib/run-selection";
@@ -1046,12 +1047,14 @@ function CompileModal({
               <ScrollText className="h-4 w-4" />
               <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground">Paste code</span>
             </div>
-            <p className="mt-2 text-xs text-muted-foreground">Up to ~200KB of pasted source</p>
+            <p className="mt-2 text-xs text-muted-foreground">Up to {formatBytes(MAX_PASTE_BYTES)} of pasted source</p>
+
           </button>
         </div>
 
         {source === "paste" && (
-          <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={5_000_000} />
+          <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={MAX_PASTE_BYTES} />
+
         )}
 
         <div className="mt-5 flex justify-end gap-2">
@@ -1465,6 +1468,17 @@ function FinalAuditCard({
             <Gavel className="h-4 w-4" /> {audit ? "Run the audit again" : "Run the A–Z audit"}
           </button>
         )}
+        {isOwner && clean && (
+          // Clean audits stay navigable — the audit center is where the
+          // re-run confirmation happens. Never auto-run or spend from here.
+          <Link
+            to="/audits/$projectId"
+            params={{ projectId }}
+            className="inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-4 py-2 text-sm text-[hsl(38_65%_78%)] transition-colors hover:border-primary/60"
+          >
+            <Gavel className="h-4 w-4" /> Run the audit again
+          </Link>
+        )}
         <Link
           to="/audits/$projectId"
           params={{ projectId }}
@@ -1473,6 +1487,7 @@ function FinalAuditCard({
           <ScrollText className="h-4 w-4" /> Open the audit center
         </Link>
       </div>
+
     </div>
   );
 }
@@ -1537,12 +1552,12 @@ function AuditModal({
               <ScrollText className="h-4 w-4" />
               <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-foreground">Paste code</span>
             </div>
-            <p className="mt-2 text-xs text-muted-foreground">Up to ~200KB of pasted source</p>
+            <p className="mt-2 text-xs text-muted-foreground">Up to {formatBytes(MAX_PASTE_BYTES)} of pasted source</p>
           </button>
         </div>
 
         {source === "paste" && (
-          <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={5_000_000} />
+          <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={MAX_PASTE_BYTES} />
         )}
 
         <div className="mt-5 flex justify-end gap-2">

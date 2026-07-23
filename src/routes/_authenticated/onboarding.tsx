@@ -52,9 +52,11 @@ function OnboardingPage() {
         Pick where to start.
       </h1>
       <p className="mt-4 max-w-xl text-sm leading-relaxed text-muted-foreground md:text-base">
-        Bring code the Boardroom can read, or an idea it can pressure-test. Either way
-        you leave with an evidence-backed Blueprint and safer step-by-step Lovable prompts.
+        Bring code the Boardroom can read for immediate repo evidence, or an
+        idea worth pressure-testing with a focused intake. Either way you leave
+        with an evidence-backed Blueprint and safer step-by-step Lovable prompts.
       </p>
+
 
       <div className="mt-8 grid gap-4 md:grid-cols-2">
         <button
@@ -81,8 +83,9 @@ function OnboardingPage() {
           <Lightbulb className="mb-3 h-5 w-5 text-primary" />
           <h2 className="font-display text-xl text-foreground">Blueprint a new idea</h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            Answer five short prompts. The board scores it, debates it, and locks a plan you can build.
+            Answer five focused prompts. The board scores the intake, debates it, and locks an evidence-backed plan you can build.
           </p>
+
           <span className="mt-5 inline-flex items-center gap-1.5 text-sm text-foreground/85 group-hover:text-primary">
             Start the intake <ArrowRight className="h-3.5 w-3.5" />
           </span>

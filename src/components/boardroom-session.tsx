@@ -106,19 +106,31 @@ export function BoardroomSession(props: BoardroomSessionProps) {
   const [isOwner, setIsOwner] = useState(false);
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   const [convening, setConvening] = useState(false);
+  // Distinguish load failure from empty. `runError` sticks until a successful
+  // reload clears it; when we already have a run in memory a subsequent
+  // failure is treated as a background/stale refresh (data stays on screen).
+  const [runError, setRunError] = useState<string | null>(null);
+  const [runStale, setRunStale] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const consensusPulseRef = useRef<HTMLDivElement | null>(null);
 
   const loadSteps = useCallback(async (runId: string) => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("run_steps")
       .select("id, run_id, step_key, round, seat, status, response_text, response_json, error, cost_usd, created_at, completed_at")
       .eq("run_id", runId)
       .order("created_at", { ascending: true });
+    if (error) {
+      // Preserve last good steps on failure; surface via stale banner.
+      setRunError(error.message);
+      setRunStale(true);
+      return;
+    }
     setSteps((data ?? []) as SessionStep[]);
   }, []);
 
   const loadRun = useCallback(async (): Promise<SessionRun | null> => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("boardroom_runs")
       .select("*")
       .eq("project_id", projectId)
@@ -126,11 +138,32 @@ export function BoardroomSession(props: BoardroomSessionProps) {
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
+    if (error) {
+      setRunError(error.message);
+      // Only mark stale when we have a run already loaded — otherwise this is
+      // an initial load failure and must render as an explicit error state,
+      // never as an empty "Preparing…" placeholder.
+      setRunStale((prev) => (run ? true : prev));
+      return run;
+    }
+    setRunError(null);
+    setRunStale(false);
     setRun((data as SessionRun) ?? null);
     if (data) await loadSteps(data.id);
     onRunLoaded?.((data as SessionRun) ?? null);
     return (data as SessionRun) ?? null;
-  }, [projectId, kind, loadSteps, onRunLoaded]);
+  }, [projectId, kind, loadSteps, onRunLoaded, run]);
+
+  const retryLoad = useCallback(async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      await loadRun();
+    } finally {
+      setRetrying(false);
+    }
+  }, [loadRun, retrying]);
+
 
   useEffect(() => {
     let cancelled = false;
@@ -439,7 +472,47 @@ export function BoardroomSession(props: BoardroomSessionProps) {
 
       <div className="mt-10">
         <p className="mb-4 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Transcript</p>
-        {!run ? (
+        {runStale && runError && run && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="mb-3 flex items-center justify-between gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-200"
+          >
+            <span>
+              Showing the last loaded transcript — the latest refresh failed
+              ({runError}).
+            </span>
+            <button
+              type="button"
+              onClick={retryLoad}
+              disabled={retrying}
+              className="rounded-md border border-amber-400/50 px-2.5 py-1 font-medium text-amber-100 transition-colors hover:bg-amber-500/20 disabled:opacity-60"
+            >
+              {retrying ? "Retrying…" : "Retry"}
+            </button>
+          </div>
+        )}
+        {!run && runError ? (
+          // Initial load failed and we have nothing to show. Never fall
+          // through to the "Preparing the room…" placeholder here — that
+          // would silently hide a real error.
+          <div
+            role="alert"
+            className="rounded-xl border border-destructive/40 bg-destructive/10 px-6 py-8 text-sm text-destructive"
+          >
+            <p className="font-medium">Couldn't load the boardroom.</p>
+            <p className="mt-1 text-destructive/80">{runError}</p>
+            <button
+              type="button"
+              onClick={retryLoad}
+              disabled={retrying}
+              className="mt-4 inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20 disabled:opacity-60"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              {retrying ? "Retrying…" : "Retry"}
+            </button>
+          </div>
+        ) : !run ? (
           <EmptyBoardroom
             hasKey={hasKey}
             isOwner={isOwner}
@@ -461,6 +534,7 @@ export function BoardroomSession(props: BoardroomSessionProps) {
           </div>
         )}
       </div>
+
 
       <style>{`
         @keyframes consensusPulse { 0% { box-shadow: 0 0 0 0 hsl(38 65% 55% / 0.55); } 100% { box-shadow: 0 0 0 42px hsl(38 65% 55% / 0); } }
