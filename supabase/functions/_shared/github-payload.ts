@@ -166,8 +166,10 @@ export async function assembleFromGithub(
     files.push({ path: f.path, content, bytes: content.length });
   }
 
+  // Never advertise secret filenames in the tree — even the path itself is
+  // a signal we do not want in a model context (e.g. ".env.production").
   const fileTree = treePaths
-    .filter((p) => !BINARY_EXT.test(p) && !LOCK_FILES.test(p) && !IGNORE_DIR.test(p))
+    .filter((p) => !BINARY_EXT.test(p) && !LOCK_FILES.test(p) && !IGNORE_DIR.test(p) && !SECRET_FILES.test(p))
     .slice(0, 400);
 
   return { files, headSha, branch, skipped, fileTree };
