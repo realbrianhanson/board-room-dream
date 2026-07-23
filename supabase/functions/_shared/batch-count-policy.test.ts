@@ -32,16 +32,39 @@ Deno.test("batchPromptPolicy — imports ask for 3-6, smallest-without-padding",
 Deno.test("productStrategyContract — locks the five owner-authority decisions", () => {
   const s = productStrategyContract();
   assertStringIncludes(s, `"## Product strategy"`);
-  // Owner-authority language for imports must be present verbatim.
-  assertStringIncludes(s, "For imported apps the owner's supplied intake answers are AUTHORITY");
-  assertStringIncludes(s, "owner-unknown assumption");
   // Five decisions.
   assertStringIncludes(s, "Reachable buyer");
   assertStringIncludes(s, "acquisition channel");
-  assertStringIncludes(s, "Paid offer, price anchor, and upgrade trigger");
+  assertStringIncludes(s, "Paid offer");
+  assertStringIncludes(s, "Price anchor");
+  assertStringIncludes(s, "Upgrade trigger");
   assertStringIncludes(s, "First-90-second activation moment");
   assertStringIncludes(s, "Screenshot-worthy wow moment");
   assertStringIncludes(s, `Positioning line completing "Unlike`);
+});
+
+Deno.test("productStrategyContract — removes the generic 'owner-unknown assumption' directive", () => {
+  const s = productStrategyContract();
+  assert(!/owner-unknown assumption/i.test(s), "must not emit a generic owner-unknown assumption directive");
+  // Missing owner inputs must instead be surfaced as missing context.
+  assertStringIncludes(s, "state the context is missing");
+  assertStringIncludes(s, "do not invent");
+});
+
+Deno.test("productStrategyContract — price/upgrade advisory boundary matches import-contract.ts wording", () => {
+  const s = productStrategyContract();
+  // Price/upgrade allowed as owner-approval-required proposals only.
+  assertStringIncludes(s, "[OWNER DECISION REQUIRED]");
+  assertStringIncludes(s, "proposal_requires_owner_approval");
+  assertStringIncludes(s, "never carries an \"OWNER-AUTHORIZED\" marker");
+  assertStringIncludes(s, "EXCLUDED from any locked plan, executable batch, compiled implementation prompt, checkout flow, pricing CTA, or monetization scope");
+  // Reference the shared contract file so drift is caught.
+  assertStringIncludes(s, "supabase/functions/_shared/import-contract.ts");
+  // Advisory carve-out must not extend to buyer/positioning/activation/wow/paid_offer.
+  const paidOfferBullet = s.split("\n").find((l) => l.startsWith("- Paid offer")) ?? "";
+  assert(!/OWNER DECISION REQUIRED/.test(paidOfferBullet), "paid offer must not be an advisory-eligible field");
+  const buyerBullet = s.split("\n").find((l) => l.startsWith("- Reachable buyer")) ?? "";
+  assert(!/OWNER DECISION REQUIRED/.test(buyerBullet), "buyer must not be an advisory-eligible field");
 });
 
 // -------- validateStepJson batch-count coverage --------
