@@ -29,10 +29,13 @@ describe("DesignLightbox close semantics", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("pressing Escape closes the lightbox", () => {
+  it("pressing Escape on the backdrop closes the lightbox exactly once (no duplicate handler)", () => {
     const onClose = vi.fn();
     render(<DesignLightbox item={item} onClose={onClose} />);
-    fireEvent.keyDown(document, { key: "Escape" });
+    // Fire Escape on the focused backdrop. If a React onKeyDown were
+    // still attached alongside the document listener, the event would
+    // bubble and onClose would fire twice.
+    fireEvent.keyDown(screen.getByTestId("lightbox-backdrop"), { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
