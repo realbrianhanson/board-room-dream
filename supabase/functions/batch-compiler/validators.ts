@@ -398,7 +398,7 @@ export function classifyBatchLayer(compiled: string, touched: TouchedPath[]): Ba
 // "edge function" or "run Deno tests" is NOT a direct invocation — Deno
 // tests may SUPPLEMENT the direct call but never SUBSTITUTE for it.
 const INVOCATION_VERB_RE = /\b(invoke|invoking|invokes|call|calling|calls|request|requesting|requests|hit|hitting|hits|fetch|fetching|fetches|POST|GET|PUT|DELETE|PATCH|test(?:ing|s)?\s+(?:the\s+)?endpoint)\b/i;
-const INVOCATION_TARGET_RE = /\b(edge[-\s]?function|endpoint|\/functions\/v1\/|route\s+handler|the\s+rpc|rpc\s+[a-z_][a-z0-9_]*|[a-z_][a-z0-9_-]+\s+rpc|[a-z_][a-z0-9_-]+\s+edge[-\s]?function|api\s+call)\b/i;
+const INVOCATION_TARGET_RE = /\b(edge[-\s]?function(?:s)?|endpoint(?:s)?|\/functions\/v1\/|route\s+handler|rpcs?|api\s+call)\b/i;
 
 export function hasDirectInvocation(text: string): boolean {
   if (!text) return false;
