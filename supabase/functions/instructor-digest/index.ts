@@ -17,21 +17,10 @@ const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
 const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 const FROM_EMAIL = Deno.env.get("DIGEST_FROM_EMAIL") ?? "boardroom@example.com";
 
+import { escapeHtml } from "./escape.ts";
+
 function j(status: number, body: any) {
   return new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
-}
-
-// Every user/DB-influenced string flowing into the digest HTML must be
-// escaped. Ampersand FIRST so it does not double-escape the entity refs
-// emitted for the other characters. Layout markup written by us is trusted
-// and NOT escaped.
-export function escapeHtml(input: unknown): string {
-  return String(input ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 const KIND_TITLE: Record<string, string> = {
