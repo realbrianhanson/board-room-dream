@@ -797,7 +797,13 @@ Do NOT label a Supabase anon/publishable key as a leaked secret. Only flag a sec
 //     — trailing commas / bare braces are NOT auto-fixed,
 //   - the resulting string still fails JSON.parse.
 // Never rewrites, deletes, guesses, or synthesizes content.
-export type TailShape = "map" | "merge";
+export type TailShape = "map" | "merge" | "generic";
+
+// Maximum unmatched closers this rescue is willing to append at EOF. Anything
+// beyond this bound is treated as ambiguous truncation and rejected — the
+// live vote/audit failure modes we recover from are missing 1-2 outer
+// closers only. Never fabricate keys/values; only balance.
+const MAX_APPENDED_CLOSERS = 2;
 
 export function tryCloseJsonTail(
   text: string,
@@ -829,7 +835,6 @@ export function tryCloseJsonTail(
       lastMeaningful = c;
       continue;
     }
-    // Any other token (bare word, number, comma, colon). Track for tail check.
     lastMeaningful = c;
   }
   if (inString) return { ok: false, reason: "unterminated string" };
@@ -841,11 +846,11 @@ export function tryCloseJsonTail(
     if (shapeErr) return { ok: false, reason: shapeErr };
     return { ok: true, value: parsed, closed: "" };
   }
-  // Require the last non-whitespace token to be a value terminator. Explicit
-  // reject list: ",", ":", "{", "[" — those all imply a missing value or key
-  // that we refuse to synthesize.
   if (lastMeaningful === "," || lastMeaningful === ":" || lastMeaningful === "{" || lastMeaningful === "[") {
     return { ok: false, reason: `dangling structural token '${lastMeaningful}' — refuse to synthesize` };
+  }
+  if (stack.length > MAX_APPENDED_CLOSERS) {
+    return { ok: false, reason: `refusing to append ${stack.length} closers — max ${MAX_APPENDED_CLOSERS}` };
   }
   let closers = "";
   for (let i = stack.length - 1; i >= 0; i--) closers += stack[i] === "{" ? "}" : "]";
@@ -859,10 +864,18 @@ export function tryCloseJsonTail(
 }
 
 // Rescued JSON must at minimum look like the target shape:
-// - "map":   seat-report object with a findings array under seat caps.
-// - "merge": chair-merge object with verdict/summary/findings passing the
-//   strict merged-report validator (no loose seat-cap acceptance).
+// - "map":     seat-report object with a findings array under seat caps.
+// - "merge":   chair-merge object with verdict/summary/findings passing the
+//              strict merged-report validator (no loose seat-cap acceptance).
+// - "generic": non-audit steps (e.g. Round-4 vote objects). Caller's
+//              validateStepJson enforces schema; this only requires the
+//              rescued value to be an object or array so we never publish a
+//              bare string/number/null as recovered JSON.
 function validateRescuedShape(v: unknown, shape: TailShape): string | null {
+  if (shape === "generic") {
+    if (v === null || typeof v !== "object") return "rescued JSON is not an object or array";
+    return null;
+  }
   if (!v || typeof v !== "object" || Array.isArray(v)) return "rescued JSON is not an object";
   const findings = (v as { findings?: unknown }).findings;
   if (!Array.isArray(findings)) return "rescued JSON missing findings array";
