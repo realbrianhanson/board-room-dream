@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { selectDisplayedRun, type RunLite } from "./run-selection";
+import { selectDisplayedRun, safeSpend, type RunLite } from "./run-selection";
 
 const t = (iso: string) => new Date(iso).toISOString();
 
