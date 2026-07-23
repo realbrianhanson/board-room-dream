@@ -325,48 +325,65 @@ function AuditCenterPage() {
         {openFindings.length === 0 ? (
           <p className="mt-3 text-sm text-muted-foreground">The board has no open issues for you right now.</p>
         ) : (
-          <div className="mt-4 space-y-2">
-            {openFindings.map((f) => (
-              <div key={f.id} className="rounded-lg border border-border bg-surface-1 p-4">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${SEV_STYLE[f.severity]}`}>
-                    {f.severity}
-                  </span>
-                  <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${
-                    f.confidence === "high" ? "border-[hsl(160_45%_48%/0.4)] text-[hsl(160_45%_72%)] bg-[hsl(160_45%_28%/0.15)]"
-                    : f.confidence === "low" ? "border-border text-muted-foreground bg-surface-2"
-                    : "border-primary/35 text-[hsl(38_65%_75%)] bg-primary/10"
-                  }`}>
-                    {f.confidence} confidence
-                  </span>
-                  {f.seat && <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">{f.seat}</span>}
-                  {f.file_path && (
-                    <span className="font-mono text-[11px] text-muted-foreground">
-                      {f.file_path}
-                      {f.line_start ? `:${f.line_start}${f.line_end && f.line_end !== f.line_start ? `-${f.line_end}` : ""}` : ""}
-                    </span>
-                  )}
-                  {f.status === "fix_drafted" && (
-                    <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[hsl(38_65%_72%)]">Fix batch drafted</span>
-                  )}
+          <div className="mt-4 space-y-6">
+            {openFindingGroups.map((group) => (
+              <div key={group.auditId}>
+                <p
+                  className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground"
+                  data-testid="finding-group-label"
+                >
+                  {group.label}
+                </p>
+                <div className="mt-2 space-y-2">
+                  {group.findings.map((gf) => {
+                    const f = findingById.get(gf.id);
+                    if (!f) return null;
+                    return (
+                      <div key={f.id} className="rounded-lg border border-border bg-surface-1 p-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${SEV_STYLE[f.severity]}`}>
+                            {f.severity}
+                          </span>
+                          <span className={`inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${
+                            f.confidence === "high" ? "border-[hsl(160_45%_48%/0.4)] text-[hsl(160_45%_72%)] bg-[hsl(160_45%_28%/0.15)]"
+                            : f.confidence === "low" ? "border-border text-muted-foreground bg-surface-2"
+                            : "border-primary/35 text-[hsl(38_65%_75%)] bg-primary/10"
+                          }`}>
+                            {f.confidence} confidence
+                          </span>
+                          {f.seat && <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground">{f.seat}</span>}
+                          {f.file_path && (
+                            <span className="font-mono text-[11px] text-muted-foreground">
+                              {f.file_path}
+                              {f.line_start ? `:${f.line_start}${f.line_end && f.line_end !== f.line_start ? `-${f.line_end}` : ""}` : ""}
+                            </span>
+                          )}
+                          {f.status === "fix_drafted" && (
+                            <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[hsl(38_65%_72%)]">Fix batch drafted</span>
+                          )}
+                        </div>
+                        <p className="mt-2 text-sm text-foreground">{f.title}</p>
+                        {f.description && <p className="mt-1 text-xs text-muted-foreground">{f.description}</p>}
+                        {f.evidence && (
+                          <p className="mt-2 border-l border-border pl-3 font-mono text-[11px] text-muted-foreground/90">
+                            Evidence — {f.evidence}
+                          </p>
+                        )}
+                        {(f.severity === "P2" || f.severity === "P3") && f.status === "open" && (
+                          <button
+                            onClick={() => dismiss(f)}
+                            className="mt-3 rounded-md border border-border bg-surface-2 px-3 py-1.5 text-xs text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                          >
+                            Dismiss
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-                <p className="mt-2 text-sm text-foreground">{f.title}</p>
-                {f.description && <p className="mt-1 text-xs text-muted-foreground">{f.description}</p>}
-                {f.evidence && (
-                  <p className="mt-2 border-l border-border pl-3 font-mono text-[11px] text-muted-foreground/90">
-                    Evidence — {f.evidence}
-                  </p>
-                )}
-                {(f.severity === "P2" || f.severity === "P3") && f.status === "open" && (
-                  <button
-                    onClick={() => dismiss(f)}
-                    className="mt-3 rounded-md border border-border bg-surface-2 px-3 py-1.5 text-xs text-muted-foreground hover:border-primary/40 hover:text-foreground"
-                  >
-                    Dismiss
-                  </button>
-                )}
               </div>
             ))}
+
           </div>
         )}
       </section>
