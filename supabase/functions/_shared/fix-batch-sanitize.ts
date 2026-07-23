@@ -41,18 +41,18 @@ function norm(s: unknown): string {
 }
 
 // Extract distinctive identifier-like tokens from a finding title:
-// camelCase words, snake_case words, or dotted paths, length >= 4.
+// mixed-case identifiers of length >= 9 (e.g. `getClaims`) or tokens
+// containing `_`, `.`, or `-` (e.g. `auth-middleware`, `has_role`).
+// Bare English words and short capitalized names (e.g. `Supabase`) are
+// excluded to avoid false positives.
 function distinctiveTokens(title: string): string[] {
   const out = new Set<string>();
   const tokenRe = /[A-Za-z_][A-Za-z0-9_.-]{3,}/g;
   let m: RegExpExecArray | null;
   while ((m = tokenRe.exec(title)) !== null) {
     const t = m[0];
-    // Prefer tokens that mix case, contain an underscore/dot/hyphen, or are
-    // clearly identifier-ish (not a common English word).
-    if (/[A-Z]/.test(t) && /[a-z]/.test(t)) out.add(t.toLowerCase());
-    else if (/[_.\-]/.test(t)) out.add(t.toLowerCase());
-    else if (t.length >= 8) out.add(t.toLowerCase());
+    if (/[_.\-]/.test(t)) out.add(t.toLowerCase());
+    else if (t.length >= 9 && /[A-Z]/.test(t) && /[a-z]/.test(t)) out.add(t.toLowerCase());
   }
   return [...out];
 }
