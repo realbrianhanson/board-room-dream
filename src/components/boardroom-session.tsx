@@ -154,18 +154,8 @@ export function BoardroomSession(props: BoardroomSessionProps) {
     return (data as SessionRun) ?? null;
   }, [projectId, kind, loadSteps, onRunLoaded, run]);
 
-  const retryLoad = useCallback(async () => {
-    if (retrying) return;
-    setRetrying(true);
-    try {
-      // Reload project first so a project-load error clears; then reload run
-      // and steps. Both signal their own success/failure into runError.
-      const { proj } = await loadProject();
-      if (proj) await loadRun();
-    } finally {
-      setRetrying(false);
-    }
-  }, [loadRun, loadProject, retrying]);
+
+
 
 
 
@@ -196,6 +186,18 @@ export function BoardroomSession(props: BoardroomSessionProps) {
     setIsOwner(!readOnly && !!uid && uid === proj.user_id);
     return { proj, uid };
   }, [projectId, readOnly, project]);
+
+  const retryLoad = useCallback(async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      const { proj } = await loadProject();
+      if (proj) await loadRun();
+    } finally {
+      setRetrying(false);
+    }
+  }, [loadRun, loadProject, retrying]);
+
 
   useEffect(() => {
     let cancelled = false;
