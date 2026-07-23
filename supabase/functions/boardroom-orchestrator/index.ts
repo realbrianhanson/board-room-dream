@@ -805,11 +805,10 @@ async function finalizeChangeRequest(admin: any, run: any, steps: any[]) {
   const verdict = v.verdict === "approved" ? "approved" : "rejected";
   let newVersionId: string | null = null;
   if (verdict === "approved" && crId) {
-    // Pre-finalization owner-authority gate for change requests. Load the
-    // EXACT current change_requests.description as an explicit owner source
-    // scoped to THIS CR run only. A Chair cannot expand beyond the submitted
-    // change (e.g. tack on Stripe/DROP TABLE). On violation: insert NO plan
-    // version, do NOT mark the CR approved, fail clearly.
+    // Pre-finalization owner-authority gate (R6 correction wrapper) for
+    // change requests. Load the EXACT current change_requests.description as
+    // an explicit owner source scoped to THIS CR run only so the Chair cannot
+    // expand beyond the submitted change.
     let crDescription = "";
     try {
       const { data: crRow } = await admin
@@ -819,17 +818,31 @@ async function finalizeChangeRequest(admin: any, run: any, steps: any[]) {
         .maybeSingle();
       crDescription = String(crRow?.description ?? "");
     } catch { /* ignore — an empty CR description simply blocks any high-impact expansion */ }
+    let authority: Awaited<ReturnType<typeof loadOwnerAuthority>>;
     try {
-      const authority = await loadOwnerAuthority(admin, {
+      authority = await loadOwnerAuthority(admin, {
         projectId: run.project_id,
         founderNotes: run.founder_notes ?? null,
         extraFounderNotes: crDescription
           ? [{ source: `approved_change_request:${crId}`, text: crDescription }]
           : [],
       });
-      const preErr = finalizeChangeRequestAuthorityError(v, authority);
-      if (preErr) {
-        await failRun(admin, run, preErr);
+    } catch (e) {
+      await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
+      return;
+    }
+    const enforceRes = await enforceAuthorityOrCorrect({
+      admin,
+      run,
+      phase: "pre_finalize_change_request",
+      authority,
+      artifacts: [
+        { key: "amended_plan_md", label: "change_request.amended_plan_md (pending finalization)", text: String(v?.amended_plan_md ?? "") },
+        { key: "amended_prd_md", label: "change_request.amended_prd_md (pending finalization)", text: String(v?.amended_prd_md ?? "") },
+        { key: "amended_features_json", label: "change_request.amended_features (pending finalization)", text: JSON.stringify(v?.amended_features ?? []) },
+      ],
+      onTerminalFail: async (err) => {
+        await failRun(admin, run, err);
         await insertAlert(admin, {
           user_id: run.user_id,
           project_id: run.project_id,
@@ -838,15 +851,19 @@ async function finalizeChangeRequest(admin: any, run: any, steps: any[]) {
             run_id: run.id,
             change_request_id: crId,
             phase: "pre_finalize_change_request",
-            excerpt: preErr.slice(0, 800),
+            excerpt: err.slice(0, 800),
           },
         });
-        return;
-      }
-    } catch (e) {
-      await failRun(admin, run, `owner_authority_load_failed: ${(e as Error).message}`);
-      return;
-    }
+      },
+    });
+    if (enforceRes.status === "failed_terminal") return;
+    if (enforceRes.status === "pending") return;
+    const amendedPlan = enforceRes.artifacts.find((a) => a.key === "amended_plan_md")!.text;
+    const amendedPrd = enforceRes.artifacts.find((a) => a.key === "amended_prd_md")!.text;
+    const amendedFeaturesText = enforceRes.artifacts.find((a) => a.key === "amended_features_json")!.text;
+    let amendedFeatures: any[] = [];
+    try { const parsed = JSON.parse(amendedFeaturesText); if (Array.isArray(parsed)) amendedFeatures = parsed; }
+    catch { amendedFeatures = Array.isArray(v.amended_features) ? v.amended_features : []; }
 
     const { data: existing } = await admin
       .from("plan_versions")
@@ -864,9 +881,9 @@ async function finalizeChangeRequest(admin: any, run: any, steps: any[]) {
         user_id: run.user_id,
         kind: "plan",
         version: nextVersion,
-        content_md: String(v.amended_plan_md ?? ""),
-        prd_md: String(v.amended_prd_md ?? ""),
-        features: Array.isArray(v.amended_features) ? v.amended_features : [],
+        content_md: amendedPlan,
+        prd_md: amendedPrd,
+        features: amendedFeatures,
         decision_log: [{ change_request_id: crId, rationale: v.rationale ?? "" }],
         source_run_id: run.id,
       })
