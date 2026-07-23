@@ -1031,16 +1031,19 @@ async function finalizeBatches(admin: any, run: any, batchesJson: any[]) {
       return;
     }
     // Duplicate-key: check for exact-match idempotency against the batches
-    // already persisted for THIS project + plan_version_id. We deliberately
-    // do not scope by user_id in the SELECT filter — the comparator itself
-    // verifies user_id per row, so a user mismatch is reported as such.
+    // already persisted for THIS project. Deliberately scoped by
+    // project_id ONLY — NOT plan_version_id. A stale set left behind by an
+    // earlier plan/design revision carries the OLD plan_version_id, so a
+    // filter on the NEW plan_version_id would miss it entirely and report a
+    // false "no existing rows" even though the unique constraint just
+    // proved rows exist. The comparator (decideConflictOutcome) is what
+    // judges plan-version and user mismatches, not this query.
     const { data: existingRaw, error: readErr } = await admin
       .from("batches")
       .select(
         "project_id,user_id,plan_version_id,batch_no,title,channel,prompt_md,status,is_fix,sent_at,built_at,compiled_at,compiled_prompt_md,compiled_verification_prompt_md,compile_meta,outcome_md",
       )
       .eq("project_id", run.project_id)
-      .eq("plan_version_id", plannedRows[0]?.plan_version_id ?? null)
       .order("batch_no", { ascending: true });
     if (readErr) {
       await failRun(admin, run, `Failed to insert batches (conflict readback failed): ${readErr.message ?? String(readErr)}`);
@@ -1057,6 +1060,33 @@ async function finalizeBatches(admin: any, run: any, batchesJson: any[]) {
         `Failed to insert batches: duplicate_key_conflict_not_idempotent (${decision.reason})`,
       );
       return;
+    }
+    if (decision.kind === "supersede_stale") {
+      // The existing set is untouched (never sent, built, or compiled) but
+      // stale — left behind by an earlier plan/design revision. Nothing the
+      // founder acted on is destroyed: replace it with the freshly-drafted
+      // set. Scoped to project_id + the safe-pre-execution predicate so this
+      // can never delete a row with real progress, even if the comparator's
+      // judgment and the live table state have drifted between the read and
+      // this write.
+      const { error: delErr } = await admin
+        .from("batches")
+        .delete()
+        .eq("project_id", run.project_id)
+        .eq("status", "pending")
+        .eq("is_fix", false)
+        .is("sent_at", null)
+        .is("built_at", null)
+        .is("compiled_at", null);
+      if (delErr) {
+        await failRun(admin, run, `Failed to supersede stale batches: ${delErr.message ?? String(delErr)}`);
+        return;
+      }
+      const { error: reinsErr } = await admin.from("batches").insert(plannedRows);
+      if (reinsErr) {
+        await failRun(admin, run, `Failed to insert batches after superseding stale set: ${reinsErr.message ?? String(reinsErr)}`);
+        return;
+      }
     }
     // Fall through — treat as if we just inserted the set ourselves.
   }
