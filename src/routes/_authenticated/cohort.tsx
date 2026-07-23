@@ -261,7 +261,7 @@ function CohortPage() {
       <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="font-mono text-[11px] uppercase tracking-[0.28em] text-muted-foreground">Cohort</p>
-          <h1 className="font-display text-4xl leading-tight text-foreground">The room, at a glance.</h1>
+          <h1 className="font-display text-3xl leading-tight text-foreground sm:text-4xl">Cohort</h1>
           <p className="mt-2 max-w-xl text-sm text-muted-foreground">
             {cohorts.length
               ? `${members.length} members across ${cohorts.length} cohort${cohorts.length === 1 ? "" : "s"} · ${stuckCount} open alert${stuckCount === 1 ? "" : "s"}.`
