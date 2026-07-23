@@ -1378,6 +1378,54 @@ async function afterStepComplete(admin: any, runIn: any) {
     return;
   }
 
+  // OWNER-AUTHORITY-CORRECTION-R6: absorb a completed authority-correction
+  // step (if any) into run.consensus.authority_correction and re-drive the
+  // finalization function whose phase queued it. The re-entered finalize
+  // path will run enforceAuthorityOrCorrect again which overlays the newly
+  // corrected artifacts, revalidates, and either finalizes or queues the
+  // next attempt (or terminates at AUTHORITY_CORRECTION_MAX).
+  const awaited = findAwaitedCorrectionStep(run, steps);
+  if (awaited) {
+    if (awaited.status !== "completed") {
+      // Correction step in-flight or errored — nothing more to do here.
+      return;
+    }
+    const absorbed = await absorbCorrectionStep(admin, run, awaited);
+    if (!absorbed.ok) {
+      await failRun(admin, run, absorbed.error ?? "authority_correction_absorb_failed");
+      return;
+    }
+    const freshRun = await getRun(admin, run.id);
+    if (!freshRun) return;
+    const freshSteps = await loadAllSteps(admin, freshRun.id);
+    switch (absorbed.phase) {
+      case "pre_lock_plan":
+        await lockPlanAndQueueBlueprint(
+          admin,
+          freshRun,
+          freshSteps,
+          (freshRun.consensus?.authority_correction?.original_mode as any) ?? "consensus",
+        );
+        return;
+      case "pre_finalize_blueprint":
+        await finalizeBlueprint(admin, freshRun, freshSteps);
+        return;
+      case "pre_finalize_change_request":
+        await finalizeChangeRequest(admin, freshRun, freshSteps);
+        return;
+      case "pre_promote_batches": {
+        const cached = freshRun.consensus?.authority_correction?.pending_batches;
+        if (Array.isArray(cached) && cached.length) {
+          await finalizeBatches(admin, freshRun, cached);
+        }
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+
   if (run.kind === "test") {
     await admin
       .from("boardroom_runs")
