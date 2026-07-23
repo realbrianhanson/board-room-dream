@@ -317,3 +317,58 @@ Deno.test("failRun (batches, zero batches): does NOT clobber 'done'", async () =
   await failRun(admin, state.runs[0], "batches_failed");
   assertEquals(state.projects![0].status, "done");
 });
+
+Deno.test("failRun (audit): restores project status from previous_project_status", async () => {
+  const state = {
+    runs: [{
+      id: "r1", status: "running", error: null, kind: "audit",
+      project_id: "p1",
+      consensus: { audit_id: "a1", previous_project_status: "imported" },
+    }],
+    steps: [],
+    audits: [{ id: "a1", status: "running", completed_at: null, previous_project_status: "imported" }],
+    projects: [{ id: "p1", status: "auditing", is_import: true }],
+    plans: [],
+    rpcCalls: [],
+  };
+  const admin = makeFakeAdmin(state);
+  const out = await failRun(admin, state.runs[0] as any, "boom");
+  assertEquals(out, "won");
+  assertEquals(state.projects[0].status, "imported", "must restore to prior status");
+});
+
+Deno.test("failRun (audit): guarded — no clobber when project status advanced concurrently", async () => {
+  const state = {
+    runs: [{
+      id: "r1", status: "running", error: null, kind: "audit",
+      project_id: "p1",
+      consensus: { audit_id: "a1", previous_project_status: "imported" },
+    }],
+    steps: [],
+    audits: [{ id: "a1", status: "running", completed_at: null }],
+    projects: [{ id: "p1", status: "done", is_import: true }],
+    plans: [],
+    rpcCalls: [],
+  };
+  const admin = makeFakeAdmin(state);
+  await failRun(admin, state.runs[0] as any, "boom");
+  assertEquals(state.projects[0].status, "done", "concurrent advance preserved");
+});
+
+Deno.test("failRun (audit): falls back to safe-plan selector when previous_project_status absent", async () => {
+  const state = {
+    runs: [{
+      id: "r1", status: "running", error: null, kind: "audit",
+      project_id: "p1",
+      consensus: { audit_id: "a1" },
+    }],
+    steps: [],
+    audits: [{ id: "a1", status: "running" }],
+    projects: [{ id: "p1", status: "auditing", is_import: true }],
+    plans: [],
+    rpcCalls: [],
+  };
+  const admin = makeFakeAdmin(state);
+  await failRun(admin, state.runs[0] as any, "boom");
+  assertEquals(state.projects[0].status, "imported");
+});
