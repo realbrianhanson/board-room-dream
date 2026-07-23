@@ -181,6 +181,25 @@ function DebugRunsPage() {
         </div>
       </div>
 
+      {loadError && (
+        <div
+          role="alert"
+          className="mb-6 rounded-xl border border-destructive/40 bg-destructive/10 px-6 py-4 text-sm text-destructive"
+        >
+          <p className="font-medium">Couldn't load runs.</p>
+          <p className="mt-1 text-destructive/80">{loadError}</p>
+          <button
+            type="button"
+            onClick={load}
+            className="mt-3 inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/20"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+
+
       <div className="overflow-hidden rounded-xl border border-border bg-surface-1">
         <table className="w-full font-mono text-xs">
           <thead className="bg-surface-2 text-left text-[10px] uppercase tracking-widest text-muted-foreground">
