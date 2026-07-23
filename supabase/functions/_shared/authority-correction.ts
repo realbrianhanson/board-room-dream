@@ -170,6 +170,10 @@ export type EnforceContext = {
   authority: OwnerAuthority;
   artifacts: Artifact[];
   onTerminalFail: (error: string, phase: AuthorityPhase) => Promise<void>;
+  // Extra metadata persisted alongside authority_correction state so
+  // afterStepComplete can re-invoke the finalize function with the same
+  // parameters after a correction completes.
+  restartMeta?: Record<string, unknown>;
 };
 
 export type EnforceResult =
