@@ -152,7 +152,19 @@ function OpenRouterCard() {
       </div>
 
       {loading ? (
-        <div className="mt-6 h-16 animate-pulse rounded-md bg-surface-2" />
+        <div className="mt-6 h-16 animate-pulse rounded-md bg-surface-2" role="status" aria-label="Loading OpenRouter status" />
+      ) : loadError ? (
+        <div role="alert" className="mt-6 rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+          <p className="font-medium">Couldn't reach the key vault.</p>
+          <p className="mt-1 break-words text-destructive/80">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className="mt-3 inline-flex rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+          >
+            Retry
+          </button>
+        </div>
       ) : row && !showForm ? (
         <div className="mt-6 space-y-4">
           <div className="flex items-center gap-3 rounded-md border border-border bg-surface-2 px-4 py-3">
