@@ -296,7 +296,26 @@ function CohortPage() {
         )}
       </div>
 
+      {loadError && (
+        <div
+          role="alert"
+          className="mb-8 rounded-xl border border-destructive/40 bg-destructive/10 px-6 py-4 text-sm text-destructive"
+        >
+          <p className="font-medium">Couldn't load cohort data.</p>
+          <p className="mt-1 text-destructive/80">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => { void load(); }}
+            className="mt-3 inline-flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/20"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {!loadError && (<>
       {/* Health strip — is the protocol actually working for this cohort? */}
+
       {stats && (
         <section className="mb-10">
           <h2 className="mb-3 font-mono text-[11px] uppercase tracking-[0.28em] text-muted-foreground">Health</h2>
