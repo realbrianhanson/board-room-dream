@@ -223,6 +223,8 @@ function ScreenshotsPanel({ projectId, userId }: { projectId: string; userId: st
   const [uploading, setUploading] = useState(false);
   const [lightbox, setLightbox] = useState<ScreenshotItem | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<ScreenshotItem | null>(null);
+  const [deletingPath, setDeletingPath] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const prefix = `${userId}/${projectId}`;
@@ -278,11 +280,32 @@ function ScreenshotsPanel({ projectId, userId }: { projectId: string; userId: st
     }
   }
 
-  async function remove(item: ScreenshotItem) {
-    const { error } = await supabase.storage.from("design-screenshots").remove([item.path]);
-    if (error) { toast.error(error.message); return; }
-    setLightbox((cur) => (cur?.path === item.path ? null : cur));
-    load();
+  // Accessible confirm → owner-scoped delete of the exact selected path.
+  // Prevents double-submit by tracking deletingPath, and validates the
+  // path is still owned by this user before issuing the storage remove.
+  async function confirmRemove() {
+    if (!confirmDelete) return;
+    if (deletingPath === confirmDelete.path) return;
+    if (!confirmDelete.path.startsWith(`${prefix}/`)) {
+      toast.error("Refusing to delete — path is not owner-scoped.");
+      setConfirmDelete(null);
+      return;
+    }
+    const target = confirmDelete;
+    setDeletingPath(target.path);
+    try {
+      const { error } = await supabase.storage.from("design-screenshots").remove([target.path]);
+      if (error) {
+        toast.error(`Delete failed — ${error.message}`);
+        return;
+      }
+      setLightbox((cur) => (cur?.path === target.path ? null : cur));
+      setConfirmDelete(null);
+      toast.success("Screenshot removed.");
+      await load();
+    } finally {
+      setDeletingPath(null);
+    }
   }
 
   return (
@@ -344,9 +367,9 @@ function ScreenshotsPanel({ projectId, userId }: { projectId: string; userId: st
                   <img src={it.url} alt={it.name} className="aspect-video h-full w-full object-cover" loading="lazy" />
                 </button>
                 <button
-                  onClick={() => remove(it)}
+                  onClick={() => setConfirmDelete(it)}
                   className="absolute right-2 top-2 rounded-md bg-background/80 p-1 opacity-0 transition-opacity group-hover:opacity-100"
-                  aria-label="Delete"
+                  aria-label={`Delete ${it.name}`}
                 >
                   <X className="h-3.5 w-3.5 text-foreground" />
                 </button>
@@ -369,6 +392,46 @@ function ScreenshotsPanel({ projectId, userId }: { projectId: string; userId: st
           >
             <X className="h-4 w-4" />
           </button>
+        </div>
+      )}
+
+      {confirmDelete && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-screenshot-title"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-background/90 p-6"
+          onClick={() => { if (!deletingPath) setConfirmDelete(null); }}
+        >
+          <div
+            className="w-full max-w-sm rounded-xl border border-border bg-surface-1 p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="delete-screenshot-title" className="font-display text-lg text-foreground">
+              Delete this screenshot?
+            </h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              This removes <span className="font-mono text-foreground/80">{confirmDelete.name}</span> from your design-screenshots. This cannot be undone.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => { if (!deletingPath) setConfirmDelete(null); }}
+                disabled={!!deletingPath}
+                className="rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground transition-colors hover:border-primary/40 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmRemove}
+                disabled={!!deletingPath}
+                className="rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground transition-all hover:brightness-110 disabled:opacity-60"
+              >
+                {deletingPath ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </section>
