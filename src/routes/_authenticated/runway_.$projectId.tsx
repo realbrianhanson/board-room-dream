@@ -495,8 +495,8 @@ function RunwayPage() {
           <Link to="/runway" className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground hover:text-foreground">
             ← Runway
           </Link>
-          <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">{project.name}</h1>
-          <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">The Build Runway</p>
+          <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">Build Runway</h1>
+          <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">{project.name}</p>
           {journey && (
             <div className="mt-4 mb-2">
               <ProjectJourney stages={journey} />
