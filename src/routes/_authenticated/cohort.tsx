@@ -6,9 +6,20 @@ import { AlertTriangle, ArrowRight, Bell, CheckCircle2, Clock, DollarSign, Users
 
 export const Route = createFileRoute("/_authenticated/cohort")({
   beforeLoad: async () => {
-    const { data } = await supabase.from("profiles").select("role").maybeSingle();
-    const role = (data as { role?: string } | null)?.role;
-    if (role !== "instructor" && role !== "admin") throw redirect({ to: "/dashboard" });
+    // Route gate uses the canonical user_roles / has_role authority instead
+    // of the legacy profiles.role field. RLS remains the true data
+    // boundary; this gate is a UX defense to avoid rendering a page the
+    // caller cannot read. Handle auth / role lookup errors explicitly so a
+    // transient failure doesn't silently redirect an authorized user.
+    const { data: userData, error: userErr } = await supabase.auth.getUser();
+    if (userErr || !userData?.user) throw redirect({ to: "/dashboard" });
+    const uid = userData.user.id;
+    const [{ data: isAdmin, error: aErr }, { data: isInstructor, error: iErr }] = await Promise.all([
+      supabase.rpc("has_role", { _user_id: uid, _role: "admin" }),
+      supabase.rpc("has_role", { _user_id: uid, _role: "instructor" }),
+    ]);
+    if (aErr || iErr) throw redirect({ to: "/dashboard" });
+    if (!isAdmin && !isInstructor) throw redirect({ to: "/dashboard" });
   },
   component: CohortPage,
 });

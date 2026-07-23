@@ -45,12 +45,16 @@ Deno.serve(async (req) => {
   // mines de-identified workspace-wide learning signal (audit findings +
   // batch outcomes) to propose additions to the shared field manual. It is
   // NOT cohort-scoped and NEVER runs for instructors or ordinary users. The
-  // profile-role check below is the sole entry gate; every request without
-  // profiles.role = 'admin' must be rejected before any admin.from(...)
-  // read of audit_findings / batches. Do not weaken this to "instructor"
-  // without also cohort-scoping every query in this file.
-  const { data: profile } = await admin.from("profiles").select("role").eq("id", userId).maybeSingle();
-  if (profile?.role !== "admin") return j(403, { error: "Admins only" });
+  // canonical user_roles / has_role authority is the sole entry gate; every
+  // request whose caller is not an admin MUST be rejected before any
+  // admin.from(...) read of audit_findings / batches. Do not weaken this to
+  // "instructor" without also cohort-scoping every query in this file.
+  const { data: isAdmin, error: roleErr } = await admin.rpc("has_role", {
+    _user_id: userId,
+    _role: "admin",
+  });
+  if (roleErr) return j(500, { error: "Role check failed" });
+  if (isAdmin !== true) return j(403, { error: "Admins only" });
 
   // Evidence window: last 30 days of findings + outcomes across the workspace.
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();

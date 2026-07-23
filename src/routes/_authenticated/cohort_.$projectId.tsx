@@ -6,9 +6,17 @@ import { ArrowLeft, Github, Lock, ScrollText, ShieldCheck } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/cohort_/$projectId")({
   beforeLoad: async () => {
-    const { data } = await supabase.from("profiles").select("role").maybeSingle();
-    const role = (data as { role?: string } | null)?.role;
-    if (role !== "instructor" && role !== "admin") throw redirect({ to: "/dashboard" });
+    // See cohort.tsx — canonical user_roles / has_role gate, RLS remains
+    // the real boundary, transient auth/role failures fail closed.
+    const { data: userData, error: userErr } = await supabase.auth.getUser();
+    if (userErr || !userData?.user) throw redirect({ to: "/dashboard" });
+    const uid = userData.user.id;
+    const [{ data: isAdmin, error: aErr }, { data: isInstructor, error: iErr }] = await Promise.all([
+      supabase.rpc("has_role", { _user_id: uid, _role: "admin" }),
+      supabase.rpc("has_role", { _user_id: uid, _role: "instructor" }),
+    ]);
+    if (aErr || iErr) throw redirect({ to: "/dashboard" });
+    if (!isAdmin && !isInstructor) throw redirect({ to: "/dashboard" });
   },
   component: CohortProjectPage,
 });

@@ -8,22 +8,32 @@ import { assert, assertStringIncludes } from "https://deno.land/std@0.224.0/asse
 
 const src = await Deno.readTextFile(new URL("./index.ts", import.meta.url));
 
-Deno.test("flywheel-miner is SYSTEM-ADMIN-ONLY at the handler entry gate", () => {
-  // Admin-role gate exists.
-  assertStringIncludes(src, `if (profile?.role !== "admin") return j(403`);
-  // SERVER_AUTH comment is co-located so future edits can't quietly widen
-  // scope without touching the audited marker.
-  assertStringIncludes(src, "SERVER_AUTH:");
-  // The gate MUST run before the audit_findings / batches reads.
-  const gateIdx = src.indexOf(`if (profile?.role !== "admin"`);
+Deno.test("flywheel-miner uses canonical has_role authority, not profiles.role", () => {
+  // Legacy profile-role check must be gone — it was the privilege-escalation
+  // vector the user_roles / has_role pattern replaces.
+  assert(
+    !/from\(["']profiles["']\)\s*\.select\(["']role["']\)/.test(src),
+    "profiles.role must no longer gate the miner",
+  );
+  // Canonical RPC call with admin role.
+  assertStringIncludes(src, `.rpc("has_role"`);
+  assertStringIncludes(src, `_role: "admin"`);
+  // Reject on truthy-only isAdmin (not `!== "admin"` string compare).
+  assertStringIncludes(src, `if (isAdmin !== true) return j(403`);
+});
+
+Deno.test("flywheel-miner runs the role gate BEFORE workspace-wide reads", () => {
+  const gateIdx = src.indexOf(`if (isAdmin !== true) return j(403`);
   const findingsIdx = src.indexOf(`from("audit_findings")`);
   const outcomesIdx = src.indexOf(`from("batches")`);
   assert(gateIdx > 0, "admin gate not found");
   assert(findingsIdx > gateIdx, "audit_findings read must be after admin gate");
   assert(outcomesIdx > gateIdx, "batches read must be after admin gate");
+  // Marker stays co-located so future edits can't quietly widen scope.
+  assertStringIncludes(src, "SERVER_AUTH:");
 });
 
 Deno.test("flywheel-miner never widens the role check to instructor/user", () => {
-  assert(!/role\s*[!=]==?\s*['\"]instructor['\"]/i.test(src), "instructor role must not gate the miner");
-  assert(!/role\s*IN\s*\(['\"]admin['\"]\s*,\s*['\"]instructor['\"]\)/i.test(src));
+  assert(!/_role:\s*["']instructor["']/i.test(src), "instructor role must not gate the miner");
+  assert(!/_role:\s*["']user["']/i.test(src), "user role must not gate the miner");
 });
