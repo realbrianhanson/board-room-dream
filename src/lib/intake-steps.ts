@@ -24,26 +24,36 @@ export type IntakeStepKind = "idea" | "buyer" | "pain" | "money" | "inspiration"
 
 const t = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 
+/**
+ * Shared minimum for owner-supplied "strategy" free-text fields (positioning,
+ * acquisition channel, activation moment, wow moment, paid offer, upgrade
+ * trigger). Keeps callers from passing 1–2 character placeholders like "x"
+ * that pass the old `>1` check while carrying zero signal downstream. We
+ * pick a conservative bar (8 chars) rather than an essay-length one so the
+ * intake stays fast to complete.
+ */
+export const MIN_STRATEGY_CHARS = 8;
+
 export function canProceedFromIntakeStep(kind: IntakeStepKind, a: IntakeAnswers): boolean {
   switch (kind) {
     case "idea":
-      return t(a.idea).length > 3 && t(a.positioning).length > 1;
+      return t(a.idea).length > 3 && t(a.positioning).length >= MIN_STRATEGY_CHARS;
     case "buyer":
-      return t(a.buyer).length > 3 && t(a.acquisition_channel).length > 1;
+      return t(a.buyer).length > 3 && t(a.acquisition_channel).length >= MIN_STRATEGY_CHARS;
     case "pain":
       return t(a.pain).length > 3;
     case "money":
       return (
         !!a.money &&
-        t(a.paid_offer).length > 2 &&
+        t(a.paid_offer).length >= MIN_STRATEGY_CHARS &&
         t(a.price_anchor).length > 0 &&
-        t(a.upgrade_trigger).length > 2
+        t(a.upgrade_trigger).length >= MIN_STRATEGY_CHARS
       );
     case "inspiration":
       return (
         t(a.inspiration).length > 3 &&
-        t(a.activation_moment).length > 1 &&
-        t(a.wow_moment).length > 1
+        t(a.activation_moment).length >= MIN_STRATEGY_CHARS &&
+        t(a.wow_moment).length >= MIN_STRATEGY_CHARS
       );
   }
 }

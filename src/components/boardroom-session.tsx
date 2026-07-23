@@ -165,24 +165,40 @@ export function BoardroomSession(props: BoardroomSessionProps) {
   }, [loadRun, retrying]);
 
 
+  const loadProject = useCallback(async () => {
+    const { data: userData } = await supabase.auth.getUser();
+    const uid = userData.user?.id ?? null;
+
+    const { data: proj, error: pErr } = await supabase
+      .from("projects")
+      .select("id, name, status, user_id")
+      .eq("id", projectId)
+      .maybeSingle();
+    if (pErr) {
+      // Explicit project-load failure: surface via runError so the UI renders
+      // an accessible retry card instead of hanging on the skeleton or
+      // silently degrading to "preparing…". Preserve any last-good project
+      // on a background refresh failure.
+      setRunError(pErr.message);
+      setRunStale((prev) => (project ? true : prev));
+      return { proj: null as null, uid };
+    }
+    if (!proj) {
+      toast.error("Project not found");
+      setRunError("Project not found");
+      return { proj: null as null, uid };
+    }
+    setProject(proj);
+    setIsOwner(!readOnly && !!uid && uid === proj.user_id);
+    return { proj, uid };
+  }, [projectId, readOnly, project]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data: userData } = await supabase.auth.getUser();
-      const uid = userData.user?.id ?? null;
-
-      const { data: proj, error: pErr } = await supabase
-        .from("projects")
-        .select("id, name, status, user_id")
-        .eq("id", projectId)
-        .maybeSingle();
+      const { proj, uid } = await loadProject();
       if (cancelled) return;
-      if (pErr || !proj) {
-        toast.error("Project not found");
-        return;
-      }
-      setProject(proj);
-      setIsOwner(!readOnly && !!uid && uid === proj.user_id);
+      if (!proj) return;
 
       const { data: seatRows } = await supabase
         .from("model_registry_public")
@@ -201,7 +217,7 @@ export function BoardroomSession(props: BoardroomSessionProps) {
       await loadRun();
     })();
     return () => { cancelled = true; };
-  }, [projectId, loadRun]);
+  }, [projectId, loadRun, loadProject]);
 
   useEffect(() => {
     const runsChannel = supabase

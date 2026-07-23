@@ -419,6 +419,26 @@ function RunwayPage() {
     loadAll();
   }
 
+  // Sequential skip rule: skipping a batch also skips every later unbuilt
+  // batch (pending / fix_needed) so a downstream batch never silently
+  // assumes work that was never actually done. Built/passed/sent/skipped
+  // rows are left alone. Pure suffix computation lives in @/lib/runway-skip
+  // and is unit-tested.
+  async function skipBatchAndSuffix(b: Batch) {
+    const ids = computeSkipSuffixIds(batches ?? [], b.id);
+    if (ids.length === 0) return;
+    const { error } = await supabase
+      .from("batches")
+      .update({ status: "skipped" })
+      .in("id", ids);
+    if (error) { toast.error(error.message); return; }
+    if (ids.length > 1) {
+      toast.success(`Skipped ${ids.length} batches — later unbuilt batches were skipped too.`);
+    }
+    loadAll();
+  }
+
+
   async function saveOutcome(b: Batch, text: string) {
     const val = text.trim();
     const { error } = await supabase
@@ -861,8 +881,11 @@ function RunwayPage() {
         </div>
       )}
 
-      {/* Skip confirm */}
-      {showSkipConfirm && (
+      {/* Skip confirm — sequential rule */}
+      {showSkipConfirm && (() => {
+        const suffix = computeSkipSuffixIds(batches ?? [], showSkipConfirm.id);
+        const extra = Math.max(0, suffix.length - 1);
+        return (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-background/90 p-6"
           onClick={() => setShowSkipConfirm(null)}
@@ -873,7 +896,10 @@ function RunwayPage() {
           >
             <h3 className="font-display text-xl text-foreground">Skip Batch {showSkipConfirm.batch_no}?</h3>
             <p className="mt-2 text-sm text-muted-foreground">
-              "{showSkipConfirm.title}" won't ship. Later batches may still depend on it.
+              "{showSkipConfirm.title}" won't ship.{" "}
+              {extra > 0
+                ? `Because later batches may depend on it, ${extra} later unbuilt batch${extra === 1 ? "" : "es"} will be skipped too.`
+                : "No later unbuilt batches remain."}
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <button
@@ -883,15 +909,16 @@ function RunwayPage() {
                 Cancel
               </button>
               <button
-                onClick={async () => { const b = showSkipConfirm; setShowSkipConfirm(null); await advance(b, "skipped"); }}
+                onClick={async () => { const b = showSkipConfirm; setShowSkipConfirm(null); await skipBatchAndSuffix(b); }}
                 className="rounded-md bg-[hsl(8_60%_45%)] px-4 py-2 text-sm font-medium text-foreground hover:brightness-110"
               >
-                Skip it
+                {extra > 0 ? `Skip ${suffix.length} batches` : "Skip it"}
               </button>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
