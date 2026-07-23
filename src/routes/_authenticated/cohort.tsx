@@ -119,13 +119,17 @@ function CohortPage() {
       lockedByProject = new Set((data ?? []).map((r: any) => r.project_id));
     }
 
-    // Open alert counts per user.
+    // Open alert counts per user. Defense-in-depth: even though RLS restricts
+    // alert visibility to cohorts this instructor teaches, we also scope the
+    // query to the cohort ids we just loaded so a policy regression or admin
+    // context switch can never widen the count beyond the visible cohorts.
     const openAlertsByUser: Record<string, number> = {};
-    if (memberIds.length) {
+    if (memberIds.length && cohortIds.length) {
       const { data } = await supabase
         .from("alerts")
         .select("user_id")
         .in("user_id", memberIds)
+        .in("cohort_id", cohortIds)
         .eq("status", "open");
       for (const r of data ?? []) {
         openAlertsByUser[(r as any).user_id] = (openAlertsByUser[(r as any).user_id] ?? 0) + 1;
