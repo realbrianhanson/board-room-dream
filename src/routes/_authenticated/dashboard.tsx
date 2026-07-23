@@ -11,6 +11,7 @@ import {
   normalizeStrategyForPersist,
 } from "@/lib/import-strategy";
 import { initialModeFromSearch } from "@/lib/dashboard-search";
+import { DeleteProjectDialog } from "@/components/delete-project-dialog";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   // Lightweight validator — tolerate any value; the pure helper below decides
@@ -35,6 +36,7 @@ type Project = {
   fix_batch_no?: number;
   all_passed?: boolean;
   has_final_audit?: boolean;
+  has_import_audit?: boolean;
   has_locked_plan?: boolean;
 };
 
@@ -54,7 +56,8 @@ const NEXT_ACTION: Record<string, string> = {
 function nextActionLabel(p: Project): string {
   if (p.is_import) {
     if (!p.github_repo) return "Link your repo so the board can read the code";
-    if (!p.has_final_audit) return "Run the A–Z audit";
+    // Imports gate the Boardroom on the pre-plan A–Z audit specifically.
+    if (!p.has_import_audit) return "Run the A–Z audit";
     if (!p.has_locked_plan) return "Convene the improvement board";
   }
   if (p.status === "locked" && !p.has_design) return "Convene the Design Council";
@@ -199,16 +202,21 @@ function DashboardPage() {
     let planSet = new Set<string>();
     const fixInfo = new Map<string, number>();
     const allPassedSet = new Set<string>();
-    let finalAuditSet = new Set<string>();
+    const importAuditSet = new Set<string>();
+    const finalAuditSet = new Set<string>();
     if (ids.length) {
       const [{ data: pvs }, { data: bs }, { data: au }] = await Promise.all([
-        supabase.from("plan_versions").select("project_id, kind").in("project_id", ids).eq("is_build_safe", true),
+        supabase.from("plan_versions").select("project_id, kind, locked_at").in("project_id", ids).eq("is_build_safe", true),
         supabase.from("batches").select("project_id, batch_no, status").in("project_id", ids),
-        supabase.from("audits").select("project_id, kind, status").in("project_id", ids).eq("kind", "final_az").in("status", ["clean", "findings"]),
+        supabase.from("audits").select("project_id, kind, status, created_at").in("project_id", ids).eq("kind", "final_az").in("status", ["clean", "findings"]),
       ]);
-      for (const r of (pvs ?? []) as Array<{ project_id: string; kind: string }>) {
+      const planLockedAt = new Map<string, number>();
+      for (const r of (pvs ?? []) as Array<{ project_id: string; kind: string; locked_at: string }>) {
         if (r.kind === "design") designSet.add(r.project_id);
-        if (r.kind === "plan") planSet.add(r.project_id);
+        if (r.kind === "plan") {
+          planSet.add(r.project_id);
+          planLockedAt.set(r.project_id, new Date(r.locked_at).getTime());
+        }
       }
 
       const byProject = new Map<string, Array<{ batch_no: number; status: string }>>();
@@ -225,7 +233,16 @@ function DashboardPage() {
           allPassedSet.add(pid);
         }
       }
-      finalAuditSet = new Set((au ?? []).map((r: { project_id: string }) => r.project_id));
+      // Split successful final_az into pre-plan (import) vs post-lock (final
+      // verification) using the locked-plan timestamp. A single audit row can
+      // only ever satisfy ONE of these — the pre-plan Audit stage on imports
+      // and the post-build ship gate stay truly distinct.
+      for (const r of (au ?? []) as Array<{ project_id: string; created_at: string }>) {
+        const lockedAt = planLockedAt.get(r.project_id);
+        const auditAt = new Date(r.created_at).getTime();
+        if (lockedAt == null || auditAt < lockedAt) importAuditSet.add(r.project_id);
+        else finalAuditSet.add(r.project_id);
+      }
     }
     setProjects(
       rows.map((r) => ({
@@ -236,6 +253,7 @@ function DashboardPage() {
         has_fix_needed: fixInfo.has(r.id),
         fix_batch_no: fixInfo.get(r.id),
         all_passed: allPassedSet.has(r.id),
+        has_import_audit: importAuditSet.has(r.id),
         has_final_audit: finalAuditSet.has(r.id),
       }) as Project),
     );
@@ -636,16 +654,9 @@ function DashboardPage() {
                 key={p.id}
                 project={p}
                 onOpen={(id) => resume(id, p, navigate)}
-                onDelete={async (id) => {
-                  if (!confirm(`Delete "${p.name}"? This removes all its runs, plans, batches, and audits. This cannot be undone.`)) return;
-                  const { error } = await supabase.from("projects").delete().eq("id", id);
-                  if (error) {
-                    toast.error(error.message);
-                    return;
-                  }
-                  toast.success("Project deleted.");
-                  setProjects((prev) => (prev ?? []).filter((x) => x.id !== id));
-                }}
+                onDeleted={(id) =>
+                  setProjects((prev) => (prev ?? []).filter((x) => x.id !== id))
+                }
               />
             ))}
           </div>
@@ -661,12 +672,12 @@ async function resume(
   navigate: ReturnType<typeof useNavigate>,
 ) {
   const status = project.status;
-  if (project.is_import) {
+    if (project.is_import) {
     if (!project.github_repo) {
       navigate({ to: "/audits/$projectId", params: { projectId } });
       return;
     }
-    if (!project.has_final_audit) {
+    if (!project.has_import_audit) {
       navigate({ to: "/audits/$projectId", params: { projectId } });
       return;
     }
@@ -724,12 +735,13 @@ async function resume(
 function ProjectCard({
   project,
   onOpen,
-  onDelete,
+  onDeleted,
 }: {
   project: Project;
   onOpen: (id: string) => void;
-  onDelete: (id: string) => void;
+  onDeleted: (id: string) => void;
 }) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
   return (
     <div
       role="button"
@@ -764,7 +776,7 @@ function ProjectCard({
             aria-label="Delete project"
             onClick={(e) => {
               e.stopPropagation();
-              onDelete(project.id);
+              setConfirmOpen(true);
             }}
             className="rounded-md border border-transparent p-1.5 text-muted-foreground opacity-0 transition-all hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive focus:opacity-100 group-hover:opacity-100"
           >
@@ -782,6 +794,21 @@ function ProjectCard({
         Next: {nextActionLabel(project)}
         <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
       </span>
+      {/* Confirmation dialog is a sibling to the card content so clicks
+          inside it never bubble to the card's open handler. */}
+      <div onClick={(e) => e.stopPropagation()}>
+        <DeleteProjectDialog
+          projectName={project.name}
+          open={confirmOpen}
+          onOpenChange={setConfirmOpen}
+          onConfirm={async () => {
+            const { error } = await supabase.from("projects").delete().eq("id", project.id);
+            if (error) throw new Error(error.message);
+            toast.success("Project deleted.");
+            onDeleted(project.id);
+          }}
+        />
+      </div>
     </div>
   );
 }

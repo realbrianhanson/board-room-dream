@@ -424,13 +424,13 @@ function IntakePage() {
                 missing={!trimmed(answers.paid_offer)}
               />
               <TextInput
-                label="Best starting-price guess"
-                hint={'A number is best. If you truly don\'t know, type "not set — recommend one" and the board will propose one.'}
+                label="Best starting-price guess (optional)"
+                hint={
+                  'Leave blank if you\'d rather the Board propose one. If you do have a number, a rough anchor helps — e.g. "$29/mo".'
+                }
                 value={answers.price_anchor ?? ""}
                 onChange={(v) => setAnswers((a) => ({ ...a, price_anchor: v }))}
                 onBlur={() => persist(answers)}
-                required
-                missing={!trimmed(answers.price_anchor)}
               />
               <TextInput
                 label="What makes them buy now, renew, or move up?"

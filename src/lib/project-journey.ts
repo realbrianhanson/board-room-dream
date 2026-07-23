@@ -5,6 +5,20 @@ export type JourneyFlags = {
   has_locked_plan?: boolean;
   has_design?: boolean;
   has_batches?: boolean;
+  /**
+   * A successful pre-plan A–Z audit exists (only meaningful for imports).
+   * Distinct from `has_final_audit`: this specifically captures the initial
+   * audit that reads the imported repo BEFORE a plan is locked. It is the
+   * single truthful signal for checking off the pre-plan Audit stage on
+   * the imported journey and must NOT be confused with the post-build
+   * final verification audit.
+   */
+  has_import_audit?: boolean;
+  /**
+   * A successful final_az audit ran after the plan was locked (or the
+   * project reached a post-build lifecycle state). This is the ship /
+   * verification signal — never the pre-plan gate.
+   */
   has_final_audit?: boolean;
   all_passed?: boolean;
 };
@@ -28,10 +42,15 @@ export function buildJourney(f: JourneyFlags): JourneyStage[] {
       { key: "ship", label: "Ship" },
     ];
     done.setup = !!f.github_repo;
-    done.audit = !!f.has_final_audit;
+    // Pre-plan audit stage uses the DISTINCT pre-plan signal only.
+    // Never fall back to has_final_audit here — a post-build final audit
+    // must not retroactively "complete" the pre-plan Audit stage.
+    done.audit = !!f.has_import_audit;
     done.plan = !!f.has_locked_plan;
     done.design = !!f.has_design;
     done.build = !!f.has_batches && !!f.all_passed;
+    // Ship keeps its final-verification semantics — status == 'done' is the
+    // owner-visible published state.
     done.ship = f.status === "done";
   } else {
     keys = [

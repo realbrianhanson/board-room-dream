@@ -34,10 +34,13 @@ describe("canProceedFromIntakeStep — five-step persistence of the new required
     expect(canProceedFromIntakeStep("pain", { ...filled, pain: "" })).toBe(false);
   });
 
-  it("step 4 (money) preserves the paid_offer / price_anchor / upgrade_trigger triple", () => {
+  it("step 4 (money) requires money + paid_offer + upgrade_trigger; price_anchor is optional", () => {
     expect(canProceedFromIntakeStep("money", filled)).toBe(true);
     expect(canProceedFromIntakeStep("money", { ...filled, paid_offer: "" })).toBe(false);
-    expect(canProceedFromIntakeStep("money", { ...filled, price_anchor: "" })).toBe(false);
+    // price_anchor is INTENTIONALLY optional — owners may leave it unset
+    // so the Board can propose a starting price. Blank must not block.
+    expect(canProceedFromIntakeStep("money", { ...filled, price_anchor: "" })).toBe(true);
+    expect(canProceedFromIntakeStep("money", { ...filled, price_anchor: undefined })).toBe(true);
     expect(canProceedFromIntakeStep("money", { ...filled, upgrade_trigger: "" })).toBe(false);
     expect(canProceedFromIntakeStep("money", { ...filled, money: undefined })).toBe(false);
   });
