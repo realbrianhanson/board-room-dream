@@ -76,6 +76,7 @@ function AuditCenterPage() {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [runErrors, setRunErrors] = useState<Record<string, string | null>>({});
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [showPaste, setShowPaste] = useState(false);
   const [pasted, setPasted] = useState("");
