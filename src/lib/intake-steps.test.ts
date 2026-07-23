@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canProceedFromIntakeStep, type IntakeAnswers } from "./intake-steps";
+import { canProceedFromIntakeStep, MIN_STRATEGY_CHARS, type IntakeAnswers } from "./intake-steps";
 
 const filled: IntakeAnswers = {
   idea: "A specialist scoring engine for founders.",
@@ -47,5 +47,22 @@ describe("canProceedFromIntakeStep — five-step persistence of the new required
     expect(canProceedFromIntakeStep("inspiration", { ...filled, activation_moment: "" })).toBe(false);
     expect(canProceedFromIntakeStep("inspiration", { ...filled, wow_moment: "" })).toBe(false);
     expect(canProceedFromIntakeStep("inspiration", { ...filled, inspiration: "" })).toBe(false);
+});
+
+describe("shared MIN_STRATEGY_CHARS minimum", () => {
+  const tooShort = "x".repeat(MIN_STRATEGY_CHARS - 1);
+  const justEnough = "x".repeat(MIN_STRATEGY_CHARS);
+
+  it("rejects strategy fields below the shared minimum (was 2-char bypass)", () => {
+    expect(canProceedFromIntakeStep("idea", { ...filled, positioning: tooShort })).toBe(false);
+    expect(canProceedFromIntakeStep("buyer", { ...filled, acquisition_channel: tooShort })).toBe(false);
+    expect(canProceedFromIntakeStep("money", { ...filled, paid_offer: tooShort })).toBe(false);
+    expect(canProceedFromIntakeStep("money", { ...filled, upgrade_trigger: tooShort })).toBe(false);
+    expect(canProceedFromIntakeStep("inspiration", { ...filled, activation_moment: tooShort })).toBe(false);
+    expect(canProceedFromIntakeStep("inspiration", { ...filled, wow_moment: tooShort })).toBe(false);
+  });
+
+  it("accepts strategy fields at exactly the shared minimum", () => {
+    expect(canProceedFromIntakeStep("idea", { ...filled, positioning: justEnough })).toBe(true);
   });
 });
