@@ -814,6 +814,32 @@ Deno.serve(async (req) => {
       });
       if (!eligibility.ok) return j(400, { error: eligibility.error });
 
+      // Imported projects require complete strategy context before the A–Z
+      // audit can start. UI enforces the same rule, but the server is the
+      // authority — a client that skips the panel cannot bypass this.
+      if (project.is_import) {
+        const { validateImportStrategy } = await import("../_shared/import-strategy.ts");
+        const { data: intake } = await admin
+          .from("intakes")
+          .select("answers")
+          .eq("project_id", projectId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const answers = (intake?.answers ?? {}) as Record<string, string>;
+        const issues = validateImportStrategy(answers);
+        if (issues.length > 0) {
+          const list = issues.map((i) => `${i.field} (${i.reason})`).join(", ");
+          return j(400, {
+            error:
+              "Strategy context is incomplete — the A–Z audit needs credible " +
+              `owner context for every field before it can start. Fix: ${list}`,
+            missing_strategy_fields: issues,
+          });
+        }
+      }
+
+
       const res = await beginAudit({
         admin, userId, project, batchId: null,
         kind: "final_az", loopNo: 1, source, pastedCode, budget: 12.0,
