@@ -119,11 +119,12 @@ function CohortPage() {
     const memberIds = profileRows.map((p) => p.id);
     let projectRows: any[] = [];
     if (memberIds.length) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("projects")
         .select("id, name, status, user_id, current_batch_no, created_at")
         .in("user_id", memberIds)
         .order("created_at", { ascending: false });
+      if (error) { setLoadError(error.message); setLoading(false); return; }
       projectRows = data ?? [];
     }
 
