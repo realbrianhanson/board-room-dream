@@ -49,6 +49,7 @@ export function GitHubRepoCard({
   const [showGuide, setShowGuide] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [repos, setRepos] = useState<Repo[] | null>(null);
+  const [pickerError, setPickerError] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [head, setHead] = useState<Head | null>(null);
   const [refreshing, setRefreshing] = useState(false);
