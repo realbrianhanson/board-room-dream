@@ -258,7 +258,7 @@ export function GitHubRepoCard({
             <h3 className="font-display text-2xl text-foreground">Sync Lovable → GitHub</h3>
             <ol className="mt-4 space-y-3 text-sm text-foreground/90">
               <li><span className="mr-2 font-mono text-[hsl(38_65%_72%)]">1.</span>In Lovable, open your project → GitHub → Connect and create the repo.</li>
-              <li><span className="mr-2 font-mono text-[hsl(38_65%_72%)]">2.</span>Here in BOARDROOM Settings, Connect GitHub.</li>
+              <li><span className="mr-2 font-mono text-[hsl(38_65%_72%)]">2.</span>Here in App Blueprint Settings, Connect GitHub.</li>
               <li><span className="mr-2 font-mono text-[hsl(38_65%_72%)]">3.</span>Back on this Runway, pick that repo.</li>
             </ol>
             <div className="mt-5 flex justify-end">
