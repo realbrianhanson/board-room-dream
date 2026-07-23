@@ -5,9 +5,15 @@ import remarkGfm from "remark-gfm";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { AlertTriangle, KeyRound, Pause, Play, RotateCcw, Users2 } from "lucide-react";
+import {
+  computeVoteSegments,
+  segmentArcPath,
+  SEAT_ORDER as VOTE_SEAT_ORDER,
+  type VoteSegment,
+} from "@/lib/vote-ring-segments";
 
 export type Seat = "chair" | "strategist" | "contrarian" | "inspector";
-const SEAT_ORDER: Seat[] = ["chair", "strategist", "contrarian", "inspector"];
+const SEAT_ORDER: Seat[] = VOTE_SEAT_ORDER;
 
 const SEAT_META: Record<Seat, { label: string; hue: string; initials: string }> = {
   chair: { label: "The Chair", hue: "38 65% 55%", initials: "CH" },
@@ -282,35 +288,13 @@ export function BoardroomSession(props: BoardroomSessionProps) {
   const completedR1 = steps.filter((s) => s.round === 1 && s.status === "completed").length;
   const totalR1 = Math.max(4, steps.filter((s) => s.round === 1).length || 4);
 
-  const segments = useMemo(() => {
-    const voteSteps = steps.filter(
-      (s) => s.round === 4 && s.status === "completed" && s.step_key.startsWith("r4_vote_"),
-    );
-    let latestLoop = -1;
-    for (const v of voteSteps) {
-      const m = /_loop(\d+)$/.exec(v.step_key);
-      if (m) latestLoop = Math.max(latestLoop, Number(m[1]));
-    }
-    const latest = voteSteps.filter((v) => v.step_key.endsWith(`_loop${latestLoop}`));
-    const bySeat = new Map<Seat, SessionStep>();
-    for (const v of latest) bySeat.set(v.seat, v);
-    // The Chair abstains on its own synthesis in current runs; legacy runs
-    // include its vote. Size the ring to whoever actually votes.
-    const votingOrder = SEAT_ORDER.filter((s) => s !== "chair" || bySeat.has("chair"));
-    const out: Array<"empty" | "brass" | "oxblood"> = [];
-    for (const seat of votingOrder) {
-      const v = bySeat.get(seat);
-      const scores = v?.response_json?.scores as Record<string, number> | undefined;
-      for (const key of rubric) {
-        if (!scores || typeof scores[key] !== "number") out.push("empty");
-        else out.push(scores[key] >= 8 ? "brass" : "oxblood");
-      }
-    }
-    return out;
-  }, [steps, rubric]);
+  const segments = useMemo<VoteSegment[]>(
+    () => computeVoteSegments(steps, rubric),
+    [steps, rubric],
+  );
 
   const roundOneFill = completedR1 / totalR1;
-  const votesFilled = segments.filter((s) => s !== "empty").length;
+  const votesFilled = segments.filter((s) => s.result !== "empty").length;
   const votesFraction = segments.length ? votesFilled / segments.length : 0;
   const consensusFill =
     run?.status === "consensus" || run?.status === "chair_ruled"
