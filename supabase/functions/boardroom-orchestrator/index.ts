@@ -426,7 +426,19 @@ async function executeStep(admin: any, run: any, step: any) {
     if (jsonMode) {
       let candidate: any = null;
       let tailClosed: string | null = null;
+      let recoveryMode: string | null = null;
       try { candidate = JSON.parse(content); } catch { candidate = null; }
+      if (!candidate) {
+        // AUDIT-JSON-RECOVERY-R5: valid top-level JSON followed only by
+        // whitespace and redundant same-kind closers (e.g. extra "}" after
+        // an object) is machine-recoverable without repair. Runs strictly
+        // after JSON.parse and before the tail-closer rescue.
+        const rec = tryRecoverTrailingRedundantCloser(content);
+        if (rec.ok) {
+          candidate = rec.value;
+          recoveryMode = "trailing_redundant_closer";
+        }
+      }
       if (!candidate) {
         // Conservative tail-closure rescue: the audit-map path repeatedly
         // truncates one token short of the outer "]}" (run e2c5faf3). The
