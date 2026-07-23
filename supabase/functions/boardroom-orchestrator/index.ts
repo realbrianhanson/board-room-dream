@@ -490,12 +490,13 @@ async function executeStep(admin: any, run: any, step: any) {
         return;
       }
       let parsed: any = candidate;
-      if (fallbackMeta || tailClosed) {
+      if (fallbackMeta || tailClosed || recoveryMode) {
         if (!parsed || typeof parsed !== "object") parsed = {};
         parsed._meta = {
           ...(parsed._meta ?? {}),
           ...(fallbackMeta ? { fallback: fallbackMeta } : {}),
           ...(tailClosed ? { tail_closed: tailClosed } : {}),
+          ...(recoveryMode ? { recovery_mode: recoveryMode } : {}),
         };
       }
       await admin
