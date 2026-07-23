@@ -285,19 +285,17 @@ Deno.test("R6 constitution — product-strategy P1 with RUNTIME_FAILURE marker i
   assertEquals(published[0].severity, "P1");
 });
 
-// ---------- 5. Summary count-mismatch reconciliation ----------
+// ---------- 5. Deterministic summary regardless of narrative accuracy ----------
 
-Deno.test("R7 reconcile — 'Three P1 issues' with counts.P1=1 is replaced with deterministic sentence", () => {
+Deno.test("R7 reconcile — contradictory 'Three P1' claim is dropped for deterministic text", () => {
   const text = "Three P1 issues need attention before ship.";
   const out = reconcileAuditSummaryText(text, { P0: 0, P1: 1, P2: 10, P3: 0 });
-  assert(out.startsWith("Validated counts:"));
-  assert(!/three\s+P1/i.test(out), `output must drop contradictory count claim: ${out}`);
-  assert(out.includes("P1=1"));
+  assertEquals(out, "Validated counts: P0=0, P1=1, P2=10, P3=0.");
 });
 
-Deno.test("R7 reconcile — matching '2 P1' with counts.P1=2 is preserved", () => {
+Deno.test("R7 reconcile — even matching '2 P1' with counts.P1=2 is dropped (deterministic)", () => {
   const text = "2 P1 findings are open.";
   const out = reconcileAuditSummaryText(text, { P0: 0, P1: 2, P2: 0, P3: 0 });
-  assert(out.includes("P1=2"));
-  assert(out.includes("2 P1 findings"));
+  assertEquals(out, "Validated counts: P0=0, P1=2, P2=0, P3=0.");
 });
+
