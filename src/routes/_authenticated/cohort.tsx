@@ -198,7 +198,7 @@ function CohortPage() {
 
     // Health metrics — the numbers that say whether protocol changes help.
     if (memberIds.length) {
-      const [{ data: runRows }, { data: auditRows }] = await Promise.all([
+      const [runsRes, auditsRes] = await Promise.all([
         supabase
           .from("boardroom_runs")
           .select("kind, status, loop_no")
@@ -209,6 +209,10 @@ function CohortPage() {
           .in("user_id", memberIds)
           .not("summary", "is", null),
       ]);
+      if (runsRes.error) { setLoadError(runsRes.error.message); setLoading(false); return; }
+      if (auditsRes.error) { setLoadError(auditsRes.error.message); setLoading(false); return; }
+      const runRows = runsRes.data;
+      const auditRows = auditsRes.data;
       const deliberations = (runRows ?? []).filter(
         (r: any) => ["plan", "design"].includes(r.kind) && ["consensus", "chair_ruled"].includes(r.status),
       );
