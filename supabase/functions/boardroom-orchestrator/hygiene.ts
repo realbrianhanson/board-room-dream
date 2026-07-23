@@ -90,32 +90,45 @@ export async function failRun(
       .update({ status: "failed", completed_at: new Date().toISOString() })
       .eq("id", auditId);
 
-    // AUDIT-FINALIZATION-R2: audit-runner sets projects.status='auditing'
-    // when a final audit starts. Without reconciliation a failed final
-    // audit leaves the imported project stuck at 'auditing', which the
-    // Dashboard misreads. Restore the safest truthful pre-build status —
-    // 'locked' (safe plan), else 'imported' (import), else 'validated'.
-    // Guarded by .eq("status","auditing") so we never clobber a project
-    // that advanced to another non-auditing status concurrently.
+    // AUDIT-FINALIZATION-R2 + lifecycle-R1: audit-runner sets
+    // projects.status='auditing' when a final audit starts and records
+    // previous_project_status on the audits row + run.consensus. Restore
+    // that exact prior status on failure so the Dashboard never leaves
+    // an imported project stuck at 'auditing'. Guarded by
+    // .eq("status","auditing") so we never clobber a project that
+    // advanced concurrently.
     if (run?.project_id) {
       try {
-        const { data: safePlan } = await admin
-          .from("plan_versions")
-          .select("id")
-          .eq("project_id", run.project_id)
-          .eq("kind", "plan")
-          .eq("is_build_safe", true)
-          .limit(1)
-          .maybeSingle();
-        const { data: project } = await admin
-          .from("projects")
-          .select("is_import")
-          .eq("id", run.project_id)
-          .maybeSingle();
-        const nextStatus = nextStatusAfterZeroBatchFailure({
-          hasSafePlan: !!safePlan,
-          isImport: !!project?.is_import,
-        });
+        let prev: string | null =
+          (run?.consensus as any)?.previous_project_status ?? null;
+        if (!prev) {
+          const { data: auditRow } = await admin
+            .from("audits")
+            .select("previous_project_status")
+            .eq("id", auditId)
+            .maybeSingle();
+          prev = auditRow?.previous_project_status ?? null;
+        }
+        let nextStatus = prev;
+        if (!nextStatus) {
+          const { data: safePlan } = await admin
+            .from("plan_versions")
+            .select("id")
+            .eq("project_id", run.project_id)
+            .eq("kind", "plan")
+            .eq("is_build_safe", true)
+            .limit(1)
+            .maybeSingle();
+          const { data: project } = await admin
+            .from("projects")
+            .select("is_import")
+            .eq("id", run.project_id)
+            .maybeSingle();
+          nextStatus = nextStatusAfterZeroBatchFailure({
+            hasSafePlan: !!safePlan,
+            isImport: !!project?.is_import,
+          });
+        }
         await admin
           .from("projects")
           .update({ status: nextStatus })
