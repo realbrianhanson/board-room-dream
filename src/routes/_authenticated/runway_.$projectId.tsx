@@ -1008,8 +1008,12 @@ function CompileBanner({ batch }: { batch: Batch }) {
       </p>
       <details className="mt-2 group">
         <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-foreground">
-          Why this prompt is safe to paste ({touched.length} touched · {evidence.length} evidence{drift.length ? ` · ${drift.length} drift` : ""})
+          Preflight evidence for this prompt ({touched.length} touched · {evidence.length} evidence{drift.length ? ` · ${drift.length} drift` : ""})
         </summary>
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          This checks the compiled prompt before implementation. The build is verified only after the post-build checks and audit pass.
+        </p>
+
         <div className="mt-3 space-y-3">
           {touched.length > 0 && (
             <div>
