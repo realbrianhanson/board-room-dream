@@ -30,10 +30,17 @@ export function Reveal({
       setRevealed(true);
       return;
     }
+    // If already in view or scrolled past on mount (fast-scroll / anchor jump),
+    // reveal immediately so we don't get stuck at opacity 0.
+    const rect = el.getBoundingClientRect();
+    if (rect.top < window.innerHeight) {
+      setRevealed(true);
+      return;
+    }
     const io = new IntersectionObserver(
       (entries) => {
         for (const e of entries) {
-          if (e.isIntersecting) {
+          if (e.isIntersecting || e.boundingClientRect.top < 0) {
             setRevealed(true);
             io.disconnect();
             break;
