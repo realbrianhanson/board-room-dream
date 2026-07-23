@@ -127,9 +127,10 @@ function CohortPage() {
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
-    const { data: userRes } = await supabase.auth.getUser();
+    const { data: userRes, error: userErr } = await supabase.auth.getUser();
+    if (userErr) { setLoadError(userErr.message); setLoading(false); return; }
     const uid = userRes.user?.id;
-    if (!uid) return;
+    if (!uid) { setLoading(false); return; }
 
     // Cohorts the instructor teaches (RLS also permits admin-wide reads).
     // Query failures MUST propagate — silently returning empty arrays would
