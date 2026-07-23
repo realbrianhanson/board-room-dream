@@ -69,14 +69,14 @@ Deno.test("marker citing a proposed_change_request source is rejected", async ()
   });
 
   const modelOutput = `Enable Stripe checkout for $49.\n[OWNER-AUTHORIZED: source="proposed_change_request:cr-abc" quote="Add Stripe checkout for $49."]`;
-  const report = validateProvenance(modelOutput, auth);
+  const markers = extractProvenanceMarkers(modelOutput, auth);
+  // No marker may validate — the proposed source is NOT in `allowed`.
+  assert(!markers.some((m) => m.ok), "no marker should validate against a proposed source");
+  const unauthorized = findUnauthorizedHighImpact(modelOutput, auth, markers);
   assert(
-    report.unauthorized.length > 0,
+    unauthorized.length > 0,
     "proposed_change_request must not authorize a $49/Stripe directive",
   );
-  // Explicit: the marker's source is not present in `allowed`.
-  const markerOk = report.markers?.some((m) => m.ok) ?? false;
-  assert(!markerOk, "no marker should validate against a proposed source");
 });
 
 Deno.test("approved CR provenance still authorizes when routed as extraFounderNotes", async () => {
@@ -87,6 +87,8 @@ Deno.test("approved CR provenance still authorizes when routed as extraFounderNo
     ],
   });
   const modelOutput = `Enable Stripe checkout for $49.\n[OWNER-AUTHORIZED: source="approved_change_request:cr-abc" quote="Add Stripe checkout for $49."]`;
-  const report = validateProvenance(modelOutput, auth);
-  assertEquals(report.unauthorized.length, 0, JSON.stringify(report.unauthorized));
+  const markers = extractProvenanceMarkers(modelOutput, auth);
+  assert(markers.some((m) => m.ok), "approved marker should validate");
+  const unauthorized = findUnauthorizedHighImpact(modelOutput, auth, markers);
+  assertEquals(unauthorized.length, 0, JSON.stringify(unauthorized));
 });
