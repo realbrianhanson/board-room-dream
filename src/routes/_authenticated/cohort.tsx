@@ -190,14 +190,18 @@ function CohortPage() {
     }).sort((a, b) => (b.open_alerts - a.open_alerts) || ((b.active_project ? 1 : 0) - (a.active_project ? 1 : 0)));
     setMembers(rows);
 
-    // Recent open alerts across cohorts.
-    const { data: alertRows } = await supabase
-      .from("alerts")
-      .select("id, kind, status, detail, created_at, project_id, user_id, cohort_id")
-      .eq("status", "open")
-      .order("created_at", { ascending: false })
-      .limit(30);
-    // Hydrate project + user labels.
+    // Recent open alerts across cohorts. Defense-in-depth: scope to the
+    // instructor's loaded cohort ids in addition to RLS. If they teach no
+    // cohorts, do not query — an empty .in() list matches nothing anyway.
+    const alertRows = cohortIds.length
+      ? (await supabase
+          .from("alerts")
+          .select("id, kind, status, detail, created_at, project_id, user_id, cohort_id")
+          .in("cohort_id", cohortIds)
+          .eq("status", "open")
+          .order("created_at", { ascending: false })
+          .limit(30)).data
+      : [];
     const alertIds = (alertRows ?? []) as AlertRow[];
     const projIds = Array.from(new Set(alertIds.map((a) => a.project_id).filter(Boolean))) as string[];
     const userIds = Array.from(new Set(alertIds.map((a) => a.user_id)));
