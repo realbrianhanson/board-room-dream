@@ -208,9 +208,10 @@ export function StrategyContextPanel({ projectId, isOwner }: Props) {
           </span>
           {filled < total && (
             <span className="text-xs text-muted-foreground">
-              Optional — sharpens the plan later. Blanks stay blank; the board never invents answers.
+              Required before the A–Z audit. Blanks stay blank; the board never invents answers.
             </span>
           )}
+
         </div>
         {isOwner ? (
           <span className="inline-flex items-center gap-1 text-xs text-foreground/80">
