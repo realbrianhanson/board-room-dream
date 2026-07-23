@@ -66,6 +66,14 @@ export async function loadOwnerAuthority(
     founderNotes?: string | null;
     extraFounderNotes?: Array<{ source: string; text: string | null | undefined }>;
     includeApprovedChangeRequests?: boolean;
+    // Untrusted owner-supplied proposals surfaced to the board (e.g. the CR
+    // text under review before the Chair has recorded an approving verdict).
+    // These are rendered in the OWNER AUTHORITY block as an explicit
+    // "PROPOSED — NOT YET AUTHORIZED" section so seats can debate them, but
+    // they are NOT part of `allowed` / `perSourceNormalized`. Any
+    // [OWNER-AUTHORIZED: source="proposed_change_request:<id>"] marker will
+    // therefore fail the deterministic post-validator.
+    proposedSources?: Array<{ source: string; text: string | null | undefined }>;
   },
 ): Promise<OwnerAuthority> {
   const allowed: AllowedSource[] = [];
@@ -120,9 +128,17 @@ export async function loadOwnerAuthority(
     }
   }
 
+  // Proposed / not-yet-approved sources — untrusted debate material.
+  const proposed: AllowedSource[] = [];
+  for (const p of opts.proposedSources ?? []) {
+    const t = String(p?.text ?? "").trim();
+    if (!t) continue;
+    proposed.push({ source: p.source || "proposed_change_request", text: t });
+  }
+
   const perSourceNormalized = allowed.map((s) => ({ source: s.source, text: normalize(s.text) }));
   const allowedNormalized = perSourceNormalized.map((s) => s.text).join(" \n\n ");
-  const block = renderBlock(allowed);
+  const block = renderBlock(allowed, proposed);
   return { allowed, allowedNormalized, perSourceNormalized, block };
 }
 
