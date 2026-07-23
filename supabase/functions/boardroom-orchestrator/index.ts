@@ -1135,6 +1135,20 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
     .update({ status: "findings", summary, files_analyzed: filesAnalyzed, completed_at: new Date().toISOString() })
     .eq("id", auditId);
 
+  // Lifecycle-R1: a final audit with findings must not leave the project
+  // stuck at 'auditing'. Restore prior status; the fix batch (if any)
+  // carries the follow-up work through the batches lifecycle.
+  if (isFinal && audit.project_id) {
+    const prev = audit.previous_project_status
+      ?? (run?.consensus as any)?.previous_project_status
+      ?? "locked";
+    await admin
+      .from("projects")
+      .update({ status: prev })
+      .eq("id", audit.project_id)
+      .eq("status", "auditing");
+  }
+
   let fixBatchId: string | null = null;
   const fixPrompt = String(parsed?.fix_prompt_md ?? "").trim();
   // Only SUPPORTED (post-downgrade) P0/P1 can trigger a fix batch.
