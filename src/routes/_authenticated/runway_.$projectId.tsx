@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { CodeSourcePicker, formatBytes } from "@/components/code-source-picker";
 export const MAX_PASTE_BYTES = 5_000_000;
 import { GitHubRepoCard } from "@/components/github-repo-card";
+import { computeSkipSuffixIds } from "@/lib/runway-skip";
 import { startGithubConnect } from "@/lib/github-connect";
 import { selectDisplayedRun } from "@/lib/run-selection";
 import { ProjectJourney } from "@/components/project-journey";
