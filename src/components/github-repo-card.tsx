@@ -89,16 +89,27 @@ export function GitHubRepoCard({
   }
   useEffect(() => { if (repo && gh?.connected && gh.status === "valid") loadHead(); /* eslint-disable-next-line */ }, [repo, gh?.connected, gh?.status]);
 
-  async function openPicker() {
-    setShowPicker(true);
-    if (repos) return;
+  async function loadRepos() {
+    setPickerError(null);
+    setRepos(null);
     try {
       const d = (await ghInvoke("list_repos")) as { repos: Repo[] };
       setRepos(d.repos);
     } catch (e) {
+      // Inline recovery is mandatory: the modal stays usable and we surface
+      // a Retry action so a transient GitHub failure doesn't leave the user
+      // staring at a Loading spinner forever.
+      setPickerError((e as Error).message ?? "Couldn't load repositories.");
       toast.error((e as Error).message);
     }
   }
+
+  async function openPicker() {
+    setShowPicker(true);
+    if (repos || pickerError) return;
+    await loadRepos();
+  }
+
 
   async function pick(full_name: string) {
     try {
@@ -271,7 +282,18 @@ export function GitHubRepoCard({
               className="mt-4 w-full rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
             />
             <div className="mt-3 max-h-80 overflow-auto rounded-md border border-border bg-background">
-              {!repos ? (
+              {pickerError ? (
+                <div role="alert" className="p-4 text-sm text-destructive">
+                  <p>Couldn't load repositories — {pickerError}</p>
+                  <button
+                    type="button"
+                    onClick={() => { void loadRepos(); }}
+                    className="mt-2 rounded-md border border-destructive/40 px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive/10"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : !repos ? (
                 <div className="p-4 text-sm text-muted-foreground">Loading…</div>
               ) : filtered.length === 0 ? (
                 <div className="p-4 text-sm text-muted-foreground">No repos.</div>
