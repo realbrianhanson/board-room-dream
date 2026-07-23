@@ -112,23 +112,61 @@ export function isImportReady(input: {
 /**
  * The strategy fields still needed before an import audit can launch,
  * honoring {@link RECOMMEND_PLACEHOLDER} for recommendable fields.
+ * Uses the strict field-level validator below so the badge, readiness
+ * gate, client button, and server gate all agree on what counts as
+ * credible strategy context.
  */
 export function missingImportFields(
   input: Partial<ImportStrategyInput>,
 ): StrategyField[] {
-  return STRATEGY_FIELDS.filter((k) => !isFilled(input[k]));
+  return STRATEGY_FIELDS.filter((k) => !isFieldValid(k, input[k]));
 }
 
 /**
- * Trim every strategy field, preserving empty strings so downstream code can
- * treat blanks as explicit "missing owner input" rather than fabricated data.
- * Recommendable fields keep the placeholder verbatim.
+ * Field-level validation rules used everywhere strategy context is gated.
+ *
+ * - `price_anchor` accepts either the canonical recommend placeholder or a
+ *   trimmed value with at least 2 characters (so "$0", "£9", "free" are
+ *   valid). Founders may legitimately not have chosen a price yet.
+ * - `upgrade_trigger` accepts the canonical placeholder or ≥4 chars.
+ * - All other fields require ≥4 trimmed characters of real signal — a
+ *   single-character filler is not credible strategy context.
+ * - Only `price_anchor` and `upgrade_trigger` may use the placeholder;
+ *   using it elsewhere is rejected.
  */
-export function normalizeStrategyForPersist(
+export function isFieldValid(field: StrategyField, value: string | null | undefined): boolean {
+  const v = t(value);
+  if (v.length === 0) return false;
+  if (isRecommendPlaceholder(v)) {
+    return RECOMMENDABLE_FIELDS.includes(field);
+  }
+  if (field === "price_anchor") return v.length >= 2;
+  return v.length >= 4;
+}
+
+/**
+ * Returns a list of `{ field, reason }` explaining every invalid strategy
+ * field, suitable for surfacing in the UI and server error responses.
+ */
+export function validateImportStrategy(
   input: Partial<ImportStrategyInput>,
-): ImportStrategyInput {
-  const out = {} as ImportStrategyInput;
-  for (const k of STRATEGY_FIELDS) out[k] = t(input[k]);
+): Array<{ field: StrategyField; reason: string }> {
+  const out: Array<{ field: StrategyField; reason: string }> = [];
+  for (const f of STRATEGY_FIELDS) {
+    const v = t(input[f]);
+    if (v.length === 0) {
+      out.push({ field: f, reason: "missing" });
+      continue;
+    }
+    if (isRecommendPlaceholder(v)) {
+      if (!RECOMMENDABLE_FIELDS.includes(f)) {
+        out.push({ field: f, reason: "placeholder-not-allowed" });
+      }
+      continue;
+    }
+    const min = f === "price_anchor" ? 2 : 4;
+    if (v.length < min) out.push({ field: f, reason: `too-short (min ${min})` });
+  }
   return out;
 }
 
@@ -145,3 +183,4 @@ export function isImportStrategyReady(input: Partial<ImportStrategyInput>): bool
     return true;
   });
 }
+
