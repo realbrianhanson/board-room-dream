@@ -140,6 +140,13 @@ function IntakePage() {
   const [running, setRunning] = useState(false);
   const [noKey, setNoKey] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
+  // Non-blocking Boardroom prerequisite hint: when the user has no verified
+  // OpenRouter key, show a single concise banner on step 1 so they can add
+  // it in Settings without leaving the intake. Only rendered when we can
+  // *prove* the key is missing; on any load error we render nothing rather
+  // than invent key state.
+  const [keyHintMissing, setKeyHintMissing] = useState(false);
+
 
   useEffect(() => {
     (async () => {
