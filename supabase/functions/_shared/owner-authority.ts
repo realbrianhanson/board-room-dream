@@ -365,6 +365,26 @@ function sentenceForMatch(ownLine: string, matchOffset: number): string {
   return ownLine;
 }
 
+// Further narrow a sentence to the sub-clause containing the match. Boundaries
+// are conjunctive connectives (",\s*then/but/however/and then", stand-alone
+// " but | then | however ") that separate independent directives. This
+// prevents a preserve/negation in one clause from silencing a genuine
+// directive in another ("Preserve auth, then DROP TABLE projects" fires on
+// clause 2; "do not change X but charge $99" fires on clause 2).
+function clauseForMatch(sentence: string, matchOffset: number): string {
+  const bounds: number[] = [0];
+  const re = /,\s*(?:but|then|however|and\s+then)\b|\s+(?:but|then|however)\s+/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(sentence))) bounds.push(m.index + m[0].length);
+  bounds.push(sentence.length);
+  for (let i = 0; i < bounds.length - 1; i++) {
+    if (matchOffset >= bounds[i] && matchOffset < bounds[i + 1]) {
+      return sentence.slice(bounds[i], bounds[i + 1]);
+    }
+  }
+  return sentence;
+}
+
 // Find spans in `text` that describe net-new / destructive high-impact
 // directives which are NOT covered by a verified OWNER-AUTHORIZED marker on
 // the same line or the immediately-following line, AND whose category is
