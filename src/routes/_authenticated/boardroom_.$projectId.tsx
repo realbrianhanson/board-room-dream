@@ -104,11 +104,9 @@ function BoardroomProjectPage() {
           ← Dashboard
         </Link>
         <h1 className="mt-3 font-display text-3xl leading-tight text-foreground md:text-4xl">{projectName}</h1>
-        {journey && (
-          <div className="mt-4 mb-2">
-            <ProjectJourney stages={journey} />
-          </div>
-        )}
+        <div className="mt-4 mb-2">
+          <ProjectJourneyStrip result={journey} />
+        </div>
       </div>
       <BoardroomSession
         projectId={projectId}
