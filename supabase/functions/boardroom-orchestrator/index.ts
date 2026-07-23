@@ -1028,8 +1028,8 @@ async function insertModelAuthoredBatchOrAlert(
       projectId: audit.project_id,
       founderNotes: run?.founder_notes ?? null,
     });
-    const preErr = preLockAuthorityError(
-      [{ label: `fix_batch "${row.title}".prompt_md`, text: String(row.prompt_md ?? "") }],
+    const preErr = computeAuthorityViolationError(
+      [{ key: "prompt_md", label: `fix_batch "${row.title}".prompt_md`, text: String(row.prompt_md ?? "") }],
       authority,
     );
     if (preErr) {
