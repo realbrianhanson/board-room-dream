@@ -327,8 +327,20 @@ function GitHubCard({ isAdmin }: { isAdmin: boolean }) {
         )}
       </div>
 
-      {!state ? (
-        <div className="mt-6 h-16 animate-pulse rounded-md bg-surface-2" />
+      {loadError ? (
+        <div role="alert" className="mt-6 rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+          <p className="font-medium">Couldn't reach the GitHub connector.</p>
+          <p className="mt-1 break-words text-destructive/80">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className="mt-3 inline-flex rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+          >
+            Retry
+          </button>
+        </div>
+      ) : !state ? (
+        <div className="mt-6 h-16 animate-pulse rounded-md bg-surface-2" role="status" aria-label="Loading GitHub status" />
       ) : !state.configured ? (
         <div className="mt-6 rounded-md border border-dashed border-border bg-surface-2 p-4 text-sm text-muted-foreground">
           GitHub connection isn't configured yet — the program admin sets two backend secrets to enable it.
