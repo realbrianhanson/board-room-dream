@@ -36,30 +36,38 @@ import {
 // queue function in the run's lifetime pays for a single DB round trip.
 async function ensureAuthority(admin: any, run: any): Promise<OwnerAuthority> {
   if (!(run as any).__authority__) {
-    // For change_request runs the CR is not yet 'approved', so the loader's
-    // approved-CR pass will not pick it up. Inject the exact submitted CR
-    // description scoped to THIS run under the SAME stable provenance
-    // identity the finalizer and the post-approval compiler will use:
-    // `approved_change_request:<crId>`. Never pull arbitrary/pending CRs
-    // from other runs.
+    // For change_request runs the CR text must be routed by its live status:
+    //  - status='approved': the Chair has recorded the approving verdict and
+    //    change_requests.status was transitioned. Expose under the stable
+    //    provenance identity `approved_change_request:<id>` so the compiler
+    //    and finalizer see one identity across the run's lifetime.
+    //  - anything else (pending / revision / rejected / missing): expose ONLY
+    //    as a PROPOSED source under `proposed_change_request:<id>` — it is
+    //    untrusted debate material and MUST NOT authorize any high-impact
+    //    scope. Any [OWNER-AUTHORIZED: source="proposed_change_request:..."]
+    //    marker fails the deterministic post-validator by construction (it is
+    //    not in `allowed`/`perSourceNormalized`).
     const extraFounderNotes: Array<{ source: string; text: string | null | undefined }> = [];
+    const proposedSources: Array<{ source: string; text: string | null | undefined }> = [];
     if (run?.kind === "change_request") {
       const crId = run?.consensus?.change_request_id;
       if (crId) {
         try {
           const { data: crRow } = await admin
             .from("change_requests")
-            .select("description")
+            .select("description, status")
             .eq("id", crId)
             .eq("project_id", run.project_id)
             .eq("user_id", run.user_id)
             .maybeSingle();
           const desc = String(crRow?.description ?? "").trim();
+          const status = String(crRow?.status ?? "").trim().toLowerCase();
           if (desc) {
-            extraFounderNotes.push({
-              source: `approved_change_request:${crId}`,
-              text: desc,
-            });
+            if (status === "approved") {
+              extraFounderNotes.push({ source: `approved_change_request:${crId}`, text: desc });
+            } else {
+              proposedSources.push({ source: `proposed_change_request:${crId}`, text: desc });
+            }
           }
         } catch { /* empty CR description simply blocks any high-impact expansion */ }
       }
@@ -68,6 +76,7 @@ async function ensureAuthority(admin: any, run: any): Promise<OwnerAuthority> {
       projectId: run.project_id,
       founderNotes: run.founder_notes ?? null,
       extraFounderNotes,
+      proposedSources,
     });
   }
   return (run as any).__authority__;
