@@ -35,7 +35,7 @@ export function useProjectJourney(projectId: string): JourneyStage[] | null {
         setStages(null);
         return;
       }
-      const pvs = (pvRes.data ?? []) as Array<{ kind: string; created_at: string }>;
+      const pvs = (pvRes.data ?? []) as Array<{ kind: string; locked_at: string }>;
       const batches = (batchRes.data ?? []) as Array<{ status: string }>;
       const audits = (auditRes.data ?? []) as Array<{
         id: string;
@@ -49,7 +49,7 @@ export function useProjectJourney(projectId: string): JourneyStage[] | null {
       // the plan lock is the ship/verification signal. Same audits row can
       // never satisfy both — the two flags are truly distinct.
       const planLocked = pvs.find((p) => p.kind === "plan");
-      const planLockedAt = planLocked ? new Date(planLocked.created_at).getTime() : null;
+      const planLockedAt = planLocked ? new Date(planLocked.locked_at).getTime() : null;
       const terminalAudits = audits.filter(
         (a) => a.status === "clean" || a.status === "findings",
       );
