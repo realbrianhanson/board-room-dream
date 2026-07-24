@@ -897,22 +897,38 @@ Write the documents at FULL length — never compress them because they are insi
 
 export async function queueBatchesStep(admin: any, run: any) {
   const manual = await loadFieldManual(admin);
-  const plan = await loadLockedPlan(admin, run.project_id);
   const project = await loadProjectMeta(admin, run.project_id);
-  const { data: design } = await admin
-    .from("plan_versions")
-    .select("content_md")
-    .eq("project_id", run.project_id)
-    .eq("kind", "design")
-    .eq("is_build_safe", true)
-    .order("version", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const isImport = !!project?.is_import;
+  const workflow = isImport ? await getImportWorkflow(admin, run) : null;
+  const scope = isImport ? await getScopeContract(admin, run) : "";
+
+  // Scope-conditional artifact loading: never trust request scope, always use
+  // the server-derived workflow. Design-only skips the plan; improvements-only
+  // skips the design brief. Both must still preserve the artifact that IS in
+  // scope; the missing side becomes an "OUT OF SCOPE" instruction, never a
+  // "convene later" suggestion.
+  const requiresPlan = !workflow || workflow.requiresPlan;
+  const requiresDesign = !workflow || workflow.requiresDesign;
+
+  const plan = requiresPlan ? await loadLockedPlan(admin, run.project_id) : null;
+  const { data: design } = requiresDesign
+    ? await admin
+      .from("plan_versions")
+      .select("content_md")
+      .eq("project_id", run.project_id)
+      .eq("kind", "design")
+      .eq("is_build_safe", true)
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    : { data: null } as any;
 
   const compactDesign = compactMarkdown(design?.content_md ?? "", COMPACT_ARTIFACT_CAP);
-  const designSection = compactDesign
-    ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}\n\nBatch 1 MUST install these design tokens (CSS variables, Tailwind config, font imports) BEFORE any feature work.`
-    : `NO LOCKED DESIGN BRIEF — do not fabricate one. The student will convene the Design Council later.`;
+  const designSection = !requiresDesign
+    ? `DESIGN — OUT OF SCOPE. The owner did NOT select Design Review. The existing visual system (tokens, palette, typography, layout, component styling, motion) is LOCKED. Every batch MUST preserve it. Do not restyle, do not add design tokens, do not swap fonts or palettes, do not introduce a design-system replacement.`
+    : compactDesign
+      ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}\n\nBatch 1 MUST install these design tokens (CSS variables, Tailwind config, font imports) BEFORE any feature work.`
+      : `NO LOCKED DESIGN BRIEF — do not fabricate one. The student will convene the Design Council later.`;
 
   // Compact repo contract for batch-generation only. The JIT batch-compiler
   // regrounds each specific batch against the full live code/schema before
@@ -928,11 +944,26 @@ export async function queueBatchesStep(admin: any, run: any) {
   // minimum needed to cover the locked improvement plan). Greenfield stays
   // 6-8 (prefer 6). The validator globally accepts 3-8 so this prompt-side
   // range simply constrains the model within the allowed window.
-  const isImport = !!project?.is_import;
   const policy = batchPromptPolicy(isImport);
   const batchRangeText = policy.rangeText;
   const batchRangePrompt = policy.rangePrompt;
   const batchCountRule = policy.countRule;
+
+  // Scope-aware rules. Design-only imports have no plan/features/PRD; the
+  // greenfield "EVERY feature in FEATURES must land in some batch" rule
+  // does not apply. Improvements-only imports must preserve the existing
+  // visual system. Full and greenfield keep the original coverage rule.
+  const featureCoverageRule = !requiresPlan
+    ? `- FEATURES — OUT OF SCOPE. No FEATURES / PRD / product-scope list applies. Do NOT invent features, monetization, positioning, or new routes/tables. Do NOT add Enhancement batches from imagined value.`
+    : `- EVERY feature in the FEATURES list must land in some batch. Must-have/high-priority features go in the core batches; lower-priority features go in final batches titled "Enhancement — <name>" (same skeleton, same rigor). Never silently drop a listed feature.\n- If a DEFERRED VALUE section is provided, harvest the still-valuable ideas that do not contradict the locked plan into the Enhancement batches too. Never resurrect anything the board explicitly rejected as harmful.`;
+
+  const visualPreservationRule = !requiresDesign && isImport
+    ? `- DESIGN PRESERVATION (blocking): the existing visual system is FROZEN. No batch may add or edit design tokens, palette, typography, spacing, shape language, or motion. UI edits must reuse existing components and tokens verbatim.`
+    : "";
+
+  const designOnlyBatchGuide = !requiresPlan && requiresDesign
+    ? `\n\nDESIGN-ONLY BUILD (scope-locked): produce the smallest valid 3-6 batch sequence that APPLIES the locked design brief to the real current UI shown in the LIVE REPO CONTRACT. No behavior changes, no data-model changes, no new backend, no new routes, no new features. Sequence: (1) tokens/typography/spacing install, (2..N) apply the tokens per surface area, (last) a11y/motion/regression polish. Every batch MUST be single-concern and reuse existing routes/components verbatim.`
+    : "";
 
   const system = `You are the Chair, sequencing this student's build for their Lovable project. ${batchRangePrompt}
 
@@ -946,7 +977,7 @@ OUTPUT DISCIPLINE (hard limits — the run FAILS if you exceed them):
 - Total serialized JSON payload: <=24,000 characters. If you approach that, cut prose — not scope.
 
 Rules for EVERY batch:
-- Numbered items with EXACT scope — no wishlists. Name exact routes, components, tables, and columns from the PRD in every item.
+- Numbered items with EXACT scope — no wishlists. Name exact routes, components, tables, and columns${requiresPlan ? " from the PRD" : ""} in every item.
 - Acceptance checks MUST match the batch's actual layer. Never require preview clicks as the only proof for backend work.
   * channel 'lovable' (UI/frontend): 2-4 observable preview interactions — clicks, form submits, visible state/copy, plus console/network checks when relevant.
   * channel 'supabase' (backend/DB/RLS/edge): 2-4 concrete BACKEND checks — migration applied / schema query result, RLS positive + negative case, edge-function request/response, DB constraint or trigger behavior, logs, or automated test. NEVER a "click in the preview" check on a supabase-only batch.
@@ -957,9 +988,8 @@ Rules for EVERY batch:
 - Channel 'human' = things only the student can do in external consoles (Stripe, DNS, OAuth apps, App Store, domain purchase) — write plain-language numbered steps, no code, no acceptance checks, no typecheck line.
 - Channel 'lovable' = frontend + integration work the student will paste into Lovable.
 - Sequence so nothing depends on a later batch. Auth/data foundations early. Polish/SEO/analytics late.
-- EVERY feature in the FEATURES list must land in some batch. Must-have/high-priority features go in the core batches; lower-priority features go in final batches titled "Enhancement — <name>" (same skeleton, same rigor). Never silently drop a listed feature.
-- If a DEFERRED VALUE section is provided, harvest the still-valuable ideas that do not contradict the locked plan into the Enhancement batches too. Never resurrect anything the board explicitly rejected as harmful.
-- REPO GROUNDING (critical): The LIVE REPO CONTRACT is authoritative. Any path/route/component/table/function that already exists there is an UPDATE target and MUST match the contract verbatim. Anything not in the contract MUST be labelled CREATE/ADD, and its dependencies MUST be sequenced earlier. Never invent an UPDATE against a filename that is not in the contract.
+${featureCoverageRule}
+${visualPreservationRule ? visualPreservationRule + "\n" : ""}- REPO GROUNDING (critical): The LIVE REPO CONTRACT is authoritative. Any path/route/component/table/function that already exists there is an UPDATE target and MUST match the contract verbatim. Anything not in the contract MUST be labelled CREATE/ADD, and its dependencies MUST be sequenced earlier. Never invent an UPDATE against a filename that is not in the contract.
 - Every prompt_md follows this skeleton:
   """
   Batch N — <one-line batch name>. Numbered items only, no scope creep.
@@ -974,7 +1004,7 @@ Rules for EVERY batch:
 
   Keep everything else identical.
   Typecheck when done.  ← omit for channel 'human'
-  """
+  """${designOnlyBatchGuide}
 
 Return ONLY valid JSON:
 {
@@ -985,19 +1015,29 @@ Return ONLY valid JSON:
 
 Constraints: ${batchRangeText} batches, unique ascending integer batch_no starting at 1, every prompt_md within character limits, following the skeleton exactly.`;
 
-  const featuresBlock = Array.isArray(plan?.features) && plan!.features.length
-    ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
-    : "(none listed)";
+  const featuresBlock = !requiresPlan
+    ? "(out of scope — design-only workflow; no feature list applies)"
+    : Array.isArray(plan?.features) && plan!.features.length
+      ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
+      : "(none listed)";
 
   const deferredRaw = {
     decision_log: (plan as any)?.decision_log ?? null,
     dissent_ledger: (plan as any)?.dissent_ledger ?? null,
   };
-  const deferredBlock = (deferredRaw.decision_log || deferredRaw.dissent_ledger)
+  const deferredBlock = requiresPlan && (deferredRaw.decision_log || deferredRaw.dissent_ledger)
     ? `\n\nDEFERRED VALUE (board decision log + dissent ledger) — ideas debated and not adopted into the core plan. Harvest anything still valuable and consistent with the locked plan into the final Enhancement batches:\n${JSON.stringify(deferredRaw).slice(0, 4000)}`
     : "";
 
-  const user = `${repoContract}\n\nLOCKED PLAN (compact — full text is in the plan_versions table)\n\n${compactPlan || "(no plan)"}\n\nPRD (compact — full text is in plan_versions.prd_md)\n\n${compactPrd || "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}${deferredBlock}\n\nProduce the JSON now.`;
+  const planSection = !requiresPlan
+    ? "LOCKED PLAN\n(out of scope — design-only workflow; product scope, features, routes, data model, auth, integrations, and business logic are FROZEN)"
+    : `LOCKED PLAN (compact — full text is in the plan_versions table)\n\n${compactPlan || "(no plan)"}`;
+  const prdSection = !requiresPlan
+    ? "PRD\n(out of scope — no PRD applies for design-only workflows)"
+    : `PRD (compact — full text is in plan_versions.prd_md)\n\n${compactPrd || "(no PRD)"}`;
+
+  const user = `${repoContract}\n\n${planSection}\n\n${prdSection}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}${deferredBlock}\n\nProduce the JSON now.`;
+
 
   await queueSteps(admin, run, {
     run_id: run.id,
