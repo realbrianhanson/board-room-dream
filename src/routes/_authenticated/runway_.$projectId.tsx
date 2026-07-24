@@ -178,15 +178,17 @@ function RunwayPage() {
   const [compiling, setCompiling] = useState(false);
 
   const loadAll = useCallback(async () => {
-    const [pRes, pvRes, dvRes, bsRes, rsRes, auRes] = await Promise.all([
+    const [pRes, pvRes, dvRes, bsRes, rsRes, auRes, inRes] = await Promise.all([
       supabase.from("projects").select("id, name, user_id, status, lovable_project_url, current_batch_no, github_repo, is_import").eq("id", projectId).maybeSingle(),
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "plan").eq("is_build_safe", true).limit(1),
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "design").eq("is_build_safe", true).limit(1),
       supabase.from("batches").select("*").eq("project_id", projectId).order("batch_no", { ascending: true }),
       supabase.from("boardroom_runs").select("id, kind, status, error, spent_usd, budget_usd, created_at").eq("project_id", projectId).eq("kind", "batches").in("status", ["queued","running","paused","paused_budget","failed","completed","consensus","chair_ruled"]).order("created_at", { ascending: false }).limit(10),
       supabase.from("audits").select("id, batch_id, kind, status, loop_no, source, head_sha, files_analyzed, summary, created_at").eq("project_id", projectId).order("created_at", { ascending: false }),
+      // Latest persisted intake — carries the selected goals for imports.
+      supabase.from("intakes").select("answers, created_at").eq("project_id", projectId).order("created_at", { ascending: false }).limit(1).maybeSingle(),
     ]);
-    // Capture the first meaningful error across the six parallel queries.
+    // Capture the first meaningful error across the seven parallel queries.
     // A failure MUST NOT be coerced into an empty state — that would render
     // "no plan / no batches" for a real backend outage.
     const firstErr =
@@ -196,6 +198,7 @@ function RunwayPage() {
       bsRes.error?.message ||
       rsRes.error?.message ||
       auRes.error?.message ||
+      inRes.error?.message ||
       null;
     if (firstErr) {
       setLoadError(firstErr);
