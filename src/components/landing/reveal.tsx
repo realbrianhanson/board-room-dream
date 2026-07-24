@@ -59,9 +59,9 @@ export function Reveal({
       data-revealed={revealed ? "true" : "false"}
       style={{ transitionDelay: `${delay}ms` }}
       className={
-        "opacity-0 translate-y-5 blur-[4px] transition-all duration-[900ms] ease-out " +
-        "data-[revealed=true]:opacity-100 data-[revealed=true]:translate-y-0 data-[revealed=true]:blur-0 " +
-        "motion-reduce:opacity-100 motion-reduce:translate-y-0 motion-reduce:blur-0 motion-reduce:transition-none " +
+        "opacity-0 translate-y-5 transition-all duration-[900ms] ease-out " +
+        "data-[revealed=true]:opacity-100 data-[revealed=true]:translate-y-0 " +
+        "motion-reduce:opacity-100 motion-reduce:translate-y-0 motion-reduce:transition-none " +
         className
       }
       {...rest}
