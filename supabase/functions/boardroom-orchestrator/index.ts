@@ -2073,30 +2073,82 @@ async function handleRequest(req: Request): Promise<Response> {
       }
     }
 
-    // Imports require a successful A–Z audit (status IN clean/findings) before
-    // convening the improvement board. Failed/running rows do not count.
-    if (kind === "plan" && project.is_import) {
-      const { data: auditRows } = await admin
+    // Imports: re-derive workflow from persisted intake goals and evaluate
+    // the pure scope gate. The server is the authority — never trust
+    // request-body scope. Non-imports keep their existing gates below.
+    if (project.is_import && (kind === "plan" || kind === "design" || kind === "batches")) {
+      const { deriveImportWorkflow } = await import("../_shared/import-workflow.ts");
+      const { evaluateStartRunGate } = await import("../_shared/import-scope-gates.ts");
+
+      const { data: intake, error: intakeErr } = await admin
+        .from("intakes")
+        .select("answers")
+        .eq("project_id", projectId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (intakeErr) {
+        return j(500, { error: `Could not load intake for scope gate: ${intakeErr.message}` });
+      }
+      const answers = (intake?.answers ?? {}) as Record<string, unknown>;
+      const workflow = deriveImportWorkflow(answers?.goals);
+
+      // Audit completion: successful A–Z audit exists (clean|findings).
+      const { data: auditRows, error: auditErr } = await admin
         .from("audits")
-        .select("id, status")
+        .select("id")
         .eq("project_id", projectId)
         .eq("user_id", userId)
         .eq("kind", "final_az")
         .in("status", ["clean", "findings"])
         .limit(1);
-      if (!auditRows || auditRows.length === 0) {
-        return j(409, { error: "Complete a successful A–Z audit before convening the improvement board." });
-      }
-    }
+      if (auditErr) return j(500, { error: `Could not load audit state: ${auditErr.message}` });
+      const auditComplete = (auditRows?.length ?? 0) > 0;
 
-    if (kind === "design" || kind === "batches") {
-      const locked = await loadLockedPlan(admin, projectId);
-      if (!locked) {
-        return j(400, {
-          error: kind === "design"
-            ? "The board locks a build-safe plan before it debates the look."
-            : "The board locks a build-safe plan before it sequences the build.",
-        });
+      // Locked plan / locked design (build-safe rows).
+      const [planLockedRow, designLockedRow] = await Promise.all([
+        admin
+          .from("plan_versions")
+          .select("id")
+          .eq("project_id", projectId)
+          .eq("kind", "plan")
+          .eq("is_build_safe", true)
+          .limit(1)
+          .maybeSingle(),
+        admin
+          .from("plan_versions")
+          .select("id")
+          .eq("project_id", projectId)
+          .eq("kind", "design")
+          .eq("is_build_safe", true)
+          .limit(1)
+          .maybeSingle(),
+      ]);
+      if (planLockedRow.error) return j(500, { error: `Could not load plan state: ${planLockedRow.error.message}` });
+      if (designLockedRow.error) return j(500, { error: `Could not load design state: ${designLockedRow.error.message}` });
+
+      const decision = evaluateStartRunGate(workflow, kind as "plan" | "design" | "batches", {
+        auditComplete,
+        planLocked: !!planLockedRow.data,
+        designLocked: !!designLockedRow.data,
+      });
+      if (!decision.allowed) {
+        return j(409, { error: decision.reason, next_step: decision.nextStep });
+      }
+    } else {
+      // Legacy / non-import gates are preserved unchanged.
+      if (kind === "plan" && project.is_import) {
+        // Never taken (guarded above); kept for symmetry.
+      }
+      if (kind === "design" || kind === "batches") {
+        const locked = await loadLockedPlan(admin, projectId);
+        if (!locked) {
+          return j(400, {
+            error: kind === "design"
+              ? "The board locks a build-safe plan before it debates the look."
+              : "The board locks a build-safe plan before it sequences the build.",
+          });
+        }
       }
     }
     if (kind === "batches") {
