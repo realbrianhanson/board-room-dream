@@ -1110,36 +1110,49 @@ Review rules (apply strictly):
 - BLOCKING: any batch that asserts "React + Vite" (or any specific stack) as a universal rule when the LIVE REPO CONTRACT shows a different stack (e.g. src/routes/__root.tsx + @tanstack/react-start indicates TanStack Start, not React+Vite). Flag stack assumptions that don't match the detected stack.
 - BLOCKING: any batch that asks Lovable to run browser tests in the SAME prompt as a large build change — verification must be a separate follow-up prompt.
 - BLOCKING: test-tool mismatch — a lovable/UI batch that demands Deno edge tests, or a supabase/backend batch that demands browser-flow tests. Frontend uses Lovable's browser testing + optional frontend tests; backend uses direct edge-fn/RPC calls + Deno tests.
+- BLOCKING: any batch outside the SCOPE CONTRACT above (feature/monetization/product-scope work when improvements is not selected; design/token/typography changes when design_review is not selected). Name the offending batch and say to drop or relabel it.
 - NOT A FINDING: treating a filename alone as proof of a leaked secret. Public Supabase anon/publishable keys are not secret exposure. Only flag secrets when the batch itself embeds or exports actual secret material.`;
 
+  const coverageRule = !requiresPlan
+    ? `- FEATURES / PRD are OUT OF SCOPE for this design-only workflow. Flag any batch that invents features, monetization, positioning, or new routes/tables (blocking).`
+    : `- Every MVP feature in the PRD lands in some batch; name any orphan (blocking).\n- Every OTHER feature in the FEATURES list lands in some batch (core or Enhancement); name any silently-dropped feature (major).`;
+  const designInstallRule = !requiresDesign
+    ? `- The existing visual system is FROZEN by scope. Flag any batch that adds or edits design tokens, palette, typography, spacing, or motion (blocking).`
+    : `- Design tokens are installed before any feature work that uses them.`;
+
   const prompts: Record<string, string> = {
-    inspector: `Batches review — Inspector. Check the drafted build sequence for coverage and dependency integrity:
-- Every MVP feature in the PRD lands in some batch; name any orphan (blocking).
-- Every OTHER feature in the FEATURES list lands in some batch (core or Enhancement); name any silently-dropped feature (major).
+    inspector: withScope(scope, `Batches review — Inspector. Check the drafted build sequence for coverage and dependency integrity:
+${coverageRule}
 - No batch references a table, route, component, or function created in a LATER batch (blocking).
-- Design tokens are installed before any feature work that uses them.
+${designInstallRule}
 - Code batches carry acceptance checks a non-coder can run by clicks alone; skeleton followed exactly.
 
 ${manual}
 
-${shape}`,
-    contrarian: `Batches review — Contrarian. Attack the drafted build sequence:
+${shape}`),
+    contrarian: withScope(scope, `Batches review — Contrarian. Attack the drafted build sequence:
 - Any single batch too big for Lovable to execute faithfully in one paste (mixes concerns, >~5 files, vague items) — blocking; say how to split.
 - Any table created without explicit access rules stated in plain words — blocking.
 - Human-channel work (Stripe, OAuth, DNS) hidden inside a code batch — blocking.
-- Scope creep beyond the locked plan — major; name the cut. (Clearly-labeled Enhancement batches carrying FEATURES-list items or DEFERRED VALUE are NOT scope creep — but newly invented scope inside them is.)
+- Scope creep beyond the SCOPE CONTRACT or the locked plan — major (blocking if it violates the SCOPE CONTRACT); name the cut. (Clearly-labeled Enhancement batches carrying FEATURES-list items or DEFERRED VALUE are NOT scope creep — but newly invented scope inside them is.)
 
 ${manual}
 
-${shape}`,
+${shape}`),
   };
-  const compactPlan = compactMarkdown(plan?.content_md ?? "", COMPACT_ARTIFACT_CAP);
-  const compactPrd = compactMarkdown(plan?.prd_md ?? "", COMPACT_ARTIFACT_CAP);
-  const compactDesign = compactMarkdown(design?.content_md ?? "", COMPACT_ARTIFACT_CAP);
-  const designSection = compactDesign
-    ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}`
-    : `NO LOCKED DESIGN BRIEF.`;
-  const user = `${repoContract}\n\nLOCKED PLAN (compact)\n\n${compactPlan || "(no plan)"}\n\nPRD (compact)\n\n${compactPrd || "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nDRAFT BATCHES\n\n${draftBlock}\n\nProduce your JSON now.`;
+  const compactPlan = requiresPlan ? compactMarkdown(plan?.content_md ?? "", COMPACT_ARTIFACT_CAP) : "";
+  const compactPrd = requiresPlan ? compactMarkdown(plan?.prd_md ?? "", COMPACT_ARTIFACT_CAP) : "";
+  const compactDesign = requiresDesign ? compactMarkdown(design?.content_md ?? "", COMPACT_ARTIFACT_CAP) : "";
+  const planSection = !requiresPlan
+    ? "LOCKED PLAN\n(out of scope — design-only workflow; product/features/routes/data FROZEN)"
+    : `LOCKED PLAN (compact)\n\n${compactPlan || "(no plan)"}`;
+  const prdSection = !requiresPlan ? "PRD\n(out of scope)" : `PRD (compact)\n\n${compactPrd || "(no PRD)"}`;
+  const designSection = !requiresDesign
+    ? "DESIGN — OUT OF SCOPE (existing visual system is FROZEN and must be preserved verbatim)"
+    : compactDesign
+      ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}`
+      : `NO LOCKED DESIGN BRIEF.`;
+  const user = `${repoContract}\n\n${planSection}\n\n${prdSection}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nDRAFT BATCHES\n\n${draftBlock}\n\nProduce your JSON now.`;
   const rows = (["inspector", "contrarian"] as const).map((seat) => ({
     run_id: run.id,
     user_id: run.user_id,
@@ -1150,14 +1163,6 @@ ${shape}`,
     request: {
       json_output: true,
       temperature: 0.2,
-      // BATCH-REVIEW-LOW-REASONING-R1: live run b67878e0 truncated
-      // batches_review_inspector at tokens_out 2,486 / response 301 chars,
-      // ended inside issue.text — same reasoning-budget starvation as the
-      // now-fixed batches_revise_chair. These reviewer jobs are bounded
-      // schema validation (max 8 issues, 280 chars each, <=4,500 serialized
-      // chars) — low reasoning leaves the entire 2,500 output budget for the
-      // concise JSON. batches_chair keeps "high"; batches_revise_chair
-      // keeps "low".
       reasoning_effort: "low",
       max_tokens: 2500,
 
@@ -1166,6 +1171,7 @@ ${shape}`,
         { role: "user", content: user },
       ],
     },
+
   }));
   await queueSteps(admin, run, rows);
 }
