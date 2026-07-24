@@ -813,7 +813,32 @@ function RunwayPage() {
             >
               Start fresh generation
             </button>
+      )}
+
+      {/* State C-defensive: run reported `completed` but persisted zero
+          batches (schema drift, superseded, or an incomplete recovery).
+          Single unified recovery card — never render alongside State B. */}
+      {promptsReady && total === 0 && run && run.status === "completed" && (
+        <div className="mt-4 rounded-xl border border-primary/40 bg-primary/10 p-6">
+          <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.28em] text-primary">
+            <AlertTriangle className="h-4 w-4" /> The last run completed with no batches on file.
+          </p>
+          <p className="mt-2 text-sm text-foreground/85">
+            This can happen after a plan or design update supersedes a
+            stale set. Start a fresh generation to sequence the build again.
+          </p>
+          {isOwner && (
+            <button
+              onClick={generate}
+              disabled={generating}
+              className="mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+            >
+              Start fresh generation
+            </button>
           )}
+        </div>
+      )}
+
         </div>
       )}
 
