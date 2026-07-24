@@ -46,6 +46,7 @@ type Project = {
   created_at: string;
   is_import?: boolean;
   github_repo?: string | null;
+  goals?: readonly ImportGoal[] | null;
   has_design?: boolean;
   has_batches?: boolean;
   has_fix_needed?: boolean;
