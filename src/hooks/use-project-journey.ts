@@ -29,7 +29,7 @@ export function useProjectJourney(projectId: string): UseProjectJourneyResult {
     setLoading(true);
     setError(null);
     (async () => {
-      const [projRes, pvRes, batchRes, auditRes] = await Promise.all([
+      const [projRes, pvRes, batchRes, auditRes, intakeRes] = await Promise.all([
         supabase
           .from("projects")
           .select("is_import, github_repo, status")
@@ -50,7 +50,18 @@ export function useProjectJourney(projectId: string): UseProjectJourneyResult {
           .select("id, status, created_at")
           .eq("project_id", projectId)
           .eq("kind", "final_az"),
+        // Latest intake carries the canonical import goals. If this query
+        // fails we surface a truthful error rather than silently assuming
+        // full scope — the journey depends on the real selected goals.
+        supabase
+          .from("intakes")
+          .select("answers, created_at")
+          .eq("project_id", projectId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
       ]);
+
       if (cancelled) return;
       if (projRes.error) {
         setStages(null);
