@@ -610,12 +610,14 @@ export function displayedMaxTotal(scores: Scores | null | undefined): number {
 }
 
 function VerdictView({
-  projectName, verdict, scores, onEnterBoardroom, onRevise,
+  projectName, verdict, scores, onEnterBoardroom, onProceedAnyway, onUsePivot, onRevise,
 }: {
   projectName: string;
   verdict: "pass" | "kill";
   scores: ValidationScores;
   onEnterBoardroom: () => void;
+  onProceedAnyway: () => void;
+  onUsePivot?: () => void;
   onRevise: () => void;
 }) {
   const dims = pickDisplayedDimensions(scores.scores);
