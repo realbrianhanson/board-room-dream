@@ -82,11 +82,19 @@ export function computeBoardroomGate(
     return { kind: "out-of-scope", workflow, nextRoute };
   }
 
-  // Improvements is in scope. Audit is only required when `code_audit` is
-  // ALSO selected — pure improvements-only imports convene immediately.
+  // Improvements is in scope. The board compiles against live code, so
+  // require a linked GitHub repo before anything else — audit itself is
+  // allowed without a repo (paste), but plan is not.
+  if (!inputs.hasRepo) {
+    return { kind: "needs-repo", workflow };
+  }
+
+  // Audit is only required when `code_audit` is ALSO selected — pure
+  // improvements-only imports convene immediately.
   if (workflow.requiresAudit && !inputs.hasSuccessfulAudit) {
     return { kind: "needs-import-audit", message: IMPORT_AUDIT_GATE_MESSAGE };
   }
 
   return { kind: "ready", workflow };
 }
+
