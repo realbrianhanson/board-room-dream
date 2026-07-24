@@ -898,30 +898,21 @@ async function resume(
   navigate: ReturnType<typeof useNavigate>,
 ) {
   const status = project.status;
-    if (project.is_import) {
-    if (!project.github_repo) {
-      navigate({ to: "/audits/$projectId", params: { projectId } });
-      return;
-    }
-    if (!project.has_import_audit) {
-      navigate({ to: "/audits/$projectId", params: { projectId } });
-      return;
-    }
-    if (!project.has_locked_plan) {
-      navigate({ to: "/boardroom/$projectId", params: { projectId } });
-      return;
-    }
-    if (!project.has_design) {
-      navigate({ to: "/design/$projectId", params: { projectId } });
-      return;
-    }
-    if (!project.has_batches) {
-      navigate({ to: "/runway/$projectId", params: { projectId } });
-      return;
-    }
-    navigate({ to: "/runway/$projectId", params: { projectId } });
+  if (project.is_import) {
+    // Modular workflow: derive the ordered next route from the goals the
+    // owner selected at import time. Audit-only ends at the report.
+    const workflow = deriveImportWorkflow(project.goals ?? undefined);
+    const route = nextImportRoute(workflow, {
+      projectId,
+      hasRepo: !!project.github_repo,
+      auditComplete: !!project.has_import_audit,
+      planComplete: !!project.has_locked_plan,
+      designComplete: !!project.has_design,
+    });
+    navigateImportRoute(navigate, projectId, route);
     return;
   }
+
   if (status === "intake" || status === "validated" || status === "killed") {
     const { data } = await supabase
       .from("intakes")
