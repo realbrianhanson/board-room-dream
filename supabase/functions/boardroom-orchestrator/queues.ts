@@ -584,10 +584,11 @@ export async function queueRound4(admin: any, run: any, steps: any[], loop: numb
   // The Chair authored the candidate and does not vote on its own work —
   // consensus is judged by the three independent seats.
   const voters = SEATS.filter((s) => s !== "chair");
+  const scope = await getScopeContract(admin, run);
   const rows = voters.map((seat) => {
     const myR2 = steps.find((x) => x.step_key === `r2_exam_${seat}` && x.status === "completed");
     const myObjections = myR2?.response_json?.objections ?? [];
-    const system = `Round 4 — Scored vote${loop > 0 ? ` (loop ${loop})` : ""}. The Chair synthesized this candidate; as an independent seat you now judge it. Vote on the candidate ${run.kind === "design" ? "design brief" : "plan"} against the founder's intake and your Round-2 objections.
+    const system = withScope(scope, `Round 4 — Scored vote${loop > 0 ? ` (loop ${loop})` : ""}. The Chair synthesized this candidate; as an independent seat you now judge it. Vote on the candidate ${run.kind === "design" ? "design brief" : "plan"} against the founder's intake and your Round-2 objections.
 
 Return ONLY valid JSON matching this shape:
 {
