@@ -671,7 +671,8 @@ Return ONLY valid JSON matching this shape:
 // then a cheap extraction lifts the features list into JSON.
 export async function queueBlueprint(admin: any, run: any, contentMd: string, intake: any) {
   const manual = await loadFieldManual(admin);
-  const system = `Blueprint — you are the Chair drafting the implementation documents for the locked plan. Turn the plan into a precise PRD.
+  const scope = await getScopeContract(admin, run);
+  const system = withScope(scope, `Blueprint — you are the Chair drafting the implementation documents for the locked plan. Turn the plan into a precise PRD.
 
 ${manual}
 
