@@ -46,7 +46,7 @@ describe("buildJourney — imported projects distinguish pre-plan Audit from fin
     expect(stages.find((s) => s.key === "audit")!.state).toBe("current");
   });
 
-  it("imported after ship: Ship done, Audit still gated by pre-plan signal", () => {
+  it("imported after ship: final prompts stage done, Audit still gated by pre-plan signal", () => {
     const stages = buildJourney({
       ...base,
       status: "done",
@@ -57,9 +57,12 @@ describe("buildJourney — imported projects distinguish pre-plan Audit from fin
       all_passed: true,
       has_final_audit: true,
     });
-    expect(stages.find((s) => s.key === "ship")!.state).toBe("done");
+    // Legacy imports (no persisted goals) now render the full modular
+    // journey — the terminal stage is truthfully labeled Prompts, not Ship.
+    expect(stages.find((s) => s.key === "prompts")!.state).toBe("done");
     expect(stages.find((s) => s.key === "audit")!.state).toBe("done");
   });
+
 });
 
 describe("buildJourney — modular imported workflow by goals", () => {
