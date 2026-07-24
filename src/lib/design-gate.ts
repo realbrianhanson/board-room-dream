@@ -74,6 +74,13 @@ export function computeDesignGate(inputs: DesignGateInputs): DesignGateState {
     return { kind: "out-of-scope", workflow, nextRoute };
   }
 
+  // Design compiles against live code — require the linked repo before any
+  // artifact prerequisite checks. Audit itself is allowed without a repo,
+  // but design is not.
+  if (!inputs.hasRepo) {
+    return { kind: "needs-prereq", workflow, missing: "repo", isImport: true };
+  }
+
   if (workflow.requiresAudit && !inputs.hasSuccessfulAudit) {
     return { kind: "needs-prereq", workflow, missing: "audit", isImport: true };
   }
@@ -84,3 +91,4 @@ export function computeDesignGate(inputs: DesignGateInputs): DesignGateState {
 
   return { kind: "ready", workflow };
 }
+
