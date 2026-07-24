@@ -448,8 +448,12 @@ export async function queueRound1(admin: any, run: any) {
 
 export async function queueRound2(admin: any, run: any, steps: any[]) {
   const intake = await loadIntake(admin, run.project_id);
-  const rows = SEATS.map((seat) => {
-    const system = `Round 2 — Cross-examination. You are reviewing the OTHER three seats' drafts. "No objections" is not an option. If you cannot find real flaws you are not looking hard enough.
+  // Round 2 objections can push new scope into the debate; prepend the
+  // owner-selected scope contract once so cross-examination cannot demand
+  // out-of-scope work (e.g. objecting that a design-only brief "lacks
+  // monetization"). Loaded once and reused across all four seat prompts.
+  const scope = await getScopeContract(admin, run);
+  const baseSystem = `Round 2 — Cross-examination. You are reviewing the OTHER three seats' drafts. "No objections" is not an option. If you cannot find real flaws you are not looking hard enough.
 
 Return ONLY valid JSON matching this shape:
 {
@@ -458,6 +462,8 @@ Return ONLY valid JSON matching this shape:
 }
 
 Requirements: at least ONE objection targeting EACH of the three other seats, at least THREE objections total, and at least ONE steal. A steal must name the specific idea you are adopting and why — "good points from everyone" is not a steal.`;
+  const system = withScope(scope, baseSystem);
+  const rows = SEATS.map((seat) => {
     const user = `${intakeBlock(intake)}\n\n${draftsBlock(steps, seat)}\n\nProduce your JSON now.`;
     return {
       run_id: run.id,
@@ -479,6 +485,7 @@ Requirements: at least ONE objection targeting EACH of the three other seats, at
   });
   await queueSteps(admin, run, rows);
 }
+
 
 
 // Round 3 is two-phase: the Chair writes the candidate as FREE MARKDOWN (its
