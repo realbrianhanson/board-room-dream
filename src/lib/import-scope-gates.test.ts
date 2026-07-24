@@ -106,3 +106,39 @@ describe("scopeContractForPrompt", () => {
     expect(c).not.toMatch(/NOT selected/);
   });
 });
+
+describe("evaluateStartRunGate: repo prerequisite (imports compile live code)", () => {
+  it("blocks plan when GitHub repo not linked (improvements-only)", () => {
+    const w = deriveImportWorkflow(["improvements"]);
+    const r = evaluateStartRunGate(w, "plan", st({ hasRepo: false }));
+    expect(r.allowed).toBe(false);
+    if (!r.allowed) {
+      expect(r.nextStep).toBe("repo_setup");
+      expect(r.reason).toMatch(/Link your GitHub repo/);
+    }
+  });
+  it("blocks design when GitHub repo not linked (design-only)", () => {
+    const w = deriveImportWorkflow(["design_review"]);
+    const r = evaluateStartRunGate(w, "design", st({ hasRepo: false }));
+    expect(r.allowed).toBe(false);
+    if (!r.allowed) expect(r.nextStep).toBe("repo_setup");
+  });
+  it("blocks batches when GitHub repo not linked (design-only, design locked)", () => {
+    const w = deriveImportWorkflow(["design_review"]);
+    const r = evaluateStartRunGate(w, "batches", st({ designLocked: true, hasRepo: false }));
+    expect(r.allowed).toBe(false);
+    if (!r.allowed) expect(r.nextStep).toBe("repo_setup");
+  });
+  it("repo missing takes precedence over audit missing for plan (full scope)", () => {
+    const w = deriveImportWorkflow(undefined);
+    const r = evaluateStartRunGate(w, "plan", st({ hasRepo: false }));
+    expect(r.allowed).toBe(false);
+    if (!r.allowed) expect(r.nextStep).toBe("repo_setup");
+  });
+  it("out-of-scope reject wins over missing repo (improvements not selected → plan)", () => {
+    const w = deriveImportWorkflow(["code_audit"]);
+    const r = evaluateStartRunGate(w, "plan", st({ hasRepo: false, auditComplete: true }));
+    expect(r.allowed).toBe(false);
+    if (!r.allowed) expect(r.nextStep).toBeUndefined();
+  });
+});
