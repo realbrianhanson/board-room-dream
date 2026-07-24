@@ -1053,7 +1053,7 @@ Constraints: ${batchRangeText} batches, unique ascending integer batch_no starti
       _is_import: isImport,
 
       messages: [
-        { role: "system", content: system },
+        { role: "system", content: withScope(scope, system) },
         { role: "user", content: user },
       ],
     },
