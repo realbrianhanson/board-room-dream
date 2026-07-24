@@ -383,11 +383,13 @@ export async function queueRound1(admin: any, run: any) {
   const intake = await loadIntake(admin, run.project_id);
   const project = await loadProjectMeta(admin, run.project_id);
   const isImport = !!project?.is_import;
+  const workflow = isImport ? await getImportWorkflow(admin, run) : null;
+  const scope = isImport ? await getScopeContract(admin, run) : "";
   let system: string;
   let userContent: string;
 
   if (run.kind === "design") {
-    const plan = await loadLockedPlan(admin, run.project_id);
+    const plan = workflow && !workflow.requiresPlan ? null : await loadLockedPlan(admin, run.project_id);
     system =
       "Round 1 of the Design Council. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best design direction for this app. You MUST include: concept/mood; palette as specific HSL values; type pairing with specific font names; spacing and shape language; ONE distinctive signature element (a structural design move — non-negotiable, this is the point); and motion rules. Be specific, opinionated, and premium. Avoid generic AI-slop aesthetics.";
     if (isImport) {
@@ -396,7 +398,9 @@ export async function queueRound1(admin: any, run: any) {
       const codeBlock = sample.files.length ? formatFiles(sample.files) : "(no repo files available)";
       const planBlock = plan?.content_md?.trim()
         ? `LOCKED PLAN\n\n${plan.content_md}\n\nPRD\n\n${plan.prd_md ?? "(no PRD)"}`
-        : "LOCKED PLAN\n(none yet — base your direction on the real code above)";
+        : workflow && !workflow.requiresPlan
+          ? `LOCKED PLAN\n(out of scope — the owner selected a Design-only workflow; product scope, features, routes, data model, auth, integrations, and business logic are FROZEN. Elevate the visual system without proposing product or behavior changes.)`
+          : `LOCKED PLAN\n(none yet — base your direction on the real code above)`;
       userContent = `${intakeBlock(intake)}\n\nREPO FILE TREE (top ${sample.fileTree.length})\n${treeBlock}\n\nKEY FILES (frontend-biased sample)\n${codeBlock}\n\n${planBlock}\n\nThis is an existing app — critique the real UI in the code above and propose a design direction that elevates it without a full rebuild. Write your Round 1 design direction now.`;
     } else {
       userContent = `${intakeBlock(intake)}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nWrite your Round 1 design direction now.`;
@@ -416,6 +420,7 @@ export async function queueRound1(admin: any, run: any) {
       "Round 1 of the board's deliberation. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best version of the app plan: concept, target user, core features (MVP-first, ruthlessly cut), the data the app stores, and what you'd cut. Be specific, concise, and opinionated.";
     userContent = `${intakeBlock(intake)}\n\nWrite your Round 1 draft now.`;
   }
+  system = withScope(scope, system);
   const imageParts = run.kind === "design"
     ? await loadScreenshotParts(admin, run.user_id, run.project_id)
     : [];
