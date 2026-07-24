@@ -10,8 +10,10 @@ const st = (over: Partial<StartRunState> = {}): StartRunState => ({
   auditComplete: false,
   planLocked: false,
   designLocked: false,
+  hasRepo: true,
   ...over,
 });
+
 
 describe("evaluateStartRunGate: plan", () => {
   it("blocks plan when improvements not selected (audit-only)", () => {
