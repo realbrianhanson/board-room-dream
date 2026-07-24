@@ -208,14 +208,17 @@ function IntakePage() {
   }
 
   async function next() {
-    // Guard against double-click/double-submit: saving or running already in flight.
-    if (!canProceed || saving || running) return;
+    // Guard against real double-submit of the validate call. The `saving`
+    // flag intentionally does NOT block this handler: the blur-triggered
+    // background save would otherwise swallow the first Continue click.
+    if (!canProceed || running) return;
     if (step < STEPS.length - 1) {
       const result = await persist(answers);
       if (!result.ok) return; // do not advance on save failure
       setStep(step + 1);
       return;
     }
+
     setRunning(true);
     setRunError(null);
     setNoKey(false);
