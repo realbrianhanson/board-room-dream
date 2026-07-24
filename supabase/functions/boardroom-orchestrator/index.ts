@@ -108,7 +108,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-28.batch-supersede-stale.1";
+const BUILD_VERSION = "2026-07-29.import-workflow-gate.r1";
 
 import {
   failRun,
@@ -1091,18 +1091,22 @@ async function finalizeBatches(admin: any, run: any, batchesJson: any[]) {
     // Fall through — treat as if we just inserted the set ourselves.
   }
 
-  // Advance the project only from the canonical pre-build predecessor.
-  // A 'batches' finalization is only valid after locked plan + locked
-  // design, which puts projects.status='locked'. Any other state
-  // (building, auditing, imported, validated, polishing, done, killed)
-  // means a peer worker already advanced the project OR the project
-  // raced further along the lifecycle; either way we must NOT rewind
-  // it. Compare-and-set on status='locked' enforces this narrowly.
-  await admin
+  // Advance the project from the canonical pre-build predecessor. A
+  // 'batches' finalization is valid after locked plan + locked design
+  // (projects.status='locked') OR for imported design-only / imports where
+  // the project sits at 'imported' with no plan/design required by scope.
+  // Compare-and-set on the safe predecessor set enforces "never rewind"
+  // for building/auditing/polishing/done/killed. Surface DB errors into
+  // failRun so a silent completion never masks a persistence failure.
+  const { error: projAdvanceErr } = await admin
     .from("projects")
     .update({ status: "building", current_batch_no: 1 })
     .eq("id", run.project_id)
-    .eq("status", "locked");
+    .in("status", ["locked", "imported"]);
+  if (projAdvanceErr) {
+    await failRun(admin, run, `Failed to advance project to building: ${projAdvanceErr.message ?? String(projAdvanceErr)}`);
+    return;
+  }
 
   // Compare-and-set: only mark completed if the run is still non-terminal.
   // Prevents a losing worker from ever downgrading a peer's terminal write.
@@ -2073,30 +2077,82 @@ async function handleRequest(req: Request): Promise<Response> {
       }
     }
 
-    // Imports require a successful A–Z audit (status IN clean/findings) before
-    // convening the improvement board. Failed/running rows do not count.
-    if (kind === "plan" && project.is_import) {
-      const { data: auditRows } = await admin
+    // Imports: re-derive workflow from persisted intake goals and evaluate
+    // the pure scope gate. The server is the authority — never trust
+    // request-body scope. Non-imports keep their existing gates below.
+    if (project.is_import && (kind === "plan" || kind === "design" || kind === "batches")) {
+      const { deriveImportWorkflow } = await import("../_shared/import-workflow.ts");
+      const { evaluateStartRunGate } = await import("../_shared/import-scope-gates.ts");
+
+      const { data: intake, error: intakeErr } = await admin
+        .from("intakes")
+        .select("answers")
+        .eq("project_id", projectId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (intakeErr) {
+        return j(500, { error: `Could not load intake for scope gate: ${intakeErr.message}` });
+      }
+      const answers = (intake?.answers ?? {}) as Record<string, unknown>;
+      const workflow = deriveImportWorkflow(answers?.goals);
+
+      // Audit completion: successful A–Z audit exists (clean|findings).
+      const { data: auditRows, error: auditErr } = await admin
         .from("audits")
-        .select("id, status")
+        .select("id")
         .eq("project_id", projectId)
         .eq("user_id", userId)
         .eq("kind", "final_az")
         .in("status", ["clean", "findings"])
         .limit(1);
-      if (!auditRows || auditRows.length === 0) {
-        return j(409, { error: "Complete a successful A–Z audit before convening the improvement board." });
-      }
-    }
+      if (auditErr) return j(500, { error: `Could not load audit state: ${auditErr.message}` });
+      const auditComplete = (auditRows?.length ?? 0) > 0;
 
-    if (kind === "design" || kind === "batches") {
-      const locked = await loadLockedPlan(admin, projectId);
-      if (!locked) {
-        return j(400, {
-          error: kind === "design"
-            ? "The board locks a build-safe plan before it debates the look."
-            : "The board locks a build-safe plan before it sequences the build.",
-        });
+      // Locked plan / locked design (build-safe rows).
+      const [planLockedRow, designLockedRow] = await Promise.all([
+        admin
+          .from("plan_versions")
+          .select("id")
+          .eq("project_id", projectId)
+          .eq("kind", "plan")
+          .eq("is_build_safe", true)
+          .limit(1)
+          .maybeSingle(),
+        admin
+          .from("plan_versions")
+          .select("id")
+          .eq("project_id", projectId)
+          .eq("kind", "design")
+          .eq("is_build_safe", true)
+          .limit(1)
+          .maybeSingle(),
+      ]);
+      if (planLockedRow.error) return j(500, { error: `Could not load plan state: ${planLockedRow.error.message}` });
+      if (designLockedRow.error) return j(500, { error: `Could not load design state: ${designLockedRow.error.message}` });
+
+      const decision = evaluateStartRunGate(workflow, kind as "plan" | "design" | "batches", {
+        auditComplete,
+        planLocked: !!planLockedRow.data,
+        designLocked: !!designLockedRow.data,
+      });
+      if (!decision.allowed) {
+        return j(409, { error: decision.reason, next_step: decision.nextStep });
+      }
+    } else {
+      // Legacy / non-import gates are preserved unchanged.
+      if (kind === "plan" && project.is_import) {
+        // Never taken (guarded above); kept for symmetry.
+      }
+      if (kind === "design" || kind === "batches") {
+        const locked = await loadLockedPlan(admin, projectId);
+        if (!locked) {
+          return j(400, {
+            error: kind === "design"
+              ? "The board locks a build-safe plan before it debates the look."
+              : "The board locks a build-safe plan before it sequences the build.",
+          });
+        }
       }
     }
     if (kind === "batches") {

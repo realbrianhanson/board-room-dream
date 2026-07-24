@@ -12,6 +12,8 @@ import {
   type ResolvedContract,
   resolveFinalAuditContract,
 } from "../_shared/audit-contract.ts";
+import { deriveImportWorkflow, type ImportWorkflow } from "../_shared/import-workflow.ts";
+import { scopeContractForPrompt } from "../_shared/import-scope-gates.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -28,7 +30,7 @@ const ORCH_URL = `${SUPABASE_URL}/functions/v1/boardroom-orchestrator`;
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every audit-runner change.
-export const BUILD_VERSION = "2026-07-28.product-strategy.r1";
+export const BUILD_VERSION = "2026-07-29.import-workflow-scope.r1";
 
 function j(status: number, body: any) {
   return new Response(JSON.stringify(body), {
@@ -388,12 +390,14 @@ async function insertAuditSteps(
   isFinal: boolean,
   batchOutcome: string | null,
   fileTree: string[],
+  scopeContract: string | null,
 ) {
-  const contract = isFinal
+  const contractBody = isFinal
     ? finalContract?.mode === "import_current_milestone"
       ? `FINAL A-Z AUDIT (CURRENT MILESTONE) — this is an imported app. Audit today's shipped code against the intake contract and any implemented improvement batches ONLY. Do NOT grade unbuilt future work; there is no locked improvement plan or design brief in scope for this run.`
       : `FINAL A-Z AUDIT — verify the whole app against the plan + PRD.`
     : `BATCH CONTRACT (what this batch was supposed to do):\n\n${batchPrompt}`;
+  const contract = scopeContract ? `${scopeContract}\n\n${contractBody}` : contractBody;
   const outcomeBlock = batchOutcome?.trim()
     ? `\n\nOWNER-REPORTED OUTCOME (what Lovable actually said or did — errors, drift, surprises; investigate every claim):\n${batchOutcome.trim()}`
     : "";
@@ -504,9 +508,11 @@ async function beginAudit(params: {
   source: "github" | "paste";
   pastedCode: string | null;
   budget: number;
+  workflow: ImportWorkflow | null;
 }) {
-  const { admin, userId, project, batchId, kind, loopNo, source, pastedCode, budget } = params;
+  const { admin, userId, project, batchId, kind, loopNo, source, pastedCode, budget, workflow } = params;
   const isFinal = kind === "final_az";
+  const scopeContract = isFinal && project.is_import && workflow ? scopeContractForPrompt(workflow) : null;
 
   // Short-circuit: if this owner already has an active audit run for this
   // project, return it instead of creating a duplicate audit + run pair.
@@ -707,6 +713,7 @@ async function beginAudit(params: {
     isFinal,
     batchOutcome,
     fileTree,
+    scopeContract,
   );
   fireOrchestrator();
   return {
@@ -791,6 +798,7 @@ Deno.serve(async (req) => {
       const res = await beginAudit({
         admin, userId, project, batchId,
         kind: "batch", loopNo, source, pastedCode, budget: 5.0,
+        workflow: null,
       });
       if ("error" in res) return j(400, { error: res.error });
       return j(200, res);
@@ -814,11 +822,10 @@ Deno.serve(async (req) => {
       });
       if (!eligibility.ok) return j(400, { error: eligibility.error });
 
-      // Imported projects require complete strategy context before the A–Z
-      // audit can start. UI enforces the same rule, but the server is the
-      // authority — a client that skips the panel cannot bypass this.
+      // Imported projects: re-derive workflow from persisted intake goals.
+      // The server is the authority — client cannot bypass the scope contract.
+      let workflow: ImportWorkflow | null = null;
       if (project.is_import) {
-        const { validateImportStrategy } = await import("../_shared/import-strategy.ts");
         const { data: intake, error: intakeErr } = await admin
           .from("intakes")
           .select("answers")
@@ -834,20 +841,37 @@ Deno.serve(async (req) => {
             version: BUILD_VERSION,
           });
         }
-        const answers = (intake?.answers ?? {}) as Record<string, string>;
-        const issues = validateImportStrategy(answers);
-        if (issues.length > 0) {
-          const list = issues.map((i) => `${i.field} (${i.reason})`).join(", ");
+        const answers = (intake?.answers ?? {}) as Record<string, unknown>;
+        workflow = deriveImportWorkflow(answers?.goals);
+
+        // Scope gate: audit only runs when code_audit is selected.
+        if (!workflow.requiresAudit) {
           return j(400, {
             error:
-              "Strategy context is incomplete — the A–Z audit needs credible " +
-              "owner context on the six required fields (buyer, acquisition_channel, " +
-              "paid_offer, activation_moment, wow_moment, positioning). " +
-              "Price anchor and upgrade trigger are optional owner decisions; " +
-              `blank is accepted. Fix: ${list}`,
-            missing_strategy_fields: issues,
+              "Code Audit is not in the selected scope. Add the Red-Team Audit goal to run an A–Z audit, or continue to the selected next step.",
             version: BUILD_VERSION,
           });
+        }
+
+        // Strategy context only required when improvements is selected — the
+        // product-improvement board needs buyer/offer/activation/positioning
+        // evidence. Audit-only and audit+design scopes must not be blocked.
+        if (workflow.requiresPlan) {
+          const { validateImportStrategy } = await import("../_shared/import-strategy.ts");
+          const issues = validateImportStrategy(answers as Record<string, string>);
+          if (issues.length > 0) {
+            const list = issues.map((i) => `${i.field} (${i.reason})`).join(", ");
+            return j(400, {
+              error:
+                "Strategy context is incomplete — the product-improvement audit needs credible " +
+                "owner context on the six required fields (buyer, acquisition_channel, " +
+                "paid_offer, activation_moment, wow_moment, positioning). " +
+                "Price anchor and upgrade trigger are optional owner decisions; " +
+                `blank is accepted. Fix: ${list}`,
+              missing_strategy_fields: issues,
+              version: BUILD_VERSION,
+            });
+          }
         }
       }
 
@@ -855,6 +879,7 @@ Deno.serve(async (req) => {
       const res = await beginAudit({
         admin, userId, project, batchId: null,
         kind: "final_az", loopNo: 1, source, pastedCode, budget: 12.0,
+        workflow,
       });
       if ("error" in res) return j(400, { error: res.error });
       return j(200, res);
