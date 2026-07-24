@@ -79,8 +79,14 @@ export function useProjectJourney(projectId: string): UseProjectJourneyResult {
         return;
       }
       // A failed secondary query is a truthful error, not "loading forever"
-      // and not a false "everything upcoming".
-      const firstErr = pvRes.error || batchRes.error || auditRes.error;
+      // and not a false "everything upcoming". Intake failure is truthful
+      // for imports (goals drive scope); for greenfield projects it's
+      // tolerated because goals do not shape the journey.
+      const firstErr =
+        pvRes.error ||
+        batchRes.error ||
+        auditRes.error ||
+        (proj.is_import ? intakeRes.error : null);
       if (firstErr) {
         setStages(null);
         setError(firstErr.message || "Failed to load project journey");
@@ -99,6 +105,11 @@ export function useProjectJourney(projectId: string): UseProjectJourneyResult {
         status: string;
         created_at: string;
       }>;
+      const intakeRow = (intakeRes.data ?? null) as { answers?: unknown } | null;
+      const rawGoals =
+        intakeRow && intakeRow.answers && typeof intakeRow.answers === "object"
+          ? (intakeRow.answers as Record<string, unknown>).goals
+          : undefined;
       const planLocked = pvs.find((p) => p.kind === "plan");
       const planLockedAt = planLocked ? parseTimestamp(planLocked.locked_at) : null;
       const { has_import_audit, has_final_audit } = classifyAudits({
@@ -110,6 +121,9 @@ export function useProjectJourney(projectId: string): UseProjectJourneyResult {
         is_import: !!proj.is_import,
         status: proj.status ?? "",
         github_repo: proj.github_repo ?? null,
+        // Legacy imports without an intake row fall through as undefined,
+        // which `deriveImportWorkflow` treats as the full workflow.
+        goals: Array.isArray(rawGoals) ? (rawGoals as string[]) : undefined,
         has_locked_plan: !!planLocked,
         has_design: pvs.some((p) => p.kind === "design"),
         has_batches: batches.length > 0,
@@ -119,6 +133,7 @@ export function useProjectJourney(projectId: string): UseProjectJourneyResult {
         has_import_audit,
         has_final_audit,
       };
+
       setStages(buildJourney(flags));
       setError(null);
       setLoading(false);
