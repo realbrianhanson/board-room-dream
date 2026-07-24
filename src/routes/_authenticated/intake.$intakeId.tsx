@@ -638,11 +638,12 @@ export function displayedMaxTotal(scores: Scores | null | undefined): number {
 }
 
 function VerdictView({
-  projectName, verdict, scores, onEnterBoardroom, onProceedAnyway, onUsePivot, pivoting, onRevise,
+  projectName, verdict, scores, originalIdea, onEnterBoardroom, onProceedAnyway, onUsePivot, pivoting, onRevise,
 }: {
   projectName: string;
   verdict: "pass" | "kill";
   scores: ValidationScores;
+  originalIdea?: string;
   onEnterBoardroom: () => void;
   onProceedAnyway: () => void;
   onUsePivot?: () => void;
@@ -665,12 +666,20 @@ function VerdictView({
           : "Killing fast is a win — here's the pivot the board suggests:"}
       </p>
 
+      {verdict === "kill" && originalIdea && (
+        <div className="mt-6 rounded-xl border border-border bg-surface-2/40 p-5">
+          <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Your original idea</p>
+          <p className="mt-2 text-base text-foreground">{originalIdea}</p>
+        </div>
+      )}
+
       {verdict === "kill" && scores.pivot && (
-        <div className="mt-6 rounded-xl border border-[hsl(8_60%_45%/0.4)] bg-[hsl(8_60%_45%/0.08)] p-5">
+        <div className="mt-4 rounded-xl border border-[hsl(8_60%_45%/0.4)] bg-[hsl(8_60%_45%/0.08)] p-5">
           <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(8_60%_65%)]">Suggested pivot</p>
           <p className="mt-2 text-base text-foreground">{scores.pivot}</p>
         </div>
       )}
+
 
       <div className="mt-10 space-y-5">
         {dims.map((key) => {
