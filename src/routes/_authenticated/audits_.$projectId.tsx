@@ -115,13 +115,22 @@ function AuditCenterPage() {
 
   const load = useCallback(async () => {
     setLoadError(null);
-    const [pr, ar, br, userData] = await Promise.all([
+    const [pr, ar, br, userData, intakeRes] = await Promise.all([
       supabase.from("projects").select("user_id, name, is_import, github_repo").eq("id", projectId).maybeSingle(),
       supabase.from("audits").select("*").eq("project_id", projectId).order("created_at", { ascending: false }),
       supabase.from("batches").select("id, batch_no, title, status").eq("project_id", projectId).order("batch_no", { ascending: true }),
       supabase.auth.getUser(),
+      // Latest intake carries the persisted goals. Missing intake row →
+      // null → deriveImportWorkflow falls back to full workflow.
+      supabase
+        .from("intakes")
+        .select("answers, created_at")
+        .eq("project_id", projectId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
     ]);
-    const firstErr = pr.error?.message ?? ar.error?.message ?? br.error?.message ?? null;
+    const firstErr = pr.error?.message ?? ar.error?.message ?? br.error?.message ?? intakeRes.error?.message ?? null;
     if (firstErr) {
       setLoadError(firstErr);
       setLoading(false);
@@ -135,6 +144,19 @@ function AuditCenterPage() {
     setIsImport(!!proj?.is_import);
     setGhRepo(proj?.github_repo ?? null);
     setIsOwner(!!proj?.user_id && proj.user_id === userData.data?.user?.id);
+    const answers = (intakeRes.data?.answers ?? null) as Record<string, unknown> | null;
+    const rawGoals = answers && typeof answers === "object" ? answers.goals : null;
+    if (Array.isArray(rawGoals)) {
+      setGoals(
+        rawGoals.filter(
+          (v): v is ImportGoal =>
+            typeof v === "string" && (IMPORT_GOALS as readonly string[]).includes(v),
+        ),
+      );
+    } else {
+      setGoals(null);
+    }
+
     const auditRows = (au ?? []) as Audit[];
     setAudits(auditRows);
     setBatches((bs ?? []) as Batch[]);
