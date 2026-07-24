@@ -822,11 +822,10 @@ Deno.serve(async (req) => {
       });
       if (!eligibility.ok) return j(400, { error: eligibility.error });
 
-      // Imported projects require complete strategy context before the A–Z
-      // audit can start. UI enforces the same rule, but the server is the
-      // authority — a client that skips the panel cannot bypass this.
+      // Imported projects: re-derive workflow from persisted intake goals.
+      // The server is the authority — client cannot bypass the scope contract.
+      let workflow: ImportWorkflow | null = null;
       if (project.is_import) {
-        const { validateImportStrategy } = await import("../_shared/import-strategy.ts");
         const { data: intake, error: intakeErr } = await admin
           .from("intakes")
           .select("answers")
@@ -842,20 +841,37 @@ Deno.serve(async (req) => {
             version: BUILD_VERSION,
           });
         }
-        const answers = (intake?.answers ?? {}) as Record<string, string>;
-        const issues = validateImportStrategy(answers);
-        if (issues.length > 0) {
-          const list = issues.map((i) => `${i.field} (${i.reason})`).join(", ");
+        const answers = (intake?.answers ?? {}) as Record<string, unknown>;
+        workflow = deriveImportWorkflow(answers?.goals);
+
+        // Scope gate: audit only runs when code_audit is selected.
+        if (!workflow.requiresAudit) {
           return j(400, {
             error:
-              "Strategy context is incomplete — the A–Z audit needs credible " +
-              "owner context on the six required fields (buyer, acquisition_channel, " +
-              "paid_offer, activation_moment, wow_moment, positioning). " +
-              "Price anchor and upgrade trigger are optional owner decisions; " +
-              `blank is accepted. Fix: ${list}`,
-            missing_strategy_fields: issues,
+              "Code Audit is not in the selected scope. Add the Red-Team Audit goal to run an A–Z audit, or continue to the selected next step.",
             version: BUILD_VERSION,
           });
+        }
+
+        // Strategy context only required when improvements is selected — the
+        // product-improvement board needs buyer/offer/activation/positioning
+        // evidence. Audit-only and audit+design scopes must not be blocked.
+        if (workflow.requiresPlan) {
+          const { validateImportStrategy } = await import("../_shared/import-strategy.ts");
+          const issues = validateImportStrategy(answers as Record<string, string>);
+          if (issues.length > 0) {
+            const list = issues.map((i) => `${i.field} (${i.reason})`).join(", ");
+            return j(400, {
+              error:
+                "Strategy context is incomplete — the product-improvement audit needs credible " +
+                "owner context on the six required fields (buyer, acquisition_channel, " +
+                "paid_offer, activation_moment, wow_moment, positioning). " +
+                "Price anchor and upgrade trigger are optional owner decisions; " +
+                `blank is accepted. Fix: ${list}`,
+              missing_strategy_fields: issues,
+              version: BUILD_VERSION,
+            });
+          }
         }
       }
 
@@ -863,6 +879,7 @@ Deno.serve(async (req) => {
       const res = await beginAudit({
         admin, userId, project, batchId: null,
         kind: "final_az", loopNo: 1, source, pastedCode, budget: 12.0,
+        workflow,
       });
       if ("error" in res) return j(400, { error: res.error });
       return j(200, res);
