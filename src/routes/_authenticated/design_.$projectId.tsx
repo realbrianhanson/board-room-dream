@@ -46,7 +46,10 @@ function DesignStudioPage() {
 
 
   const loadLocked = useCallback(async () => {
-    const { data } = await supabase
+    // Surface Supabase errors truthfully — a silent `null` would
+    // recreate the "no locked design" empty state on a transient
+    // failure and hide the retry affordance from the owner.
+    const { data, error } = await supabase
       .from("plan_versions")
       .select("id, version, content_md, is_chair_ruled, locked_at, dissent_ledger")
       .eq("project_id", projectId)
@@ -55,8 +58,13 @@ function DesignStudioPage() {
       .order("version", { ascending: false })
       .limit(1)
       .maybeSingle();
+    if (error) {
+      setLoadError(error.message);
+      return;
+    }
     setLocked((data as PlanVersion) ?? null);
   }, [projectId]);
+
 
   const load = useCallback(async () => {
     setLoadError(null);
