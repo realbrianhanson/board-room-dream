@@ -12,6 +12,8 @@ import {
   type ResolvedContract,
   resolveFinalAuditContract,
 } from "../_shared/audit-contract.ts";
+import { deriveImportWorkflow, type ImportWorkflow } from "../_shared/import-workflow.ts";
+import { scopeContractForPrompt } from "../_shared/import-scope-gates.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
