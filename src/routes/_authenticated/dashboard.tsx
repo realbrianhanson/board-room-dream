@@ -72,10 +72,28 @@ const NEXT_ACTION: Record<string, string> = {
 
 function nextActionLabel(p: Project): string {
   if (p.is_import) {
-    if (!p.github_repo) return "Link your repo so the board can read the code";
-    // Imports gate the Boardroom on the pre-plan A–Z audit specifically.
-    if (!p.has_import_audit) return "Run the A–Z audit";
-    if (!p.has_locked_plan) return "Convene the improvement board";
+    const workflow = deriveImportWorkflow(p.goals ?? undefined);
+    const route = nextImportRoute(workflow, {
+      projectId: p.id,
+      hasRepo: !!p.github_repo,
+      auditComplete: !!p.has_import_audit,
+      planComplete: !!p.has_locked_plan,
+      designComplete: !!p.has_design,
+    });
+    switch (route.kind) {
+      case "repo_setup":
+        return "Link your repo so the board can read the code";
+      case "audit":
+        return "Run the A–Z audit";
+      case "plan":
+        return "Convene the improvement board";
+      case "design":
+        return "Convene the Design Council";
+      case "runway":
+        return p.has_batches ? "Continue the Runway" : "Generate your build sequence";
+      case "done":
+        return workflow.auditOnly ? "View the audit report" : "All prompts ready";
+    }
   }
   if (p.status === "locked" && !p.has_design) return "Convene the Design Council";
   if (p.status === "locked" && p.has_design && !p.has_batches) return "Generate your build sequence";
@@ -86,6 +104,36 @@ function nextActionLabel(p: Project): string {
   if (p.status === "building") return "Continue the Runway";
   return NEXT_ACTION[p.status] ?? "Open";
 }
+
+/**
+ * Route the imported project resume action into TanStack's typed navigate,
+ * mapping the pure helper's `kind` back onto the file-route it belongs to.
+ * Do NOT navigate via the raw path string — TanStack rejects arbitrary
+ * strings and we lose typed params.
+ */
+function navigateImportRoute(
+  navigate: ReturnType<typeof useNavigate>,
+  projectId: string,
+  route: ImportNextRoute,
+) {
+  switch (route.kind) {
+    case "repo_setup":
+    case "audit":
+    case "done":
+      navigate({ to: "/audits/$projectId", params: { projectId } });
+      return;
+    case "plan":
+      navigate({ to: "/boardroom/$projectId", params: { projectId } });
+      return;
+    case "design":
+      navigate({ to: "/design/$projectId", params: { projectId } });
+      return;
+    case "runway":
+      navigate({ to: "/runway/$projectId", params: { projectId } });
+      return;
+  }
+}
+
 
 
 const STATUS_COLOR: Record<string, string> = {
