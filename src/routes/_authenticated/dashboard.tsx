@@ -738,20 +738,15 @@ function DashboardPage() {
           <details className="rounded-lg border border-border bg-surface-2/40 p-4">
             <summary className="cursor-pointer list-none">
               <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
-                Strategy context — 6 required + 2 optional owner decisions
+                Strategy context {impGoals.includes("improvements") ? "— required for improvements" : "— optional for this scope"}
               </span>
               <p className="mt-2 text-xs text-muted-foreground">
-                You can open the project now and fill these in from the Audit
-                Center. Six required fields (buyer, acquisition channel, paid
-                offer, activation moment, wow moment, positioning) must carry
-                credible owner context before the A–Z audit runs. Price anchor
-                and upgrade trigger are optional owner monetization decisions —
-                leave them blank to defer, or tap
-                <span className="mx-1 font-mono text-foreground/80">Board should recommend</span>
-                if you'd rather have the board propose one. Blanks stay blank
-                and the board never invents a price or upgrade path.
+                {impGoals.includes("improvements")
+                  ? "You can open the project now and fill these in from the Audit Center. Six required fields (buyer, acquisition channel, paid offer, activation moment, wow moment, positioning) must carry credible owner context before the improvement analysis runs. Price anchor and upgrade trigger are optional owner monetization decisions — leave blank to defer or tap Board should recommend. Blanks stay blank and the board never invents a price or upgrade path."
+                  : "Strategy fields are optional for a code audit or design review — add them from the Audit Center any time. They only become required if you later add Product Improvements to the scope."}
               </p>
             </summary>
+
             <div className="mt-4 space-y-4">
               <ImportStrategyField
                 label="Buyer — who uses and pays"
