@@ -61,3 +61,60 @@ describe("buildJourney — imported projects distinguish pre-plan Audit from fin
     expect(stages.find((s) => s.key === "audit")!.state).toBe("done");
   });
 });
+
+describe("buildJourney — modular imported workflow by goals", () => {
+  const bare = { is_import: true, status: "imported", github_repo: "u/r" as string | null };
+
+  it("audit-only: [setup, report]; no Plan/Design/Prompts", () => {
+    const s = buildJourney({ ...bare, goals: ["code_audit"] });
+    expect(s.map((x) => x.key)).toEqual(["setup", "report"]);
+    expect(s.find((x) => x.key === "report")!.state).toBe("current");
+  });
+
+  it("audit-only: report done after pre-plan audit", () => {
+    const s = buildJourney({ ...bare, goals: ["code_audit"], has_import_audit: true });
+    expect(s.find((x) => x.key === "report")!.state).toBe("done");
+  });
+
+  it("design-only: [setup, design, prompts] — skips audit + plan", () => {
+    const s = buildJourney({ ...bare, goals: ["design_review"] });
+    expect(s.map((x) => x.key)).toEqual(["setup", "design", "prompts"]);
+    expect(s.find((x) => x.key === "design")!.state).toBe("current");
+  });
+
+  it("improvements-only: [setup, plan, prompts] — skips audit + design", () => {
+    const s = buildJourney({ ...bare, goals: ["improvements"] });
+    expect(s.map((x) => x.key)).toEqual(["setup", "plan", "prompts"]);
+  });
+
+  it("two-goal custom (audit + design): [setup, audit, design, prompts]", () => {
+    const s = buildJourney({ ...bare, goals: ["code_audit", "design_review"] });
+    expect(s.map((x) => x.key)).toEqual(["setup", "audit", "design", "prompts"]);
+  });
+
+  it("full: [setup, audit, plan, design, prompts]; prompts labeled truthfully (not Build/Ship)", () => {
+    const s = buildJourney({
+      ...bare,
+      goals: ["code_audit", "design_review", "improvements"],
+    });
+    expect(s.map((x) => x.key)).toEqual(["setup", "audit", "plan", "design", "prompts"]);
+    expect(s.map((x) => x.label)).not.toContain("Build");
+    expect(s.map((x) => x.label)).not.toContain("Ship");
+  });
+
+  it("legacy imported (missing goals) falls back to full modular journey", () => {
+    const s = buildJourney({ ...bare });
+    expect(s.map((x) => x.key)).toEqual(["setup", "audit", "plan", "design", "prompts"]);
+  });
+
+  it("prompts stage completes when batches exist", () => {
+    const s = buildJourney({
+      ...bare,
+      goals: ["improvements"],
+      has_locked_plan: true,
+      has_batches: true,
+    });
+    expect(s.find((x) => x.key === "prompts")!.state).toBe("done");
+  });
+});
+
