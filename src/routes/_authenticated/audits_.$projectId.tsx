@@ -92,10 +92,25 @@ function AuditCenterPage() {
   const [showRetry, setShowRetry] = useState(false);
   const [strategyValidity, setStrategyValidity] = useState<StrategyPanelValidity | null>(null);
   const strategyPanelRef = useRef<StrategyPanelHandle | null>(null);
+  // Persisted goals from the latest intake for this project. `null` means
+  // "no intake row" — deriveImportWorkflow (inside computeAuditScope) then
+  // falls back to the legacy full workflow.
+  const [goals, setGoals] = useState<ImportGoal[] | null>(null);
 
-  // Only import projects require the strategy-context gate; greenfield
-  // projects never see the panel and are unblocked by default.
-  const strategyGateBlocked = isImport && (!strategyValidity || !strategyValidity.valid);
+  // Derived scope. Strategy gate is only required when `improvements` is
+  // selected — audit-only and audit+design must NOT be blocked by it.
+  const auditScope = computeAuditScope({
+    loading: false,
+    error: null,
+    isImport,
+    goals,
+    projectId,
+  });
+  const strategyRequired =
+    auditScope.kind === "import-with-audit" && auditScope.requiresStrategy;
+  const strategyGateBlocked =
+    strategyRequired && (!strategyValidity || !strategyValidity.valid);
+
 
 
   const load = useCallback(async () => {
