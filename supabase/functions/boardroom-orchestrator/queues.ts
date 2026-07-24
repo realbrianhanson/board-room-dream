@@ -688,7 +688,7 @@ Write a full markdown PRD with these exact H2 sections in this exact order:
 
 Every section header must appear exactly as written. Be specific: name concrete tables, columns, page routes, and edge functions. Under ## Features, one bullet per feature: **name** (mvp|later) — one-sentence description.
 
-Respond with the markdown document ONLY — no JSON, no preamble.`;
+Respond with the markdown document ONLY — no JSON, no preamble.`);
   const user = `${intakeBlock(intake)}\n\nLOCKED PLAN\n\n${contentMd}\n\nWrite the PRD now.`;
   await queueSteps(admin, run, {
     run_id: run.id,
