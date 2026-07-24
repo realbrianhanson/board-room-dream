@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Plus, ArrowRight, Lightbulb, Package, Trash2 } from "lucide-react";
+import { Plus, ArrowRight, Lightbulb, Package, Trash2, Check } from "lucide-react";
 import { ProjectJourney } from "@/components/project-journey";
 import { buildJourney } from "@/lib/project-journey";
 import { classifyAudits, parseTimestamp } from "@/lib/audit-classification";
@@ -16,8 +16,16 @@ import {
   type ImportStrategyInput,
   type StrategyField,
 } from "@/lib/import-strategy";
+import {
+  deriveImportWorkflow,
+  nextImportRoute,
+  IMPORT_GOALS,
+  type ImportGoal,
+  type ImportNextRoute,
+} from "@/lib/import-workflow";
 import { initialModeFromSearch } from "@/lib/dashboard-search";
 import { DeleteProjectDialog } from "@/components/delete-project-dialog";
+
 
 
 
@@ -38,6 +46,7 @@ type Project = {
   created_at: string;
   is_import?: boolean;
   github_repo?: string | null;
+  goals?: readonly ImportGoal[] | null;
   has_design?: boolean;
   has_batches?: boolean;
   has_fix_needed?: boolean;
@@ -63,10 +72,28 @@ const NEXT_ACTION: Record<string, string> = {
 
 function nextActionLabel(p: Project): string {
   if (p.is_import) {
-    if (!p.github_repo) return "Link your repo so the board can read the code";
-    // Imports gate the Boardroom on the pre-plan A–Z audit specifically.
-    if (!p.has_import_audit) return "Run the A–Z audit";
-    if (!p.has_locked_plan) return "Convene the improvement board";
+    const workflow = deriveImportWorkflow(p.goals ?? undefined);
+    const route = nextImportRoute(workflow, {
+      projectId: p.id,
+      hasRepo: !!p.github_repo,
+      auditComplete: !!p.has_import_audit,
+      planComplete: !!p.has_locked_plan,
+      designComplete: !!p.has_design,
+    });
+    switch (route.kind) {
+      case "repo_setup":
+        return "Link your repo so the board can read the code";
+      case "audit":
+        return "Run the A–Z audit";
+      case "plan":
+        return "Convene the improvement board";
+      case "design":
+        return "Convene the Design Council";
+      case "runway":
+        return p.has_batches ? "Continue the Runway" : "Generate your build sequence";
+      case "done":
+        return workflow.auditOnly ? "View the audit report" : "All prompts ready";
+    }
   }
   if (p.status === "locked" && !p.has_design) return "Convene the Design Council";
   if (p.status === "locked" && p.has_design && !p.has_batches) return "Generate your build sequence";
@@ -77,6 +104,36 @@ function nextActionLabel(p: Project): string {
   if (p.status === "building") return "Continue the Runway";
   return NEXT_ACTION[p.status] ?? "Open";
 }
+
+/**
+ * Route the imported project resume action into TanStack's typed navigate,
+ * mapping the pure helper's `kind` back onto the file-route it belongs to.
+ * Do NOT navigate via the raw path string — TanStack rejects arbitrary
+ * strings and we lose typed params.
+ */
+function navigateImportRoute(
+  navigate: ReturnType<typeof useNavigate>,
+  projectId: string,
+  route: ImportNextRoute,
+) {
+  switch (route.kind) {
+    case "repo_setup":
+    case "audit":
+    case "done":
+      navigate({ to: "/audits/$projectId", params: { projectId } });
+      return;
+    case "plan":
+      navigate({ to: "/boardroom/$projectId", params: { projectId } });
+      return;
+    case "design":
+      navigate({ to: "/design/$projectId", params: { projectId } });
+      return;
+    case "runway":
+      navigate({ to: "/runway/$projectId", params: { projectId } });
+      return;
+  }
+}
+
 
 
 const STATUS_COLOR: Record<string, string> = {
@@ -130,11 +187,28 @@ function MiniRing({ status }: { status: string }) {
 }
 
 type NewMode = null | "chooser" | "idea" | "import";
-const IMPORT_GOAL_OPTIONS = [
-  { value: "code_audit", label: "Code audit" },
-  { value: "design_review", label: "Design review" },
-  { value: "improvements", label: "Improvements & missing features" },
+const IMPORT_GOAL_CARDS: ReadonlyArray<{
+  value: ImportGoal;
+  title: string;
+  description: string;
+}> = [
+  {
+    value: "code_audit",
+    title: "Red-Team Audit",
+    description: "Evidence-backed report. Add another goal if you also want build prompts.",
+  },
+  {
+    value: "design_review",
+    title: "Design Upgrade",
+    description: "Design brief and design-only Lovable prompts. Behavior stays intact.",
+  },
+  {
+    value: "improvements",
+    title: "Product Improvements",
+    description: "Improvement plan and Lovable prompts. Existing visual system stays intact.",
+  },
 ] as const;
+
 
 function DashboardPage() {
   const navigate = useNavigate();
@@ -162,7 +236,7 @@ function DashboardPage() {
   const [impName, setImpName] = useState("");
   const [impDescription, setImpDescription] = useState("");
   const [impUrl, setImpUrl] = useState("");
-  const [impGoals, setImpGoals] = useState<string[]>(["code_audit"]);
+  const [impGoals, setImpGoals] = useState<ImportGoal[]>(["code_audit"]);
   // "Existing app" form — optional strategy
   const [impBuyer, setImpBuyer] = useState("");
   const [impAcquisitionChannel, setImpAcquisitionChannel] = useState("");
@@ -212,20 +286,46 @@ function DashboardPage() {
     const allPassedSet = new Set<string>();
     const importAuditSet = new Set<string>();
     const finalAuditSet = new Set<string>();
+    const goalsByProject = new Map<string, ImportGoal[]>();
     if (ids.length) {
-      const [pvsRes, bsRes, auRes] = await Promise.all([
+      const importIds = rows.filter((r) => r.is_import).map((r) => r.id);
+      // One batched intake query for every imported project — never per-row
+      // N+1. Latest-per-project is picked client-side from an ordered result.
+      const intakePromise = importIds.length
+        ? supabase
+            .from("intakes")
+            .select("project_id, answers, created_at")
+            .in("project_id", importIds)
+            .order("created_at", { ascending: false })
+        : Promise.resolve({ data: [], error: null } as { data: Array<{ project_id: string; answers: unknown; created_at: string }>; error: null });
+      const [pvsRes, bsRes, auRes, intakeRes] = await Promise.all([
         supabase.from("plan_versions").select("project_id, kind, locked_at").in("project_id", ids).eq("is_build_safe", true),
         supabase.from("batches").select("project_id, batch_no, status, built_at, sent_at, created_at").in("project_id", ids),
         supabase.from("audits").select("project_id, kind, status, created_at").in("project_id", ids).eq("kind", "final_az").in("status", ["clean", "findings"]),
+        intakePromise,
       ]);
       // Secondary query failure MUST surface as a load error — silently
       // computing all-false stages here is what recreated the wrong
-      // "shipped" journey. Bail out and let the user retry.
-      if (pvsRes.error || bsRes.error || auRes.error) {
-        const msg = pvsRes.error?.message ?? bsRes.error?.message ?? auRes.error?.message ?? "Failed to load project stages";
+      // "shipped" journey. Bail out and let the user retry. Intake failure
+      // is truthful for imports (goals drive scope/journey/resume routing).
+      const intakeErr = importIds.length ? (intakeRes as { error: { message: string } | null }).error : null;
+      if (pvsRes.error || bsRes.error || auRes.error || intakeErr) {
+        const msg = pvsRes.error?.message ?? bsRes.error?.message ?? auRes.error?.message ?? intakeErr?.message ?? "Failed to load project stages";
         toast.error(msg);
         setLoadError(msg);
         return;
+      }
+      // Latest intake wins — result is ordered created_at desc.
+      for (const r of ((intakeRes as { data: Array<{ project_id: string; answers: unknown }> }).data ?? [])) {
+        if (goalsByProject.has(r.project_id)) continue;
+        const answers = r.answers && typeof r.answers === "object" ? (r.answers as Record<string, unknown>) : {};
+        const raw = answers.goals;
+        goalsByProject.set(
+          r.project_id,
+          Array.isArray(raw)
+            ? (raw.filter((v) => typeof v === "string" && (IMPORT_GOALS as readonly string[]).includes(v)) as ImportGoal[])
+            : [],
+        );
       }
       const planLockedAt = new Map<string, number | null>();
       for (const r of (pvsRes.data ?? []) as Array<{ project_id: string; kind: string; locked_at: string }>) {
@@ -296,9 +396,13 @@ function DashboardPage() {
         all_passed: allPassedSet.has(r.id),
         has_import_audit: importAuditSet.has(r.id),
         has_final_audit: finalAuditSet.has(r.id),
+        // Undefined (not empty) for legacy imports without an intake row so
+        // `deriveImportWorkflow` falls back to the full workflow.
+        goals: r.is_import ? goalsByProject.get(r.id) ?? undefined : undefined,
       }) as Project),
     );
   }
+
 
 
   useEffect(() => {
@@ -402,14 +506,33 @@ function DashboardPage() {
         },
       });
       if (iErr) throw iErr;
-      toast.success(
-        "Project opened. Fill in strategy context and link GitHub in the Audit Center — the A–Z audit requires credible owner context on the six required strategy fields. Price and upgrade trigger are optional owner decisions.",
-      );
+      // Scope-aware toast — never claim the A–Z audit is required when the
+      // owner only asked for a design review or product improvements.
+      const scopedWorkflow = deriveImportWorkflow(impGoals);
+      if (scopedWorkflow.auditOnly) {
+        toast.success("Project opened. Link GitHub in the Audit Center — the A–Z audit reads your repo directly.");
+      } else if (scopedWorkflow.requiresPlan) {
+        toast.success(
+          "Project opened. Fill in the strategy context and link GitHub in the Audit Center — the improvement analysis needs credible owner context on the six required strategy fields.",
+        );
+      } else {
+        toast.success(
+          "Project opened. Link GitHub in the Audit Center. Strategy context is optional for this scope — add it any time from the Audit Center.",
+        );
+      }
 
       const newProjectId = proj.id;
+      const firstRoute = nextImportRoute(scopedWorkflow, {
+        projectId: newProjectId,
+        hasRepo: false,
+        auditComplete: false,
+        planComplete: false,
+        designComplete: false,
+      });
       resetForms();
       await load();
-      navigate({ to: "/audits/$projectId", params: { projectId: newProjectId } });
+      navigateImportRoute(navigate, newProjectId, firstRoute);
+
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -564,50 +687,96 @@ function DashboardPage() {
             />
           </div>
           <div>
-            <label className="mb-2 block font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
-              What do you want from the board?
-            </label>
-            <div className="flex flex-wrap gap-2">
-              {IMPORT_GOAL_OPTIONS.map((g) => {
-                const on = impGoals.includes(g.value);
+            <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+              <label
+                id="import-goals-label"
+                className="block font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground"
+              >
+                What do you want from the board?
+              </label>
+              <div className="flex items-center gap-3">
+                <span
+                  className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground"
+                  aria-live="polite"
+                >
+                  {impGoals.length === IMPORT_GOALS.length
+                    ? "Full App Blueprint"
+                    : "Custom scope"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setImpGoals([...IMPORT_GOALS])}
+                  disabled={impGoals.length === IMPORT_GOALS.length}
+                  className="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-[11px] font-medium text-foreground transition-colors hover:border-primary/50 disabled:opacity-50"
+                >
+                  Full App Blueprint
+                </button>
+              </div>
+            </div>
+            <div role="group" aria-labelledby="import-goals-label" className="grid gap-2 sm:grid-cols-3">
+              {IMPORT_GOAL_CARDS.map((card) => {
+                const on = impGoals.includes(card.value);
+                const isLastSelected = on && impGoals.length === 1;
                 return (
                   <button
-                    key={g.value}
+                    key={card.value}
                     type="button"
-                    onClick={() =>
+                    role="checkbox"
+                    aria-checked={on}
+                    aria-pressed={on}
+                    aria-disabled={isLastSelected}
+                    title={isLastSelected ? "At least one goal is required" : undefined}
+                    onClick={() => {
+                      if (isLastSelected) {
+                        toast.message("Keep at least one goal — the board needs a job to do.");
+                        return;
+                      }
                       setImpGoals((prev) =>
-                        prev.includes(g.value) ? prev.filter((v) => v !== g.value) : [...prev, g.value],
-                      )
-                    }
-                    className={`rounded-md border px-3 py-1.5 text-xs transition-colors ${
+                        prev.includes(card.value)
+                          ? prev.filter((v) => v !== card.value)
+                          : [...prev, card.value],
+                      );
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === " " || e.key === "Enter") {
+                        e.preventDefault();
+                        (e.currentTarget as HTMLButtonElement).click();
+                      }
+                    }}
+                    className={`group relative flex h-full flex-col items-start gap-2 rounded-xl border p-4 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 ${
                       on
-                        ? "border-primary/60 bg-primary/15 text-foreground"
+                        ? "border-primary/60 bg-primary/10 text-foreground"
                         : "border-border bg-surface-2 text-muted-foreground hover:border-primary/40 hover:text-foreground"
                     }`}
                   >
-                    {g.label}
+                    <span
+                      aria-hidden
+                      className={`flex h-5 w-5 items-center justify-center rounded border transition-colors ${
+                        on ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface-1"
+                      }`}
+                    >
+                      {on && <Check className="h-3.5 w-3.5" />}
+                    </span>
+                    <span className="font-display text-sm text-foreground">{card.title}</span>
+                    <span className="text-xs leading-relaxed">{card.description}</span>
                   </button>
                 );
               })}
             </div>
           </div>
+
           <details className="rounded-lg border border-border bg-surface-2/40 p-4">
             <summary className="cursor-pointer list-none">
               <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
-                Strategy context — 6 required + 2 optional owner decisions
+                Strategy context {impGoals.includes("improvements") ? "— required for improvements" : "— optional for this scope"}
               </span>
               <p className="mt-2 text-xs text-muted-foreground">
-                You can open the project now and fill these in from the Audit
-                Center. Six required fields (buyer, acquisition channel, paid
-                offer, activation moment, wow moment, positioning) must carry
-                credible owner context before the A–Z audit runs. Price anchor
-                and upgrade trigger are optional owner monetization decisions —
-                leave them blank to defer, or tap
-                <span className="mx-1 font-mono text-foreground/80">Board should recommend</span>
-                if you'd rather have the board propose one. Blanks stay blank
-                and the board never invents a price or upgrade path.
+                {impGoals.includes("improvements")
+                  ? "You can open the project now and fill these in from the Audit Center. Six required fields (buyer, acquisition channel, paid offer, activation moment, wow moment, positioning) must carry credible owner context before the improvement analysis runs. Price anchor and upgrade trigger are optional owner monetization decisions — leave blank to defer or tap Board should recommend. Blanks stay blank and the board never invents a price or upgrade path."
+                  : "Strategy fields are optional for a code audit or design review — add them from the Audit Center any time. They only become required if you later add Product Improvements to the scope."}
               </p>
             </summary>
+
             <div className="mt-4 space-y-4">
               <ImportStrategyField
                 label="Buyer — who uses and pays"
@@ -663,12 +832,12 @@ function DashboardPage() {
               />
             </div>
           </details>
-          {importCoreReady && importMissingStrategy.length > 0 && (
+          {importCoreReady && impGoals.includes("improvements") && importMissingStrategy.length > 0 && (
             <div
               role="status"
               className="rounded-md border border-border bg-surface-2/60 px-4 py-3 text-xs text-muted-foreground"
             >
-              You can open the project now. Still needed before the A–Z audit can start:{" "}
+              You can open the project now. Still needed before the improvement analysis can start:{" "}
               <span className="text-foreground">
                 {importMissingStrategy
                   .map((f: StrategyField) => STRATEGY_FIELD_LABELS[f])
@@ -677,6 +846,7 @@ function DashboardPage() {
               .
             </div>
           )}
+
           <div className="flex gap-2">
             <button
               type="submit"
@@ -758,30 +928,21 @@ async function resume(
   navigate: ReturnType<typeof useNavigate>,
 ) {
   const status = project.status;
-    if (project.is_import) {
-    if (!project.github_repo) {
-      navigate({ to: "/audits/$projectId", params: { projectId } });
-      return;
-    }
-    if (!project.has_import_audit) {
-      navigate({ to: "/audits/$projectId", params: { projectId } });
-      return;
-    }
-    if (!project.has_locked_plan) {
-      navigate({ to: "/boardroom/$projectId", params: { projectId } });
-      return;
-    }
-    if (!project.has_design) {
-      navigate({ to: "/design/$projectId", params: { projectId } });
-      return;
-    }
-    if (!project.has_batches) {
-      navigate({ to: "/runway/$projectId", params: { projectId } });
-      return;
-    }
-    navigate({ to: "/runway/$projectId", params: { projectId } });
+  if (project.is_import) {
+    // Modular workflow: derive the ordered next route from the goals the
+    // owner selected at import time. Audit-only ends at the report.
+    const workflow = deriveImportWorkflow(project.goals ?? undefined);
+    const route = nextImportRoute(workflow, {
+      projectId,
+      hasRepo: !!project.github_repo,
+      auditComplete: !!project.has_import_audit,
+      planComplete: !!project.has_locked_plan,
+      designComplete: !!project.has_design,
+    });
+    navigateImportRoute(navigate, projectId, route);
     return;
   }
+
   if (status === "intake" || status === "validated" || status === "killed") {
     const { data } = await supabase
       .from("intakes")
