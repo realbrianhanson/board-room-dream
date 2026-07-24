@@ -682,12 +682,29 @@ function VerdictView({
             <ArrowRight className="h-3.5 w-3.5" />
           </button>
         ) : (
-          <button
-            onClick={onRevise}
-            className="inline-flex items-center gap-2 rounded-md border border-border px-5 py-2.5 text-sm text-foreground transition-colors hover:bg-surface-2"
-          >
-            Revise the idea
-          </button>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <button
+              onClick={onRevise}
+              className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Revise on my own
+            </button>
+            <button
+              onClick={onProceedAnyway}
+              className="inline-flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm text-foreground transition-colors hover:bg-surface-2"
+            >
+              Take it to the Boardroom anyway
+            </button>
+            {onUsePivot && (
+              <button
+                onClick={onUsePivot}
+                className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
+              >
+                Use the board's pivot
+                <ArrowRight className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>
