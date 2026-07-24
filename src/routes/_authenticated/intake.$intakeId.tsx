@@ -326,6 +326,7 @@ function IntakePage() {
         projectName={projectName}
         verdict={verdict}
         scores={scores}
+        originalIdea={String(answers.idea ?? "").trim()}
         onEnterBoardroom={() => navigate({ to: "/boardroom/$projectId", params: { projectId } })}
         onProceedAnyway={proceedAnyway}
         onUsePivot={scores.pivot ? usePivot : undefined}
