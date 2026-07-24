@@ -20,6 +20,9 @@ import {
   startCtaLabel,
 } from "@/lib/audit-retry";
 import { groupOpenFindingsByAudit } from "@/lib/audit-findings-grouping";
+import { computeAuditScope, type AuditContinueCta } from "@/lib/audit-scope";
+import { IMPORT_GOALS, type ImportGoal } from "@/lib/import-workflow";
+
 
 
 export const Route = createFileRoute("/_authenticated/audits_/$projectId")({
@@ -89,21 +92,45 @@ function AuditCenterPage() {
   const [showRetry, setShowRetry] = useState(false);
   const [strategyValidity, setStrategyValidity] = useState<StrategyPanelValidity | null>(null);
   const strategyPanelRef = useRef<StrategyPanelHandle | null>(null);
+  // Persisted goals from the latest intake for this project. `null` means
+  // "no intake row" — deriveImportWorkflow (inside computeAuditScope) then
+  // falls back to the legacy full workflow.
+  const [goals, setGoals] = useState<ImportGoal[] | null>(null);
 
-  // Only import projects require the strategy-context gate; greenfield
-  // projects never see the panel and are unblocked by default.
-  const strategyGateBlocked = isImport && (!strategyValidity || !strategyValidity.valid);
+  // Derived scope. Strategy gate is only required when `improvements` is
+  // selected — audit-only and audit+design must NOT be blocked by it.
+  const auditScope = computeAuditScope({
+    loading: false,
+    error: null,
+    isImport,
+    goals,
+    projectId,
+  });
+  const strategyRequired =
+    auditScope.kind === "import-with-audit" && auditScope.requiresStrategy;
+  const strategyGateBlocked =
+    strategyRequired && (!strategyValidity || !strategyValidity.valid);
+
 
 
   const load = useCallback(async () => {
     setLoadError(null);
-    const [pr, ar, br, userData] = await Promise.all([
+    const [pr, ar, br, userData, intakeRes] = await Promise.all([
       supabase.from("projects").select("user_id, name, is_import, github_repo").eq("id", projectId).maybeSingle(),
       supabase.from("audits").select("*").eq("project_id", projectId).order("created_at", { ascending: false }),
       supabase.from("batches").select("id, batch_no, title, status").eq("project_id", projectId).order("batch_no", { ascending: true }),
       supabase.auth.getUser(),
+      // Latest intake carries the persisted goals. Missing intake row →
+      // null → deriveImportWorkflow falls back to full workflow.
+      supabase
+        .from("intakes")
+        .select("answers, created_at")
+        .eq("project_id", projectId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
     ]);
-    const firstErr = pr.error?.message ?? ar.error?.message ?? br.error?.message ?? null;
+    const firstErr = pr.error?.message ?? ar.error?.message ?? br.error?.message ?? intakeRes.error?.message ?? null;
     if (firstErr) {
       setLoadError(firstErr);
       setLoading(false);
@@ -117,6 +144,19 @@ function AuditCenterPage() {
     setIsImport(!!proj?.is_import);
     setGhRepo(proj?.github_repo ?? null);
     setIsOwner(!!proj?.user_id && proj.user_id === userData.data?.user?.id);
+    const answers = (intakeRes.data?.answers ?? null) as Record<string, unknown> | null;
+    const rawGoals = answers && typeof answers === "object" ? answers.goals : null;
+    if (Array.isArray(rawGoals)) {
+      setGoals(
+        rawGoals.filter(
+          (v): v is ImportGoal =>
+            typeof v === "string" && (IMPORT_GOALS as readonly string[]).includes(v),
+        ),
+      );
+    } else {
+      setGoals(null);
+    }
+
     const auditRows = (au ?? []) as Audit[];
     setAudits(auditRows);
     setBatches((bs ?? []) as Batch[]);
@@ -284,7 +324,9 @@ function AuditCenterPage() {
       <div className="mt-4 mb-2">
         <ProjectJourneyStrip result={journey} />
       </div>
-      {isImport && (
+      {/* Strategy context — only when improvements is selected (audit-only
+          and audit+design imports must NOT be blocked by strategy). */}
+      {strategyRequired && (
         <StrategyContextPanel
           ref={strategyPanelRef}
           projectId={projectId}
@@ -292,7 +334,7 @@ function AuditCenterPage() {
           onValidityChange={setStrategyValidity}
         />
       )}
-      {isImport && isOwner && strategyGateBlocked && strategyValidity && (
+      {strategyRequired && isOwner && strategyGateBlocked && strategyValidity && (
         <div
           role="status"
           className="mt-3 rounded-md border border-primary/30 bg-primary/[0.06] p-3 text-xs text-foreground/85"
@@ -316,6 +358,32 @@ function AuditCenterPage() {
           </button>
         </div>
       )}
+      {isImport && auditScope.kind === "import-with-audit" && !strategyRequired && (
+        <p
+          className="mt-4 rounded-md border border-border bg-surface-2/40 px-3 py-2 text-[11px] text-muted-foreground"
+          data-testid="strategy-optional-note"
+        >
+          Strategy context is optional for this scope ({auditScope.workflow.scopeLabel}).
+        </p>
+      )}
+
+      {/* Repo-setup-only imports (no code_audit selected): show the scope
+          explanation, GitHubRepoCard, and a typed Continue CTA to the next
+          selected stage. No audit history / findings / start controls. */}
+      {auditScope.kind === "import-repo-setup-only" && (
+        <RepoSetupOnlySection
+          projectId={projectId}
+          isOwner={isOwner}
+          ghRepo={ghRepo}
+          workflowLabel={auditScope.workflow.scopeLabel}
+          continueCta={auditScope.continueCta}
+          onLinked={(name) => setGhRepo(name)}
+        />
+      )}
+
+      {auditScope.kind === "import-repo-setup-only" ? null : (
+      <>
+
 
 
       {/* Open findings */}
@@ -553,11 +621,16 @@ function AuditCenterPage() {
                 <Check className="h-4 w-4" /> Passed A–Z. Ship it.
               </p>
             )}
-            {finalAudit.status === "clean" && isImport && (
+            {finalAudit.status === "clean" && auditScope.kind === "import-with-audit" && (
               <p className="mt-3 text-sm text-foreground/85">
-                Clean read. Convene the improvement board to plan what to build next.
+                {auditScope.postAuditCta?.kind === "plan"
+                  ? "Clean read. Convene the improvement board to plan what to build next."
+                  : auditScope.postAuditCta?.kind === "design"
+                    ? "Clean read. Move to the Design Council to plan the visual pass."
+                    : "Clean read. Your requested red-team report is ready."}
               </p>
             )}
+
 
             {/* Retry / re-run controls. Owner-only. Never shown while running. */}
             {isOwner && finalAudit.status !== "running" && (
@@ -619,13 +692,26 @@ function AuditCenterPage() {
               </div>
             )}
 
-            <Link
-              to={isImport ? "/boardroom/$projectId" : "/runway/$projectId"}
-              params={{ projectId }}
-              className="mt-4 inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground hover:border-primary/40"
-            >
-              {isImport ? "To the Boardroom" : "Back to the Runway"} <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
+            {(() => {
+              const cta =
+                auditScope.kind === "import-with-audit"
+                  ? auditScope.postAuditCta
+                  : !isImport
+                    ? ({ kind: "plan", to: "/runway/$projectId", label: "Back to the Runway" } as const)
+                    : null;
+              if (!cta) return null;
+              return (
+                <Link
+                  to={cta.to}
+                  params={{ projectId }}
+                  className="mt-4 inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground hover:border-primary/40"
+                  data-testid="audit-post-cta"
+                >
+                  {cta.label} <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+              );
+            })()}
+
           </div>
         )}
 
@@ -660,6 +746,65 @@ function AuditCenterPage() {
         )}
 
       </section>
+      </>
+      )}
     </div>
   );
 }
+
+// -------- Repo-setup-only section for imports without code_audit --------
+//
+// Renders the GitHubRepoCard plus a scope explanation and a typed Link to
+// the next selected stage. No audit start/retry controls are exposed here —
+// a direct call to audit-runner is already blocked server-side.
+
+function RepoSetupOnlySection({
+  projectId,
+  isOwner,
+  ghRepo,
+  workflowLabel,
+  continueCta,
+  onLinked,
+}: {
+  projectId: string;
+  isOwner: boolean;
+  ghRepo: string | null;
+  workflowLabel: string;
+  continueCta: AuditContinueCta | null;
+  onLinked: (fullName: string) => void;
+}) {
+  return (
+    <section
+      className="mt-10 space-y-4 rounded-xl border border-border bg-surface-1/60 p-6"
+      data-testid="audit-repo-setup-only"
+    >
+      <div>
+        <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+          Repo setup · {workflowLabel}
+        </p>
+        <h2 className="mt-2 font-display text-2xl text-foreground">
+          This project doesn't include the red-team audit.
+        </h2>
+        <p className="mt-2 max-w-[65ch] text-sm text-muted-foreground">
+          Link your GitHub repo here so the next stage can read live code. The
+          A–Z audit stays out of scope on this project — its results won't
+          appear in the Audit Center.
+        </p>
+      </div>
+      <GitHubRepoCard projectId={projectId} isOwner={isOwner} onLinked={onLinked} />
+      {continueCta && ghRepo && (
+        <div>
+          <Link
+            to={continueCta.to}
+            params={{ projectId }}
+            className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
+            data-testid="audit-repo-setup-continue"
+          >
+            {continueCta.label} <ArrowRight className="h-4 w-4" />
+          </Link>
+        </div>
+      )}
+    </section>
+  );
+}
+

@@ -10,6 +10,8 @@ import { startGithubConnect } from "@/lib/github-connect";
 import { selectDisplayedRun } from "@/lib/run-selection";
 import { ProjectJourneyStrip } from "@/components/project-journey";
 import { useProjectJourney } from "@/hooks/use-project-journey";
+import { computeRunwayEligibility } from "@/lib/runway-eligibility";
+import { IMPORT_GOALS, type ImportGoal } from "@/lib/import-workflow";
 import {
   AlertTriangle,
   ArrowRight,
@@ -152,6 +154,7 @@ function RunwayPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [hasPlan, setHasPlan] = useState<boolean | null>(null);
   const [hasDesign, setHasDesign] = useState<boolean>(false);
+  const [goals, setGoals] = useState<ImportGoal[] | null>(null);
   const [batches, setBatches] = useState<Batch[] | null>(null);
   const [run, setRun] = useState<Run | null>(null);
   const [generating, setGenerating] = useState(false);
@@ -175,15 +178,17 @@ function RunwayPage() {
   const [compiling, setCompiling] = useState(false);
 
   const loadAll = useCallback(async () => {
-    const [pRes, pvRes, dvRes, bsRes, rsRes, auRes] = await Promise.all([
+    const [pRes, pvRes, dvRes, bsRes, rsRes, auRes, inRes] = await Promise.all([
       supabase.from("projects").select("id, name, user_id, status, lovable_project_url, current_batch_no, github_repo, is_import").eq("id", projectId).maybeSingle(),
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "plan").eq("is_build_safe", true).limit(1),
       supabase.from("plan_versions").select("id").eq("project_id", projectId).eq("kind", "design").eq("is_build_safe", true).limit(1),
       supabase.from("batches").select("*").eq("project_id", projectId).order("batch_no", { ascending: true }),
       supabase.from("boardroom_runs").select("id, kind, status, error, spent_usd, budget_usd, created_at").eq("project_id", projectId).eq("kind", "batches").in("status", ["queued","running","paused","paused_budget","failed","completed","consensus","chair_ruled"]).order("created_at", { ascending: false }).limit(10),
       supabase.from("audits").select("id, batch_id, kind, status, loop_no, source, head_sha, files_analyzed, summary, created_at").eq("project_id", projectId).order("created_at", { ascending: false }),
+      // Latest persisted intake — carries the selected goals for imports.
+      supabase.from("intakes").select("answers, created_at").eq("project_id", projectId).order("created_at", { ascending: false }).limit(1).maybeSingle(),
     ]);
-    // Capture the first meaningful error across the six parallel queries.
+    // Capture the first meaningful error across the seven parallel queries.
     // A failure MUST NOT be coerced into an empty state — that would render
     // "no plan / no batches" for a real backend outage.
     const firstErr =
@@ -193,6 +198,7 @@ function RunwayPage() {
       bsRes.error?.message ||
       rsRes.error?.message ||
       auRes.error?.message ||
+      inRes.error?.message ||
       null;
     if (firstErr) {
       setLoadError(firstErr);
@@ -228,6 +234,20 @@ function RunwayPage() {
     setGhRepo((p as { github_repo: string | null } | null)?.github_repo ?? null);
     setHasPlan(((pv ?? []).length ?? 0) > 0);
     setHasDesign(((dv ?? []).length ?? 0) > 0);
+    {
+      const answers = (inRes.data?.answers ?? null) as Record<string, unknown> | null;
+      const raw = answers && typeof answers === "object" ? answers.goals : null;
+      if (Array.isArray(raw)) {
+        setGoals(
+          raw.filter(
+            (v): v is ImportGoal =>
+              typeof v === "string" && (IMPORT_GOALS as readonly string[]).includes(v),
+          ),
+        );
+      } else {
+        setGoals(null);
+      }
+    }
     setBatches((bs ?? []) as Batch[]);
     {
       const runList = (rs ?? []) as Run[];
@@ -259,6 +279,32 @@ function RunwayPage() {
   const isOwner = !!project && !!uid && project.user_id === uid;
   const runInFlight = run && ["queued", "running", "paused", "paused_budget"].includes(run.status);
   const runPaused = run && ["paused", "paused_budget"].includes(run.status);
+
+  // Successful A–Z = a final_az audit that reached a terminal read (clean or
+  // findings). "findings" is a completed audit — presence of issues doesn't
+  // undo success for the purpose of the next-stage gate.
+  const hasSuccessfulAudit = useMemo(
+    () => audits.some((a) => a.kind === "final_az" && (a.status === "clean" || a.status === "findings")),
+    [audits],
+  );
+  const eligibility = useMemo(
+    () =>
+      computeRunwayEligibility({
+        loading: !project || hasPlan === null || batches === null,
+        error: null,
+        isImport: !!project?.is_import,
+        goals,
+        projectId,
+        hasRepo: !!ghRepo,
+        hasSuccessfulAudit,
+        hasBuildSafePlan: !!hasPlan,
+        hasBuildSafeDesign: hasDesign,
+      }),
+    [project, hasPlan, batches, goals, projectId, ghRepo, hasSuccessfulAudit, hasDesign],
+  );
+  const promptsReady = eligibility.kind === "ready";
+  const promptScopeVariant = eligibility.kind === "ready" ? eligibility.scopeVariant : null;
+
 
   const passedCount = useMemo(() => (batches ?? []).filter((b) => b.status === "passed").length, [batches]);
   const total = (batches ?? []).length;
@@ -558,16 +604,40 @@ function RunwayPage() {
         )}
       </div>
 
-      {/* State A: no locked plan */}
-      {!hasPlan && (
-        project?.is_import ? (
+      {/* State A: prerequisites for the selected scope aren't ready yet.
+          Covers greenfield without a locked plan, imports that need a repo
+          link, imports missing selected artifacts (audit / plan / design),
+          and audit-only imports (this scope is terminal — the report is
+          the deliverable, no prompts). */}
+      {total === 0 && eligibility.kind === "audit-only-terminal" && (
+        <EmptyState
+          icon={<ShieldCheck className="h-6 w-6 text-muted-foreground" />}
+          title="This scope ends with the audit report."
+          subtitle="You picked the red-team audit only — no build prompts are generated for this project. Open the Audit Center for the report."
+          actionTo="/audits/$projectId"
+          actionParams={{ projectId }}
+          actionLabel="Open the Audit Center"
+        />
+      )}
+      {total === 0 && eligibility.kind === "needs-repo" && (
+        <EmptyState
+          icon={<Github className="h-6 w-6 text-muted-foreground" />}
+          title="Link your GitHub repo to compile prompts against live code."
+          subtitle="The Chair needs your current code to compile safe, grounded batch prompts. Link the repo in the Audit Center, then come back."
+          actionTo="/audits/$projectId"
+          actionParams={{ projectId }}
+          actionLabel="Open the Audit Center"
+        />
+      )}
+      {total === 0 && eligibility.kind === "needs-prereq" && (
+        eligibility.isImport ? (
           <EmptyState
             icon={<Lock className="h-6 w-6 text-muted-foreground" />}
-            title="Imported apps start with the A–Z audit."
-            subtitle="Run the required A–Z audit against the current code, then the Boardroom will convene to lock the improvement plan."
-            actionTo="/audits/$projectId"
+            title={`Still needed: ${eligibility.missingLabel}.`}
+            subtitle="Finish the selected prerequisite for this scope, then the Chair can sequence your build."
+            actionTo={eligibility.ctaTo}
             actionParams={{ projectId }}
-            actionLabel="Run the A–Z audit"
+            actionLabel={eligibility.ctaLabel}
           />
         ) : (
           <EmptyState
@@ -582,16 +652,26 @@ function RunwayPage() {
       )}
 
 
-      {/* State B: locked plan, no batches, no run */}
-      {hasPlan && total === 0 && !runInFlight && (
+      {/* State B: ready — locked prerequisites, no batches, no run */}
+      {promptsReady && total === 0 && !runInFlight && (
         <div className="rounded-xl border border-border bg-surface-1 p-8">
           <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-primary">The Chair, ready to sequence</p>
           <h2 className="mt-3 font-display text-3xl text-foreground">Turn the locked plan into a build sequence.</h2>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
             The Chair drafts 6–8 (usually 6) numbered batches you paste into Lovable, one at a time. Each batch stays small enough to ship cleanly.
           </p>
+          {eligibility.kind === "ready" && (
+            <p
+              className="mt-3 max-w-2xl text-sm text-foreground/80"
+              data-testid="runway-scope-copy"
+            >
+              {eligibility.promptScopeCopy}
+            </p>
+          )}
 
-          {!hasDesign && (
+          {/* Greenfield design nudge only — modular imports already require
+              (or don't require) the design brief via eligibility. */}
+          {promptScopeVariant === "greenfield" && !hasDesign && (
             <div className="mt-6 flex items-start gap-3 rounded-lg border border-border bg-surface-2 p-4">
               <Palette className="mt-0.5 h-4 w-4 text-primary" />
               <div className="flex-1">
@@ -606,23 +686,32 @@ function RunwayPage() {
             </div>
           )}
 
-          {isOwner && (
-            <div className="mt-6 flex flex-wrap gap-3">
-              <button
-                onClick={generate}
-                disabled={generating || !hasDesign}
-                title={!hasDesign ? "Finish the Design Council first — no build-safe design brief yet." : undefined}
-                className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
-              >
-                <Rocket className="h-4 w-4" /> {generating ? "Convening…" : "Generate the build sequence"}
-              </button>
-            </div>
-          )}
+          {isOwner && (() => {
+            const missingGreenfieldDesign =
+              promptScopeVariant === "greenfield" && !hasDesign;
+            const disabled = generating || missingGreenfieldDesign;
+            const title = missingGreenfieldDesign
+              ? "Finish the Design Council first — no build-safe design brief yet."
+              : undefined;
+            return (
+              <div className="mt-6 flex flex-wrap gap-3">
+                <button
+                  onClick={generate}
+                  disabled={disabled}
+                  title={title}
+                  data-testid="runway-generate"
+                  className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+                >
+                  <Rocket className="h-4 w-4" /> {generating ? "Convening…" : "Generate the build sequence"}
+                </button>
+              </div>
+            );
+          })()}
         </div>
       )}
 
       {/* State C: generation in flight (queued/running) */}
-      {hasPlan && total === 0 && runInFlight && !runPaused && (
+      {promptsReady && total === 0 && runInFlight && !runPaused && (
         <div className="rounded-xl border border-border bg-surface-1 p-8 text-center">
           <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
           <p className="font-display text-2xl text-foreground">The Chair is sequencing your build…</p>
@@ -633,7 +722,7 @@ function RunwayPage() {
       )}
 
       {/* State C: generation paused (paused / paused_budget) */}
-      {hasPlan && total === 0 && runPaused && run && (
+      {promptsReady && total === 0 && runPaused && run && (
         <div className="mt-4 rounded-xl border border-primary/40 bg-primary/15 p-6">
           <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.28em] text-primary">
             <AlertTriangle className="h-4 w-4" /> The run is paused · {run.status}
@@ -708,7 +797,7 @@ function RunwayPage() {
       )}
 
       {/* State C: generation failed with no batches */}
-      {hasPlan && total === 0 && run && run.status === "failed" && (
+      {promptsReady && total === 0 && run && run.status === "failed" && (
         <div className="mt-4 rounded-xl border border-destructive/40 bg-destructive/15 p-6">
           <p className="flex items-center gap-2 font-mono text-xs text-destructive"><AlertTriangle className="h-4 w-4" /> The Chair couldn't finish.</p>
           <p className="mt-2 text-sm text-foreground/85">{run.error ?? "Unknown error"}</p>
