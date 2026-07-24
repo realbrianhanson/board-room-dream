@@ -1091,18 +1091,22 @@ async function finalizeBatches(admin: any, run: any, batchesJson: any[]) {
     // Fall through — treat as if we just inserted the set ourselves.
   }
 
-  // Advance the project only from the canonical pre-build predecessor.
-  // A 'batches' finalization is only valid after locked plan + locked
-  // design, which puts projects.status='locked'. Any other state
-  // (building, auditing, imported, validated, polishing, done, killed)
-  // means a peer worker already advanced the project OR the project
-  // raced further along the lifecycle; either way we must NOT rewind
-  // it. Compare-and-set on status='locked' enforces this narrowly.
-  await admin
+  // Advance the project from the canonical pre-build predecessor. A
+  // 'batches' finalization is valid after locked plan + locked design
+  // (projects.status='locked') OR for imported design-only / imports where
+  // the project sits at 'imported' with no plan/design required by scope.
+  // Compare-and-set on the safe predecessor set enforces "never rewind"
+  // for building/auditing/polishing/done/killed. Surface DB errors into
+  // failRun so a silent completion never masks a persistence failure.
+  const { error: projAdvanceErr } = await admin
     .from("projects")
     .update({ status: "building", current_batch_no: 1 })
     .eq("id", run.project_id)
-    .eq("status", "locked");
+    .in("status", ["locked", "imported"]);
+  if (projAdvanceErr) {
+    await failRun(admin, run, `Failed to advance project to building: ${projAdvanceErr.message ?? String(projAdvanceErr)}`);
+    return;
+  }
 
   // Compare-and-set: only mark completed if the run is still non-terminal.
   // Prevents a losing worker from ever downgrading a peer's terminal write.
