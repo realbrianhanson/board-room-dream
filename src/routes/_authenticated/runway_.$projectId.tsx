@@ -234,6 +234,20 @@ function RunwayPage() {
     setGhRepo((p as { github_repo: string | null } | null)?.github_repo ?? null);
     setHasPlan(((pv ?? []).length ?? 0) > 0);
     setHasDesign(((dv ?? []).length ?? 0) > 0);
+    {
+      const answers = (inRes.data?.answers ?? null) as Record<string, unknown> | null;
+      const raw = answers && typeof answers === "object" ? answers.goals : null;
+      if (Array.isArray(raw)) {
+        setGoals(
+          raw.filter(
+            (v): v is ImportGoal =>
+              typeof v === "string" && (IMPORT_GOALS as readonly string[]).includes(v),
+          ),
+        );
+      } else {
+        setGoals(null);
+      }
+    }
     setBatches((bs ?? []) as Batch[]);
     {
       const runList = (rs ?? []) as Run[];
