@@ -10,8 +10,10 @@ const st = (over: Partial<StartRunState> = {}): StartRunState => ({
   auditComplete: false,
   planLocked: false,
   designLocked: false,
+  hasRepo: true,
   ...over,
 });
+
 
 Deno.test("plan gate: blocks when improvements not selected", () => {
   assertEquals(
