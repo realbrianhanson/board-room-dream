@@ -9,6 +9,8 @@ import { ArrowRight, Download, Palette, Upload, X } from "lucide-react";
 import { ProjectJourneyStrip } from "@/components/project-journey";
 import { useProjectJourney } from "@/hooks/use-project-journey";
 import { DesignLightbox } from "@/components/design-lightbox";
+import { computeDesignGate, type DesignGateState } from "@/lib/design-gate";
+import { IMPORT_GOALS, type ImportGoal, type ImportNextRoute } from "@/lib/import-workflow";
 
 export const Route = createFileRoute("/_authenticated/design_/$projectId")({
   component: DesignStudioPage,
@@ -35,6 +37,8 @@ function DesignStudioPage() {
   const journey = useProjectJourney(projectId);
   const [project, setProject] = useState<Project | null>(null);
   const [hasPlan, setHasPlan] = useState<boolean | null>(null);
+  const [hasSuccessfulAudit, setHasSuccessfulAudit] = useState<boolean>(false);
+  const [goals, setGoals] = useState<ImportGoal[] | null>(null);
   const [locked, setLocked] = useState<PlanVersion | null>(null);
   const [uid, setUid] = useState<string | null>(null);
   const [reconvening, setReconvening] = useState(false);
@@ -58,21 +62,58 @@ function DesignStudioPage() {
     setLoadError(null);
     const { data: u } = await supabase.auth.getUser();
     setUid(u.user?.id ?? null);
-    const projRes = await supabase
-      .from("projects")
-      .select("id, name, user_id, status, is_import, github_repo")
-      .eq("id", projectId)
-      .maybeSingle();
-    if (projRes.error) { setLoadError(projRes.error.message); return; }
+    // Run every gate-input query in parallel and surface any error truthfully
+    // — a silent fall-through would recreate the wrong "no plan" state on a
+    // transient failure and block the owner from reconvening.
+    const [projRes, planRes, auditRes, intakeRes] = await Promise.all([
+      supabase
+        .from("projects")
+        .select("id, name, user_id, status, is_import, github_repo")
+        .eq("id", projectId)
+        .maybeSingle(),
+      supabase
+        .from("plan_versions")
+        .select("id", { count: "exact", head: true })
+        .eq("project_id", projectId)
+        .eq("kind", "plan")
+        .eq("is_build_safe", true),
+      supabase
+        .from("audits")
+        .select("id")
+        .eq("project_id", projectId)
+        .eq("kind", "final_az")
+        .in("status", ["clean", "findings"])
+        .limit(1),
+      supabase
+        .from("intakes")
+        .select("answers, created_at")
+        .eq("project_id", projectId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+    const err =
+      projRes.error?.message ??
+      planRes.error?.message ??
+      auditRes.error?.message ??
+      intakeRes.error?.message ??
+      null;
+    if (err) { setLoadError(err); return; }
     setProject((projRes.data as Project) ?? null);
-    const planRes = await supabase
-      .from("plan_versions")
-      .select("id", { count: "exact", head: true })
-      .eq("project_id", projectId)
-      .eq("kind", "plan")
-      .eq("is_build_safe", true);
-    if (planRes.error) { setLoadError(planRes.error.message); return; }
     setHasPlan((planRes.count ?? 0) > 0);
+    setHasSuccessfulAudit((auditRes.data ?? []).length > 0);
+    const answers = (intakeRes.data?.answers ?? null) as Record<string, unknown> | null;
+    const raw = answers && typeof answers === "object" ? answers.goals : null;
+    if (Array.isArray(raw)) {
+      setGoals(
+        raw.filter(
+          (v): v is ImportGoal =>
+            typeof v === "string" && (IMPORT_GOALS as readonly string[]).includes(v),
+        ),
+      );
+    } else {
+      setGoals(null);
+    }
     await loadLocked();
   }, [projectId, loadLocked]);
 
@@ -144,6 +185,23 @@ function DesignStudioPage() {
     return <div className="mx-auto max-w-6xl px-6 py-14"><div className="h-32 animate-pulse rounded-xl bg-surface-1" role="status" aria-label="Loading Design Council" /></div>;
   }
 
+  const gateState = computeDesignGate({
+    loading: false,
+    error: null,
+    isImport: project.is_import,
+    goals,
+    projectId,
+    hasRepo: !!project.github_repo,
+    hasSuccessfulAudit,
+    hasBuildSafePlan: !!hasPlan,
+    hasBuildSafeDesign: !!locked,
+  });
+
+  const isDesignOnlyImport =
+    project.is_import && !!goals && goals.length === 1 && goals[0] === "design_review";
+  const isCombinedImprovementsAndDesign =
+    project.is_import && !!goals && goals.includes("design_review") && goals.includes("improvements");
+
   return (
     <div className="mx-auto max-w-6xl px-6 py-10 md:px-10 md:py-14">
       <div className="mb-8">
@@ -157,26 +215,18 @@ function DesignStudioPage() {
         </div>
       </div>
 
-      {!hasPlan ? (
-        <div className="rounded-xl border border-dashed border-border bg-surface-1/40 px-8 py-20 text-center">
-          <Palette className="mx-auto h-6 w-6 text-muted-foreground" />
-          <p className="mt-4 font-display text-2xl text-foreground">The board locks a build-safe plan before it debates the look.</p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            {project.is_import
-              ? "Convene the improvement board and lock a plan under the current founder-authority rules first."
-              : "Take this project through the Boardroom first."}
-          </p>
-          <Link
-            to="/boardroom/$projectId"
-            params={{ projectId }}
-            className="mt-6 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
-          >
-            To the Boardroom <ArrowRight className="h-4 w-4" />
-          </Link>
-        </div>
+      {gateState.kind === "out-of-scope" ? (
+        <DesignOutOfScopeCard projectId={projectId} state={gateState} />
+      ) : gateState.kind === "needs-prereq" ? (
+        <DesignNeedsPrereqCard projectId={projectId} state={gateState} />
       ) : (
 
         <>
+          {isDesignOnlyImport && (
+            <p className="mb-6 rounded-md border border-border bg-surface-2/40 px-4 py-3 text-xs text-muted-foreground">
+              Design-only scope: the council drafts a new house style against your real UI. Behavior, product logic, data model, auth, and integrations stay intact. No feature changes.
+            </p>
+          )}
           <BoardroomSession
             projectId={projectId}
             kind="design"
@@ -185,7 +235,11 @@ function DesignStudioPage() {
             runningTitle="The Design Council"
             conveneBlockedByStatus={CONVENE_BLOCKED}
             emptyTitle="The council awaits."
-            emptySubtitle="Convene the four seats and let them agree on a house style worth building."
+            emptySubtitle={
+              isDesignOnlyImport
+                ? "The council will draft a house style for your existing app — behavior stays exactly as it is."
+                : "Convene the four seats and let them agree on a house style worth building."
+            }
           />
 
 
@@ -220,6 +274,24 @@ function DesignStudioPage() {
               <div className="prose prose-invert mt-6 max-w-[65ch] prose-headings:font-display prose-headings:text-foreground prose-p:text-foreground/85 prose-code:font-mono prose-code:text-[13px]">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{locked.content_md}</ReactMarkdown>
               </div>
+
+              {/* Prompts hand-off — design-only jumps straight to Runway; the
+                  combined improvements+design scope shows the same CTA once
+                  both the locked plan and locked design exist. */}
+              {(isDesignOnlyImport || (isCombinedImprovementsAndDesign && !!hasPlan)) && (
+                <div className="mt-8 rounded-lg border border-[hsl(38_65%_55%/0.4)] bg-[hsl(38_65%_55%/0.06)] px-5 py-4">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[hsl(38_65%_70%)]">
+                    Prompts are next
+                  </p>
+                  <Link
+                    to="/runway/$projectId"
+                    params={{ projectId }}
+                    className="mt-2 inline-flex items-center gap-2 font-display text-lg text-foreground hover:text-[hsl(38_65%_70%)]"
+                  >
+                    Generate design prompts <ArrowRight className="h-4 w-4" />
+                  </Link>
+                </div>
+              )}
             </section>
           )}
 
@@ -232,6 +304,137 @@ function DesignStudioPage() {
     </div>
   );
 }
+
+// -------- Out-of-scope + needs-prereq cards --------
+
+function DesignOutOfScopeCard({
+  projectId,
+  state,
+}: {
+  projectId: string;
+  state: Extract<DesignGateState, { kind: "out-of-scope" }>;
+}) {
+  const copy = describeDesignOutOfScope(state.nextRoute.kind);
+  return (
+    <section className="rounded-xl border border-border bg-surface-1/60 px-8 py-10">
+      <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+        Design not in scope · {state.workflow.scopeLabel}
+      </p>
+      <h2 className="mt-3 font-display text-2xl text-foreground">{copy.title}</h2>
+      <p className="mt-3 max-w-[65ch] text-sm text-muted-foreground">{copy.body}</p>
+      <div className="mt-6">
+        <DesignNextStageLink projectId={projectId} nextRoute={state.nextRoute} />
+      </div>
+      <p className="mt-6 text-xs text-muted-foreground">
+        Change scope from the dashboard by adding <span className="text-foreground">Design Upgrade</span> to this project.
+      </p>
+    </section>
+  );
+}
+
+function DesignNeedsPrereqCard({
+  projectId,
+  state,
+}: {
+  projectId: string;
+  state: Extract<DesignGateState, { kind: "needs-prereq" }>;
+}) {
+  const missing = state.missing;
+  const title = missing === "audit"
+    ? "Complete the A–Z audit first."
+    : "The board locks a build-safe plan before it debates the look.";
+  const body = missing === "audit"
+    ? "You selected code_audit + design_review. Design opens once the A–Z audit is complete and the findings are on record."
+    : state.isImport
+      ? "You selected improvements + design_review. Convene the improvement board and lock a plan under the current founder-authority rules first."
+      : "Take this project through the Boardroom first.";
+  const to = missing === "audit" ? "/audits/$projectId" : "/boardroom/$projectId";
+  const label = missing === "audit" ? "Open the Audit Center" : "To the Boardroom";
+  return (
+    <div className="rounded-xl border border-dashed border-border bg-surface-1/40 px-8 py-20 text-center">
+      <Palette className="mx-auto h-6 w-6 text-muted-foreground" />
+      <p className="mt-4 font-display text-2xl text-foreground">{title}</p>
+      <p className="mt-2 text-sm text-muted-foreground">{body}</p>
+      <Link
+        to={to}
+        params={{ projectId }}
+        className="mt-6 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
+      >
+        {label} <ArrowRight className="h-4 w-4" />
+      </Link>
+    </div>
+  );
+}
+
+function describeDesignOutOfScope(kind: ImportNextRoute["kind"]): { title: string; body: string } {
+  switch (kind) {
+    case "audit":
+    case "done":
+      return {
+        title: "This project is an audit only.",
+        body: "You chose a red-team audit at import. The Design Council is out of scope here. Head to the Audit Center for the evidence-backed report.",
+      };
+    case "plan":
+      return {
+        title: "This project is an improvement plan, not a design pass.",
+        body: "You chose Product Improvements at import. The Boardroom drafts what to change — the Design Council stays closed for this scope so the existing visual system remains intact.",
+      };
+    case "runway":
+      return {
+        title: "Artifacts are ready — head to Runway for prompts.",
+        body: "Your selected artifacts are locked. The Design Council is not in scope on this project.",
+      };
+    case "repo_setup":
+      return {
+        title: "Link the repo first.",
+        body: "The Audit Center is where you paste the GitHub URL. Once the repo is connected, we'll route you to the right next stage.",
+      };
+    case "design":
+      // Not expected for out-of-scope (design means design_review selected).
+      return { title: "Design is next.", body: "Design is in scope for this project." };
+  }
+}
+
+function DesignNextStageLink({
+  projectId,
+  nextRoute,
+}: {
+  projectId: string;
+  nextRoute: ImportNextRoute;
+}) {
+  const cls =
+    "inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110";
+  switch (nextRoute.kind) {
+    case "audit":
+    case "done":
+    case "repo_setup":
+      return (
+        <Link to="/audits/$projectId" params={{ projectId }} className={cls}>
+          {nextRoute.kind === "done" ? "View the audit report" : nextRoute.kind === "repo_setup" ? "Link the repo in Audit Center" : "Open the Audit Center"} <ArrowRight className="h-4 w-4" />
+        </Link>
+      );
+    case "plan":
+      return (
+        <Link to="/boardroom/$projectId" params={{ projectId }} className={cls}>
+          Open the Boardroom <ArrowRight className="h-4 w-4" />
+        </Link>
+      );
+    case "runway":
+      return (
+        <Link to="/runway/$projectId" params={{ projectId }} className={cls}>
+          Go to Runway <ArrowRight className="h-4 w-4" />
+        </Link>
+      );
+    case "design":
+      return (
+        <Link to="/design/$projectId" params={{ projectId }} className={cls}>
+          Open the Design Council <ArrowRight className="h-4 w-4" />
+        </Link>
+      );
+  }
+}
+
+
 
 // -------- Screenshots --------
 
