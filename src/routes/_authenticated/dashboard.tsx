@@ -802,12 +802,12 @@ function DashboardPage() {
               />
             </div>
           </details>
-          {importCoreReady && importMissingStrategy.length > 0 && (
+          {importCoreReady && impGoals.includes("improvements") && importMissingStrategy.length > 0 && (
             <div
               role="status"
               className="rounded-md border border-border bg-surface-2/60 px-4 py-3 text-xs text-muted-foreground"
             >
-              You can open the project now. Still needed before the A–Z audit can start:{" "}
+              You can open the project now. Still needed before the improvement analysis can start:{" "}
               <span className="text-foreground">
                 {importMissingStrategy
                   .map((f: StrategyField) => STRATEGY_FIELD_LABELS[f])
@@ -816,6 +816,7 @@ function DashboardPage() {
               .
             </div>
           )}
+
           <div className="flex gap-2">
             <button
               type="submit"
