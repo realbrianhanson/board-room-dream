@@ -711,7 +711,7 @@ function RunwayPage() {
       )}
 
       {/* State C: generation in flight (queued/running) */}
-      {hasPlan && total === 0 && runInFlight && !runPaused && (
+      {promptsReady && total === 0 && runInFlight && !runPaused && (
         <div className="rounded-xl border border-border bg-surface-1 p-8 text-center">
           <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
           <p className="font-display text-2xl text-foreground">The Chair is sequencing your build…</p>
@@ -722,7 +722,7 @@ function RunwayPage() {
       )}
 
       {/* State C: generation paused (paused / paused_budget) */}
-      {hasPlan && total === 0 && runPaused && run && (
+      {promptsReady && total === 0 && runPaused && run && (
         <div className="mt-4 rounded-xl border border-primary/40 bg-primary/15 p-6">
           <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.28em] text-primary">
             <AlertTriangle className="h-4 w-4" /> The run is paused · {run.status}
@@ -797,7 +797,7 @@ function RunwayPage() {
       )}
 
       {/* State C: generation failed with no batches */}
-      {hasPlan && total === 0 && run && run.status === "failed" && (
+      {promptsReady && total === 0 && run && run.status === "failed" && (
         <div className="mt-4 rounded-xl border border-destructive/40 bg-destructive/15 p-6">
           <p className="flex items-center gap-2 font-mono text-xs text-destructive"><AlertTriangle className="h-4 w-4" /> The Chair couldn't finish.</p>
           <p className="mt-2 text-sm text-foreground/85">{run.error ?? "Unknown error"}</p>
