@@ -501,7 +501,8 @@ export async function queueRound3(admin: any, run: any, steps: any[], loop: numb
 
 Every H2 header must appear exactly as written. Be specific: exact HSL values, real font names, concrete component rules.`
     : `the full app plan: concept, target user, MVP features (ruthlessly cut), data stored, and explicit cuts.`;
-  const system = `Round 3 — Chair synthesis${loop > 0 ? ` (loop ${loop}, revising after a failed vote)` : ""}. You are the Chair. Weld the four ${isDesign ? "design directions" : "drafts"} and the objections into ONE candidate ${isDesign ? "design brief" : "plan"}.
+  const scope = await getScopeContract(admin, run);
+  const system = withScope(scope, `Round 3 — Chair synthesis${loop > 0 ? ` (loop ${loop}, revising after a failed vote)` : ""}. You are the Chair. Weld the four ${isDesign ? "design directions" : "drafts"} and the objections into ONE candidate ${isDesign ? "design brief" : "plan"}.
 
 Write ${docSpec}
 
@@ -511,7 +512,7 @@ One bullet per objection you weighed: [seat] "objection" — accepted/rejected �
 ## Steals adopted
 One bullet per idea you took from another seat's draft.
 
-Respond with the markdown document ONLY — no JSON, no preamble, no closing remarks.`;
+Respond with the markdown document ONLY — no JSON, no preamble, no closing remarks.`);
   const parts: string[] = [intakeBlock(intake)];
   if (String(run.founder_notes ?? "").trim()) {
     parts.push(`FOUNDER'S NOTES TO THE BOARD (the founder is the client — weigh these heavily):\n${String(run.founder_notes).trim()}`);
