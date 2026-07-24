@@ -496,12 +496,13 @@ function IntakePage() {
           </span>
           <button
             onClick={next}
-            disabled={!canProceed || running || saving}
+            disabled={!canProceed || running}
             className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
           >
-            {running ? "The board is scoring…" : saving ? "Saving…" : step === STEPS.length - 1 ? "Submit to the board" : "Continue"}
-            {!running && !saving && <ArrowRight className="h-3.5 w-3.5" />}
+            {running ? "The board is scoring…" : step === STEPS.length - 1 ? "Submit to the board" : "Continue"}
+            {!running && <ArrowRight className="h-3.5 w-3.5" />}
           </button>
+
         </div>
       </div>
       {projectStatus !== "intake" && (
