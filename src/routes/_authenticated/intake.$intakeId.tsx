@@ -637,7 +637,7 @@ export function displayedMaxTotal(scores: Scores | null | undefined): number {
 }
 
 function VerdictView({
-  projectName, verdict, scores, onEnterBoardroom, onProceedAnyway, onUsePivot, onRevise,
+  projectName, verdict, scores, onEnterBoardroom, onProceedAnyway, onUsePivot, pivoting, onRevise,
 }: {
   projectName: string;
   verdict: "pass" | "kill";
@@ -645,6 +645,7 @@ function VerdictView({
   onEnterBoardroom: () => void;
   onProceedAnyway: () => void;
   onUsePivot?: () => void;
+  pivoting?: boolean;
   onRevise: () => void;
 }) {
   const dims = pickDisplayedDimensions(scores.scores);
