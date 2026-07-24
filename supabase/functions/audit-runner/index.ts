@@ -713,6 +713,7 @@ async function beginAudit(params: {
     isFinal,
     batchOutcome,
     fileTree,
+    scopeContract,
   );
   fireOrchestrator();
   return {
