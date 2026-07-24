@@ -390,12 +390,14 @@ async function insertAuditSteps(
   isFinal: boolean,
   batchOutcome: string | null,
   fileTree: string[],
+  scopeContract: string | null,
 ) {
-  const contract = isFinal
+  const contractBody = isFinal
     ? finalContract?.mode === "import_current_milestone"
       ? `FINAL A-Z AUDIT (CURRENT MILESTONE) — this is an imported app. Audit today's shipped code against the intake contract and any implemented improvement batches ONLY. Do NOT grade unbuilt future work; there is no locked improvement plan or design brief in scope for this run.`
       : `FINAL A-Z AUDIT — verify the whole app against the plan + PRD.`
     : `BATCH CONTRACT (what this batch was supposed to do):\n\n${batchPrompt}`;
+  const contract = scopeContract ? `${scopeContract}\n\n${contractBody}` : contractBody;
   const outcomeBlock = batchOutcome?.trim()
     ? `\n\nOWNER-REPORTED OUTCOME (what Lovable actually said or did — errors, drift, surprises; investigate every claim):\n${batchOutcome.trim()}`
     : "";
