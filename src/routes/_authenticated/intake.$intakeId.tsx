@@ -124,6 +124,7 @@ function IntakePage() {
   const [running, setRunning] = useState(false);
   const [noKey, setNoKey] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
+  const [pivoting, setPivoting] = useState(false);
   // Non-blocking Boardroom prerequisite hint: when the user has no verified
   // OpenRouter key, show a single concise banner on step 1 so they can add
   // it in Settings without leaving the intake. Only rendered when we can
@@ -262,13 +263,38 @@ function IntakePage() {
   function reviseIdea() { setVerdict(null); setScores(null); setStep(0); }
 
   async function usePivot() {
-    if (!scores?.pivot) return;
-    const next = { ...answers, idea: scores.pivot };
-    const result = await persist(next);
-    if (!result.ok) return;
-    setVerdict(null);
-    setScores(null);
-    setStep(0);
+    if (!scores?.pivot || pivoting) return;
+    setPivoting(true);
+    try {
+      // Ask the board to rewrite its strategic pivot into a plain-language
+      // product description that fits the "what does the app do" field.
+      // On any failure we fall back to the raw pivot so the user is never
+      // stranded on the verdict screen.
+      let rewritten = scores.pivot;
+      try {
+        const { data, error } = await supabase.functions.invoke(
+          "rewrite-pivot",
+          { body: { intake_id: intakeId } },
+        );
+        if (!error && data?.status === "ok" && typeof data?.idea === "string" && data.idea.trim()) {
+          rewritten = data.idea.trim();
+        } else if (data?.status === "no_key") {
+          toast.message("Using the raw pivot — add your OpenRouter key in Settings for a rewrite.");
+        } else if (error) {
+          toast.message("Couldn't rewrite the pivot — using the board's original wording.");
+        }
+      } catch {
+        toast.message("Couldn't rewrite the pivot — using the board's original wording.");
+      }
+      const next = { ...answers, idea: rewritten };
+      const result = await persist(next);
+      if (!result.ok) return;
+      setVerdict(null);
+      setScores(null);
+      setStep(0);
+    } finally {
+      setPivoting(false);
+    }
   }
 
   async function proceedAnyway() {
@@ -303,6 +329,7 @@ function IntakePage() {
         onEnterBoardroom={() => navigate({ to: "/boardroom/$projectId", params: { projectId } })}
         onProceedAnyway={proceedAnyway}
         onUsePivot={scores.pivot ? usePivot : undefined}
+        pivoting={pivoting}
         onRevise={reviseIdea}
       />
     );
@@ -610,7 +637,7 @@ export function displayedMaxTotal(scores: Scores | null | undefined): number {
 }
 
 function VerdictView({
-  projectName, verdict, scores, onEnterBoardroom, onProceedAnyway, onUsePivot, onRevise,
+  projectName, verdict, scores, onEnterBoardroom, onProceedAnyway, onUsePivot, pivoting, onRevise,
 }: {
   projectName: string;
   verdict: "pass" | "kill";
@@ -618,6 +645,7 @@ function VerdictView({
   onEnterBoardroom: () => void;
   onProceedAnyway: () => void;
   onUsePivot?: () => void;
+  pivoting?: boolean;
   onRevise: () => void;
 }) {
   const dims = pickDisplayedDimensions(scores.scores);
@@ -698,9 +726,10 @@ function VerdictView({
             {onUsePivot && (
               <button
                 onClick={onUsePivot}
-                className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
+                disabled={pivoting}
+                className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Use the board's pivot
+                {pivoting ? "Rewriting the pivot…" : "Use the board's pivot"}
                 <ArrowRight className="h-3.5 w-3.5" />
               </button>
             )}
