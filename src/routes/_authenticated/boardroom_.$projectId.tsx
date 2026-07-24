@@ -179,7 +179,10 @@ function BoardroomProjectPage() {
           scopeLabel={gateState.workflow.scopeLabel}
           nextRoute={gateState.nextRoute}
         />
+      ) : gateState.kind === "needs-repo" ? (
+        <BoardroomNeedsRepoCard projectId={projectId} scopeLabel={gateState.workflow.scopeLabel} />
       ) : (
+
         <BoardroomSession
           projectId={projectId}
           kind="plan"
