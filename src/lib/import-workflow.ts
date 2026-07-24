@@ -105,7 +105,9 @@ export function nextImportRoute(
   const needsRepo =
     workflow.requiresAudit || workflow.requiresPlan || workflow.requiresDesign;
   if (needsRepo && !stage.hasRepo) {
-    return { kind: "repo_setup", path: `/runway/${stage.projectId}` };
+    // Audit Center owns GitHubRepoCard, so repo setup surfaces there for
+    // every imported scope (audit-only, design-only, improvements-only, mixed).
+    return { kind: "repo_setup", path: `/audits/${stage.projectId}` };
   }
   if (workflow.requiresAudit && !stage.auditComplete) {
     return { kind: "audit", path: `/audits/${stage.projectId}` };

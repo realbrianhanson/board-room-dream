@@ -95,7 +95,7 @@ describe("nextImportRoute", () => {
   });
   it("routes to repo setup first when scope needs live code", () => {
     const w = deriveImportWorkflow(["improvements"]);
-    expect(nextImportRoute(w, stage())).toEqual({ kind: "repo_setup", path: "/runway/p1" });
+    expect(nextImportRoute(w, stage())).toEqual({ kind: "repo_setup", path: "/audits/p1" });
   });
   it("full path: repo → audit → plan → design → runway", () => {
     const w = deriveImportWorkflow(undefined);

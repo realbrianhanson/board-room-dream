@@ -95,7 +95,7 @@ Deno.test("nextImportRoute: audit-only ends at audit, never boardroom", () => {
 
 Deno.test("nextImportRoute: routes to repo setup when scope needs live code", () => {
   const w = deriveImportWorkflow(["improvements"]);
-  assertEquals(nextImportRoute(w, stage()), { kind: "repo_setup", path: "/runway/p1" });
+  assertEquals(nextImportRoute(w, stage()), { kind: "repo_setup", path: "/audits/p1" });
 });
 
 Deno.test("nextImportRoute: full path repo → audit → plan → design → runway", () => {
