@@ -124,6 +124,7 @@ function IntakePage() {
   const [running, setRunning] = useState(false);
   const [noKey, setNoKey] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
+  const [pivoting, setPivoting] = useState(false);
   // Non-blocking Boardroom prerequisite hint: when the user has no verified
   // OpenRouter key, show a single concise banner on step 1 so they can add
   // it in Settings without leaving the intake. Only rendered when we can
