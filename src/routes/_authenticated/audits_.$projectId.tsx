@@ -728,6 +728,65 @@ function AuditCenterPage() {
         )}
 
       </section>
+      </>
+      )}
     </div>
   );
 }
+
+// -------- Repo-setup-only section for imports without code_audit --------
+//
+// Renders the GitHubRepoCard plus a scope explanation and a typed Link to
+// the next selected stage. No audit start/retry controls are exposed here —
+// a direct call to audit-runner is already blocked server-side.
+
+function RepoSetupOnlySection({
+  projectId,
+  isOwner,
+  ghRepo,
+  workflowLabel,
+  continueCta,
+  onLinked,
+}: {
+  projectId: string;
+  isOwner: boolean;
+  ghRepo: string | null;
+  workflowLabel: string;
+  continueCta: AuditContinueCta | null;
+  onLinked: (fullName: string) => void;
+}) {
+  return (
+    <section
+      className="mt-10 space-y-4 rounded-xl border border-border bg-surface-1/60 p-6"
+      data-testid="audit-repo-setup-only"
+    >
+      <div>
+        <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+          Repo setup · {workflowLabel}
+        </p>
+        <h2 className="mt-2 font-display text-2xl text-foreground">
+          This project doesn't include the red-team audit.
+        </h2>
+        <p className="mt-2 max-w-[65ch] text-sm text-muted-foreground">
+          Link your GitHub repo here so the next stage can read live code. The
+          A–Z audit stays out of scope on this project — its results won't
+          appear in the Audit Center.
+        </p>
+      </div>
+      <GitHubRepoCard projectId={projectId} isOwner={isOwner} onLinked={onLinked} />
+      {continueCta && ghRepo && (
+        <div>
+          <Link
+            to={continueCta.to}
+            params={{ projectId }}
+            className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
+            data-testid="audit-repo-setup-continue"
+          >
+            {continueCta.label} <ArrowRight className="h-4 w-4" />
+          </Link>
+        </div>
+      )}
+    </section>
+  );
+}
+
