@@ -324,7 +324,9 @@ function AuditCenterPage() {
       <div className="mt-4 mb-2">
         <ProjectJourneyStrip result={journey} />
       </div>
-      {isImport && (
+      {/* Strategy context — only when improvements is selected (audit-only
+          and audit+design imports must NOT be blocked by strategy). */}
+      {strategyRequired && (
         <StrategyContextPanel
           ref={strategyPanelRef}
           projectId={projectId}
@@ -332,7 +334,7 @@ function AuditCenterPage() {
           onValidityChange={setStrategyValidity}
         />
       )}
-      {isImport && isOwner && strategyGateBlocked && strategyValidity && (
+      {strategyRequired && isOwner && strategyGateBlocked && strategyValidity && (
         <div
           role="status"
           className="mt-3 rounded-md border border-primary/30 bg-primary/[0.06] p-3 text-xs text-foreground/85"
@@ -356,6 +358,32 @@ function AuditCenterPage() {
           </button>
         </div>
       )}
+      {isImport && auditScope.kind === "import-with-audit" && !strategyRequired && (
+        <p
+          className="mt-4 rounded-md border border-border bg-surface-2/40 px-3 py-2 text-[11px] text-muted-foreground"
+          data-testid="strategy-optional-note"
+        >
+          Strategy context is optional for this scope ({auditScope.workflow.scopeLabel}).
+        </p>
+      )}
+
+      {/* Repo-setup-only imports (no code_audit selected): show the scope
+          explanation, GitHubRepoCard, and a typed Continue CTA to the next
+          selected stage. No audit history / findings / start controls. */}
+      {auditScope.kind === "import-repo-setup-only" && (
+        <RepoSetupOnlySection
+          projectId={projectId}
+          isOwner={isOwner}
+          ghRepo={ghRepo}
+          workflowLabel={auditScope.workflow.scopeLabel}
+          continueCta={auditScope.continueCta}
+          onLinked={(name) => setGhRepo(name)}
+        />
+      )}
+
+      {auditScope.kind === "import-repo-setup-only" ? null : (
+      <>
+
 
 
       {/* Open findings */}
