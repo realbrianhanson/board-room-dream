@@ -40,8 +40,16 @@ export type BoardroomGateState =
       workflow: ImportWorkflow;
       nextRoute: ImportNextRoute;
     }
+  | {
+      // Improvements IS selected but the project has no GitHub repo linked
+      // yet — the board compiles against live code, so it cannot convene.
+      // Route MUST NOT mount BoardroomSession.
+      kind: "needs-repo";
+      workflow: ImportWorkflow;
+    }
   | { kind: "needs-import-audit"; message: string }
   | { kind: "ready"; workflow: ImportWorkflow | null };
+
 
 // Exact backend message used by boardroom-orchestrator's start_run gate. Kept
 // in sync so the client-side hint matches the server-side rejection.
