@@ -208,14 +208,17 @@ function IntakePage() {
   }
 
   async function next() {
-    // Guard against double-click/double-submit: saving or running already in flight.
-    if (!canProceed || saving || running) return;
+    // Guard against real double-submit of the validate call. The `saving`
+    // flag intentionally does NOT block this handler: the blur-triggered
+    // background save would otherwise swallow the first Continue click.
+    if (!canProceed || running) return;
     if (step < STEPS.length - 1) {
       const result = await persist(answers);
       if (!result.ok) return; // do not advance on save failure
       setStep(step + 1);
       return;
     }
+
     setRunning(true);
     setRunError(null);
     setNoKey(false);
@@ -258,6 +261,31 @@ function IntakePage() {
 
   function reviseIdea() { setVerdict(null); setScores(null); setStep(0); }
 
+  async function usePivot() {
+    if (!scores?.pivot) return;
+    const next = { ...answers, idea: scores.pivot };
+    const result = await persist(next);
+    if (!result.ok) return;
+    setVerdict(null);
+    setScores(null);
+    setStep(0);
+  }
+
+  async function proceedAnyway() {
+    // Flip the project forward so the Boardroom gate ("intake") doesn't
+    // immediately re-block. Any error keeps the user on the verdict screen.
+    const { error } = await supabase
+      .from("projects")
+      .update({ status: "validated" })
+      .eq("id", projectId);
+    if (error) {
+      toast.error(`Couldn't unlock the Boardroom — ${error.message}`);
+      return;
+    }
+    navigate({ to: "/boardroom/$projectId", params: { projectId } });
+  }
+
+
   if (loading) {
     return (
       <div className="mx-auto flex min-h-screen w-full max-w-2xl items-center px-6">
@@ -273,6 +301,8 @@ function IntakePage() {
         verdict={verdict}
         scores={scores}
         onEnterBoardroom={() => navigate({ to: "/boardroom/$projectId", params: { projectId } })}
+        onProceedAnyway={proceedAnyway}
+        onUsePivot={scores.pivot ? usePivot : undefined}
         onRevise={reviseIdea}
       />
     );
@@ -493,12 +523,13 @@ function IntakePage() {
           </span>
           <button
             onClick={next}
-            disabled={!canProceed || running || saving}
+            disabled={!canProceed || running}
             className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
           >
-            {running ? "The board is scoring…" : saving ? "Saving…" : step === STEPS.length - 1 ? "Submit to the board" : "Continue"}
-            {!running && !saving && <ArrowRight className="h-3.5 w-3.5" />}
+            {running ? "The board is scoring…" : step === STEPS.length - 1 ? "Submit to the board" : "Continue"}
+            {!running && <ArrowRight className="h-3.5 w-3.5" />}
           </button>
+
         </div>
       </div>
       {projectStatus !== "intake" && (
@@ -579,12 +610,14 @@ export function displayedMaxTotal(scores: Scores | null | undefined): number {
 }
 
 function VerdictView({
-  projectName, verdict, scores, onEnterBoardroom, onRevise,
+  projectName, verdict, scores, onEnterBoardroom, onProceedAnyway, onUsePivot, onRevise,
 }: {
   projectName: string;
   verdict: "pass" | "kill";
   scores: ValidationScores;
   onEnterBoardroom: () => void;
+  onProceedAnyway: () => void;
+  onUsePivot?: () => void;
   onRevise: () => void;
 }) {
   const dims = pickDisplayedDimensions(scores.scores);
@@ -649,12 +682,29 @@ function VerdictView({
             <ArrowRight className="h-3.5 w-3.5" />
           </button>
         ) : (
-          <button
-            onClick={onRevise}
-            className="inline-flex items-center gap-2 rounded-md border border-border px-5 py-2.5 text-sm text-foreground transition-colors hover:bg-surface-2"
-          >
-            Revise the idea
-          </button>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <button
+              onClick={onRevise}
+              className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Revise on my own
+            </button>
+            <button
+              onClick={onProceedAnyway}
+              className="inline-flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm text-foreground transition-colors hover:bg-surface-2"
+            >
+              Take it to the Boardroom anyway
+            </button>
+            {onUsePivot && (
+              <button
+                onClick={onUsePivot}
+                className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
+              >
+                Use the board's pivot
+                <ArrowRight className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>
