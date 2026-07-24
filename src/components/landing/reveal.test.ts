@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { cwd } from "node:process";
 
 /**
  * Landing readability regression: the Reveal component must never apply
@@ -11,7 +12,7 @@ import { resolve } from "node:path";
  */
 describe("Reveal class contract", () => {
   const src = readFileSync(
-    resolve(__dirname, "../components/landing/reveal.tsx"),
+    resolve(cwd(), "src/components/landing/reveal.tsx"),
     "utf8",
   );
 

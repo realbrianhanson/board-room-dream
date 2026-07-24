@@ -27,7 +27,7 @@ Deno.test("normalizeImportGoals drops unknown values", () => {
 });
 
 Deno.test("normalizeImportGoals legacy fallback: empty/missing => all three", () => {
-  const full = ["code_audit", "design_review", "improvements"];
+  const full = ["code_audit", "design_review", "improvements"] as const;
   assertEquals(normalizeImportGoals([]), full);
   assertEquals(normalizeImportGoals(undefined), full);
   assertEquals(normalizeImportGoals(null), full);
