@@ -2135,10 +2135,12 @@ async function handleRequest(req: Request): Promise<Response> {
         auditComplete,
         planLocked: !!planLockedRow.data,
         designLocked: !!designLockedRow.data,
+        hasRepo: !!project.github_repo,
       });
       if (!decision.allowed) {
         return j(409, { error: decision.reason, next_step: decision.nextStep });
       }
+
     } else {
       // Legacy / non-import gates are preserved unchanged.
       if (kind === "plan" && project.is_import) {
