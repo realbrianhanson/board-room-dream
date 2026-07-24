@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Plus, ArrowRight, Lightbulb, Package, Trash2 } from "lucide-react";
+import { Plus, ArrowRight, Lightbulb, Package, Trash2, Check } from "lucide-react";
 import { ProjectJourney } from "@/components/project-journey";
 import { buildJourney } from "@/lib/project-journey";
 import { classifyAudits, parseTimestamp } from "@/lib/audit-classification";
@@ -16,8 +16,16 @@ import {
   type ImportStrategyInput,
   type StrategyField,
 } from "@/lib/import-strategy";
+import {
+  deriveImportWorkflow,
+  nextImportRoute,
+  IMPORT_GOALS,
+  type ImportGoal,
+  type ImportNextRoute,
+} from "@/lib/import-workflow";
 import { initialModeFromSearch } from "@/lib/dashboard-search";
 import { DeleteProjectDialog } from "@/components/delete-project-dialog";
+
 
 
 
