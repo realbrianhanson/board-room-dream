@@ -16,12 +16,12 @@ const FULL_STRATEGY = {
 };
 
 Deno.test("audit gate: code_audit not selected => audit rejected server-side", () => {
-  const w = deriveImportWorkflow({ goals: ["improvements"] });
+  const w = deriveImportWorkflow(["improvements"]);
   assert(!w.requiresAudit, "code_audit not selected");
 });
 
 Deno.test("audit gate: audit-only workflow still allows audit start", () => {
-  const w = deriveImportWorkflow({ goals: ["code_audit"] });
+  const w = deriveImportWorkflow(["code_audit"]);
   assert(w.requiresAudit);
   assert(!w.requiresPlan);
   assert(!w.requiresDesign);
@@ -29,9 +29,9 @@ Deno.test("audit gate: audit-only workflow still allows audit start", () => {
 });
 
 Deno.test("audit gate: strategy required only when improvements selected", () => {
-  const auditOnly = deriveImportWorkflow({ goals: ["code_audit"] });
-  const auditDesign = deriveImportWorkflow({ goals: ["code_audit", "design_review"] });
-  const auditImp = deriveImportWorkflow({ goals: ["code_audit", "improvements"] });
+  const auditOnly = deriveImportWorkflow(["code_audit"]);
+  const auditDesign = deriveImportWorkflow(["code_audit", "design_review"]);
+  const auditImp = deriveImportWorkflow(["code_audit", "improvements"]);
   assertEquals(auditOnly.requiresPlan, false);
   assertEquals(auditDesign.requiresPlan, false);
   assertEquals(auditImp.requiresPlan, true);
@@ -50,7 +50,7 @@ Deno.test("audit gate: strategy complete passes validator", () => {
 });
 
 Deno.test("scope contract for audit-only prohibits product/design changes in prompt", () => {
-  const w = deriveImportWorkflow({ goals: ["code_audit"] });
+  const w = deriveImportWorkflow(["code_audit"]);
   const contract = scopeContractForPrompt(w);
   assert(contract.includes("SCOPE CONTRACT"));
   assert(contract.includes("Product Improvements is NOT selected"));
@@ -58,14 +58,14 @@ Deno.test("scope contract for audit-only prohibits product/design changes in pro
 });
 
 Deno.test("scope contract for code_audit+design_review allows UX findings but not product-scope", () => {
-  const w = deriveImportWorkflow({ goals: ["code_audit", "design_review"] });
+  const w = deriveImportWorkflow(["code_audit", "design_review"]);
   const contract = scopeContractForPrompt(w);
   assert(contract.includes("Product Improvements is NOT selected"));
   assert(!contract.includes("Design Review is NOT selected"));
 });
 
 Deno.test("scope contract for full scope has no prohibitions", () => {
-  const w = deriveImportWorkflow({ goals: ["code_audit", "design_review", "improvements"] });
+  const w = deriveImportWorkflow(["code_audit", "design_review", "improvements"]);
   const contract = scopeContractForPrompt(w);
   assert(!contract.includes("NOT selected"));
 });
