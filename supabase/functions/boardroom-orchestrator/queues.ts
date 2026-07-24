@@ -31,6 +31,45 @@ import {
   candidateForLoop,
   lastCandidateLoop,
 } from "./protocol.ts";
+import { deriveImportWorkflow, type ImportWorkflow } from "../_shared/import-workflow.ts";
+import { scopeContractForPrompt } from "../_shared/import-scope-gates.ts";
+
+// Load the caller-selected import workflow ONCE per run and cache on the run
+// object. Server MUST re-derive from persisted intakes.answers.goals; scope
+// carried in request/run metadata is untrusted (see import-scope-gates).
+// Returns null for non-import (greenfield) projects.
+export async function getImportWorkflow(admin: any, run: any): Promise<ImportWorkflow | null> {
+  if ((run as any).__import_workflow__ !== undefined) {
+    return (run as any).__import_workflow__ as ImportWorkflow | null;
+  }
+  const project = await loadProjectMeta(admin, run.project_id);
+  if (!project?.is_import) {
+    (run as any).__import_workflow__ = null;
+    return null;
+  }
+  const intake = await loadIntake(admin, run.project_id);
+  const goals = (intake?.answers as any)?.goals;
+  const workflow = deriveImportWorkflow(goals);
+  (run as any).__import_workflow__ = workflow;
+  return workflow;
+}
+
+// Returns the SCOPE CONTRACT block for imports (empty string for greenfield).
+// Callers prepend this to a system prompt ONCE per request — never duplicate
+// into both system and user, and never into more than one system message.
+export async function getScopeContract(admin: any, run: any): Promise<string> {
+  const workflow = await getImportWorkflow(admin, run);
+  if (!workflow) return "";
+  return scopeContractForPrompt(workflow);
+}
+
+// Prepends the SCOPE CONTRACT to a system prompt if this is an import run.
+// Idempotent by inspection: skips if the exact block is already present.
+function withScope(scope: string, system: string): string {
+  if (!scope) return system;
+  if (system.includes("SCOPE CONTRACT (selected by the owner):")) return system;
+  return `${scope}\n\n${system}`;
+}
 
 // Load owner authority once per run and cache on the run object so every
 // queue function in the run's lifetime pays for a single DB round trip.
