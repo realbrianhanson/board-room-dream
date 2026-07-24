@@ -508,9 +508,11 @@ async function beginAudit(params: {
   source: "github" | "paste";
   pastedCode: string | null;
   budget: number;
+  workflow: ImportWorkflow | null;
 }) {
-  const { admin, userId, project, batchId, kind, loopNo, source, pastedCode, budget } = params;
+  const { admin, userId, project, batchId, kind, loopNo, source, pastedCode, budget, workflow } = params;
   const isFinal = kind === "final_az";
+  const scopeContract = isFinal && project.is_import && workflow ? scopeContractForPrompt(workflow) : null;
 
   // Short-circuit: if this owner already has an active audit run for this
   // project, return it instead of creating a duplicate audit + run pair.
