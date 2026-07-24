@@ -726,9 +726,10 @@ function VerdictView({
             {onUsePivot && (
               <button
                 onClick={onUsePivot}
-                className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:brightness-110"
+                disabled={pivoting}
+                className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Use the board's pivot
+                {pivoting ? "Rewriting the pivot…" : "Use the board's pivot"}
                 <ArrowRight className="h-3.5 w-3.5" />
               </button>
             )}
