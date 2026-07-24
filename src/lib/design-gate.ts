@@ -39,14 +39,15 @@ export type DesignGateState =
       nextRoute: ImportNextRoute;
     }
   | {
-      // Prerequisite for design is missing (audit or plan) — Design can't
-      // open yet. Route renders a precise next-step card.
+      // Prerequisite for design is missing (repo, audit, or plan) — Design
+      // can't open yet. Route renders a precise next-step card.
       kind: "needs-prereq";
       workflow: ImportWorkflow | null;
-      missing: "audit" | "plan";
+      missing: "repo" | "audit" | "plan";
       isImport: boolean;
     }
   | { kind: "ready"; workflow: ImportWorkflow | null };
+
 
 export function computeDesignGate(inputs: DesignGateInputs): DesignGateState {
   if (inputs.loading) return { kind: "loading" };
