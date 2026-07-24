@@ -280,6 +280,32 @@ function RunwayPage() {
   const runInFlight = run && ["queued", "running", "paused", "paused_budget"].includes(run.status);
   const runPaused = run && ["paused", "paused_budget"].includes(run.status);
 
+  // Successful A–Z = a final_az audit that reached a terminal read (clean or
+  // findings). "findings" is a completed audit — presence of issues doesn't
+  // undo success for the purpose of the next-stage gate.
+  const hasSuccessfulAudit = useMemo(
+    () => audits.some((a) => a.kind === "final_az" && (a.status === "clean" || a.status === "findings")),
+    [audits],
+  );
+  const eligibility = useMemo(
+    () =>
+      computeRunwayEligibility({
+        loading: !project || hasPlan === null || batches === null,
+        error: null,
+        isImport: !!project?.is_import,
+        goals,
+        projectId,
+        hasRepo: !!ghRepo,
+        hasSuccessfulAudit,
+        hasBuildSafePlan: !!hasPlan,
+        hasBuildSafeDesign: hasDesign,
+      }),
+    [project, hasPlan, batches, goals, projectId, ghRepo, hasSuccessfulAudit, hasDesign],
+  );
+  const promptsReady = eligibility.kind === "ready";
+  const promptScopeVariant = eligibility.kind === "ready" ? eligibility.scopeVariant : null;
+
+
   const passedCount = useMemo(() => (batches ?? []).filter((b) => b.status === "passed").length, [batches]);
   const total = (batches ?? []).length;
   const activeIdx = useMemo(() => {
