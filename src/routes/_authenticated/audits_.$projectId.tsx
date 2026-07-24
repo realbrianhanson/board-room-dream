@@ -692,13 +692,26 @@ function AuditCenterPage() {
               </div>
             )}
 
-            <Link
-              to={isImport ? "/boardroom/$projectId" : "/runway/$projectId"}
-              params={{ projectId }}
-              className="mt-4 inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground hover:border-primary/40"
-            >
-              {isImport ? "To the Boardroom" : "Back to the Runway"} <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
+            {(() => {
+              const cta =
+                auditScope.kind === "import-with-audit"
+                  ? auditScope.postAuditCta
+                  : !isImport
+                    ? ({ kind: "plan", to: "/runway/$projectId", label: "Back to the Runway" } as const)
+                    : null;
+              if (!cta) return null;
+              return (
+                <Link
+                  to={cta.to}
+                  params={{ projectId }}
+                  className="mt-4 inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground hover:border-primary/40"
+                  data-testid="audit-post-cta"
+                >
+                  {cta.label} <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+              );
+            })()}
+
           </div>
         )}
 
