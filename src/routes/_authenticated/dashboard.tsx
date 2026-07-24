@@ -236,7 +236,7 @@ function DashboardPage() {
   const [impName, setImpName] = useState("");
   const [impDescription, setImpDescription] = useState("");
   const [impUrl, setImpUrl] = useState("");
-  const [impGoals, setImpGoals] = useState<string[]>(["code_audit"]);
+  const [impGoals, setImpGoals] = useState<ImportGoal[]>(["code_audit"]);
   // "Existing app" form — optional strategy
   const [impBuyer, setImpBuyer] = useState("");
   const [impAcquisitionChannel, setImpAcquisitionChannel] = useState("");
