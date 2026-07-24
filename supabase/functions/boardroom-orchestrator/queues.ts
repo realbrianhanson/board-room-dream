@@ -1066,21 +1066,30 @@ Constraints: ${batchRangeText} batches, unique ascending integer batch_no starti
 // scope + security. Blocking issues send the draft back to the Chair once.
 export async function queueBatchesReview(admin: any, run: any, draftJson: any) {
   const manual = await loadFieldManual(admin);
-  const plan = await loadLockedPlan(admin, run.project_id);
   const project = await loadProjectMeta(admin, run.project_id);
+  const isImport = !!project?.is_import;
+  const workflow = isImport ? await getImportWorkflow(admin, run) : null;
+  const scope = isImport ? await getScopeContract(admin, run) : "";
+  const requiresPlan = !workflow || workflow.requiresPlan;
+  const requiresDesign = !workflow || workflow.requiresDesign;
+  const plan = requiresPlan ? await loadLockedPlan(admin, run.project_id) : null;
   const repoContract = await loadCompactBatchRepoContract(admin, project);
-  const { data: design } = await admin
-    .from("plan_versions")
-    .select("content_md")
-    .eq("project_id", run.project_id)
-    .eq("kind", "design")
-    .eq("is_build_safe", true)
-    .order("version", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const featuresBlock = Array.isArray(plan?.features) && plan!.features.length
-    ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
-    : "(none listed)";
+  const { data: design } = requiresDesign
+    ? await admin
+      .from("plan_versions")
+      .select("content_md")
+      .eq("project_id", run.project_id)
+      .eq("kind", "design")
+      .eq("is_build_safe", true)
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    : { data: null } as any;
+  const featuresBlock = !requiresPlan
+    ? "(out of scope — design-only workflow)"
+    : Array.isArray(plan?.features) && plan!.features.length
+      ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
+      : "(none listed)";
   const draftBlock = JSON.stringify(draftJson?.batches ?? [], null, 2);
   const shape = `Return ONLY valid JSON:
 {
