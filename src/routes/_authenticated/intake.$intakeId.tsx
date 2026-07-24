@@ -263,13 +263,38 @@ function IntakePage() {
   function reviseIdea() { setVerdict(null); setScores(null); setStep(0); }
 
   async function usePivot() {
-    if (!scores?.pivot) return;
-    const next = { ...answers, idea: scores.pivot };
-    const result = await persist(next);
-    if (!result.ok) return;
-    setVerdict(null);
-    setScores(null);
-    setStep(0);
+    if (!scores?.pivot || pivoting) return;
+    setPivoting(true);
+    try {
+      // Ask the board to rewrite its strategic pivot into a plain-language
+      // product description that fits the "what does the app do" field.
+      // On any failure we fall back to the raw pivot so the user is never
+      // stranded on the verdict screen.
+      let rewritten = scores.pivot;
+      try {
+        const { data, error } = await supabase.functions.invoke(
+          "rewrite-pivot",
+          { body: { intake_id: intakeId } },
+        );
+        if (!error && data?.status === "ok" && typeof data?.idea === "string" && data.idea.trim()) {
+          rewritten = data.idea.trim();
+        } else if (data?.status === "no_key") {
+          toast.message("Using the raw pivot — add your OpenRouter key in Settings for a rewrite.");
+        } else if (error) {
+          toast.message("Couldn't rewrite the pivot — using the board's original wording.");
+        }
+      } catch {
+        toast.message("Couldn't rewrite the pivot — using the board's original wording.");
+      }
+      const next = { ...answers, idea: rewritten };
+      const result = await persist(next);
+      if (!result.ok) return;
+      setVerdict(null);
+      setScores(null);
+      setStep(0);
+    } finally {
+      setPivoting(false);
+    }
   }
 
   async function proceedAnyway() {
