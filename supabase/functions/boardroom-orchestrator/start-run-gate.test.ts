@@ -4,12 +4,16 @@ import { assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { deriveImportWorkflow } from "../_shared/import-workflow.ts";
 import { evaluateStartRunGate } from "../_shared/import-scope-gates.ts";
 
-const state = (partial: Partial<{ auditComplete: boolean; planLocked: boolean; designLocked: boolean }>) => ({
+const state = (
+  partial: Partial<{ auditComplete: boolean; planLocked: boolean; designLocked: boolean; hasRepo: boolean }>,
+) => ({
   auditComplete: false,
   planLocked: false,
   designLocked: false,
+  hasRepo: true,
   ...partial,
 });
+
 
 Deno.test("start_run plan: rejected when improvements not selected (audit-only)", () => {
   const w = deriveImportWorkflow(["code_audit"]);
