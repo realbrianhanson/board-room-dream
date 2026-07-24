@@ -818,7 +818,7 @@ function RunwayPage() {
       {/* State C-defensive: run reported `completed` but persisted zero
           batches (schema drift, superseded, or an incomplete recovery).
           Single unified recovery card — never render alongside State B. */}
-      {promptsReady && total === 0 && run && run.status === "completed" && (
+      {promptsReady && total === 0 && run && (run.status as string) === "completed" && (
         <div className="mt-4 rounded-xl border border-primary/40 bg-primary/10 p-6">
           <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.28em] text-primary">
             <AlertTriangle className="h-4 w-4" /> The last run completed with no batches on file.
