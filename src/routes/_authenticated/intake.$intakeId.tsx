@@ -261,6 +261,31 @@ function IntakePage() {
 
   function reviseIdea() { setVerdict(null); setScores(null); setStep(0); }
 
+  async function usePivot() {
+    if (!scores?.pivot) return;
+    const next = { ...answers, idea: scores.pivot };
+    const result = await persist(next);
+    if (!result.ok) return;
+    setVerdict(null);
+    setScores(null);
+    setStep(0);
+  }
+
+  async function proceedAnyway() {
+    // Flip the project forward so the Boardroom gate ("intake") doesn't
+    // immediately re-block. Any error keeps the user on the verdict screen.
+    const { error } = await supabase
+      .from("projects")
+      .update({ status: "validated" })
+      .eq("id", projectId);
+    if (error) {
+      toast.error(`Couldn't unlock the Boardroom — ${error.message}`);
+      return;
+    }
+    navigate({ to: "/boardroom/$projectId", params: { projectId } });
+  }
+
+
   if (loading) {
     return (
       <div className="mx-auto flex min-h-screen w-full max-w-2xl items-center px-6">
