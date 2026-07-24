@@ -31,6 +31,45 @@ import {
   candidateForLoop,
   lastCandidateLoop,
 } from "./protocol.ts";
+import { deriveImportWorkflow, type ImportWorkflow } from "../_shared/import-workflow.ts";
+import { scopeContractForPrompt } from "../_shared/import-scope-gates.ts";
+
+// Load the caller-selected import workflow ONCE per run and cache on the run
+// object. Server MUST re-derive from persisted intakes.answers.goals; scope
+// carried in request/run metadata is untrusted (see import-scope-gates).
+// Returns null for non-import (greenfield) projects.
+export async function getImportWorkflow(admin: any, run: any): Promise<ImportWorkflow | null> {
+  if ((run as any).__import_workflow__ !== undefined) {
+    return (run as any).__import_workflow__ as ImportWorkflow | null;
+  }
+  const project = await loadProjectMeta(admin, run.project_id);
+  if (!project?.is_import) {
+    (run as any).__import_workflow__ = null;
+    return null;
+  }
+  const intake = await loadIntake(admin, run.project_id);
+  const goals = (intake?.answers as any)?.goals;
+  const workflow = deriveImportWorkflow(goals);
+  (run as any).__import_workflow__ = workflow;
+  return workflow;
+}
+
+// Returns the SCOPE CONTRACT block for imports (empty string for greenfield).
+// Callers prepend this to a system prompt ONCE per request — never duplicate
+// into both system and user, and never into more than one system message.
+export async function getScopeContract(admin: any, run: any): Promise<string> {
+  const workflow = await getImportWorkflow(admin, run);
+  if (!workflow) return "";
+  return scopeContractForPrompt(workflow);
+}
+
+// Prepends the SCOPE CONTRACT to a system prompt if this is an import run.
+// Idempotent by inspection: skips if the exact block is already present.
+function withScope(scope: string, system: string): string {
+  if (!scope) return system;
+  if (system.includes("SCOPE CONTRACT (selected by the owner):")) return system;
+  return `${scope}\n\n${system}`;
+}
 
 // Load owner authority once per run and cache on the run object so every
 // queue function in the run's lifetime pays for a single DB round trip.
@@ -344,11 +383,13 @@ export async function queueRound1(admin: any, run: any) {
   const intake = await loadIntake(admin, run.project_id);
   const project = await loadProjectMeta(admin, run.project_id);
   const isImport = !!project?.is_import;
+  const workflow = isImport ? await getImportWorkflow(admin, run) : null;
+  const scope = isImport ? await getScopeContract(admin, run) : "";
   let system: string;
   let userContent: string;
 
   if (run.kind === "design") {
-    const plan = await loadLockedPlan(admin, run.project_id);
+    const plan = workflow && !workflow.requiresPlan ? null : await loadLockedPlan(admin, run.project_id);
     system =
       "Round 1 of the Design Council. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best design direction for this app. You MUST include: concept/mood; palette as specific HSL values; type pairing with specific font names; spacing and shape language; ONE distinctive signature element (a structural design move — non-negotiable, this is the point); and motion rules. Be specific, opinionated, and premium. Avoid generic AI-slop aesthetics.";
     if (isImport) {
@@ -357,7 +398,9 @@ export async function queueRound1(admin: any, run: any) {
       const codeBlock = sample.files.length ? formatFiles(sample.files) : "(no repo files available)";
       const planBlock = plan?.content_md?.trim()
         ? `LOCKED PLAN\n\n${plan.content_md}\n\nPRD\n\n${plan.prd_md ?? "(no PRD)"}`
-        : "LOCKED PLAN\n(none yet — base your direction on the real code above)";
+        : workflow && !workflow.requiresPlan
+          ? `LOCKED PLAN\n(out of scope — the owner selected a Design-only workflow; product scope, features, routes, data model, auth, integrations, and business logic are FROZEN. Elevate the visual system without proposing product or behavior changes.)`
+          : `LOCKED PLAN\n(none yet — base your direction on the real code above)`;
       userContent = `${intakeBlock(intake)}\n\nREPO FILE TREE (top ${sample.fileTree.length})\n${treeBlock}\n\nKEY FILES (frontend-biased sample)\n${codeBlock}\n\n${planBlock}\n\nThis is an existing app — critique the real UI in the code above and propose a design direction that elevates it without a full rebuild. Write your Round 1 design direction now.`;
     } else {
       userContent = `${intakeBlock(intake)}\n\nLOCKED PLAN\n\n${plan?.content_md ?? "(no plan)"}\n\nPRD\n\n${plan?.prd_md ?? "(no PRD)"}\n\nWrite your Round 1 design direction now.`;
@@ -377,6 +420,7 @@ export async function queueRound1(admin: any, run: any) {
       "Round 1 of the board's deliberation. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best version of the app plan: concept, target user, core features (MVP-first, ruthlessly cut), the data the app stores, and what you'd cut. Be specific, concise, and opinionated.";
     userContent = `${intakeBlock(intake)}\n\nWrite your Round 1 draft now.`;
   }
+  system = withScope(scope, system);
   const imageParts = run.kind === "design"
     ? await loadScreenshotParts(admin, run.user_id, run.project_id)
     : [];
@@ -457,7 +501,8 @@ export async function queueRound3(admin: any, run: any, steps: any[], loop: numb
 
 Every H2 header must appear exactly as written. Be specific: exact HSL values, real font names, concrete component rules.`
     : `the full app plan: concept, target user, MVP features (ruthlessly cut), data stored, and explicit cuts.`;
-  const system = `Round 3 — Chair synthesis${loop > 0 ? ` (loop ${loop}, revising after a failed vote)` : ""}. You are the Chair. Weld the four ${isDesign ? "design directions" : "drafts"} and the objections into ONE candidate ${isDesign ? "design brief" : "plan"}.
+  const scope = await getScopeContract(admin, run);
+  const system = withScope(scope, `Round 3 — Chair synthesis${loop > 0 ? ` (loop ${loop}, revising after a failed vote)` : ""}. You are the Chair. Weld the four ${isDesign ? "design directions" : "drafts"} and the objections into ONE candidate ${isDesign ? "design brief" : "plan"}.
 
 Write ${docSpec}
 
@@ -467,7 +512,7 @@ One bullet per objection you weighed: [seat] "objection" — accepted/rejected �
 ## Steals adopted
 One bullet per idea you took from another seat's draft.
 
-Respond with the markdown document ONLY — no JSON, no preamble, no closing remarks.`;
+Respond with the markdown document ONLY — no JSON, no preamble, no closing remarks.`);
   const parts: string[] = [intakeBlock(intake)];
   if (String(run.founder_notes ?? "").trim()) {
     parts.push(`FOUNDER'S NOTES TO THE BOARD (the founder is the client — weigh these heavily):\n${String(run.founder_notes).trim()}`);
@@ -539,10 +584,11 @@ export async function queueRound4(admin: any, run: any, steps: any[], loop: numb
   // The Chair authored the candidate and does not vote on its own work —
   // consensus is judged by the three independent seats.
   const voters = SEATS.filter((s) => s !== "chair");
+  const scope = await getScopeContract(admin, run);
   const rows = voters.map((seat) => {
     const myR2 = steps.find((x) => x.step_key === `r2_exam_${seat}` && x.status === "completed");
     const myObjections = myR2?.response_json?.objections ?? [];
-    const system = `Round 4 — Scored vote${loop > 0 ? ` (loop ${loop})` : ""}. The Chair synthesized this candidate; as an independent seat you now judge it. Vote on the candidate ${run.kind === "design" ? "design brief" : "plan"} against the founder's intake and your Round-2 objections.
+    const system = withScope(scope, `Round 4 — Scored vote${loop > 0 ? ` (loop ${loop})` : ""}. The Chair synthesized this candidate; as an independent seat you now judge it. Vote on the candidate ${run.kind === "design" ? "design brief" : "plan"} against the founder's intake and your Round-2 objections.
 
 Return ONLY valid JSON matching this shape:
 {
@@ -558,7 +604,7 @@ ${scoresShape}
 
 Every score must be an integer 1-10. Score against the founder's actual intake — not the candidate in a vacuum.
 
-Resolution discipline: an objection is "resolved" ONLY if you can quote the exact candidate text that resolves it. No quote = it still stands. Add still-standing dealbreakers to blocking_objections. Do not inflate scores to reach consensus.`;
+Resolution discipline: an objection is "resolved" ONLY if you can quote the exact candidate text that resolves it. No quote = it still stands. Add still-standing dealbreakers to blocking_objections. Do not inflate scores to reach consensus.`);
     const user = `${intakeBlock(intake)}\n\nCANDIDATE\n\n${candidateMd}\n\nYOUR ROUND-2 OBJECTIONS\n${JSON.stringify(myObjections, null, 2)}\n\nProduce your JSON now.`;
     return {
       run_id: run.id,
@@ -590,14 +636,15 @@ export async function queueFinalRuling(admin: any, run: any, steps: any[]) {
   const lastLoop = run.loop_no; // by now already incremented to 3
   const previousLoop = Math.max(0, lastLoop - 1);
   const failure = priorRoundFailureBlock(steps, previousLoop);
-  const system = `The board has failed to reach consensus after three synthesis loops. You are the Chair — RULE. Accept some outstanding objections, reject others, and produce the final plan. This is a chair-ruled plan, not a consensus plan.
+  const scope = await getScopeContract(admin, run);
+  const system = withScope(scope, `The board has failed to reach consensus after three synthesis loops. You are the Chair — RULE. Accept some outstanding objections, reject others, and produce the final plan. This is a chair-ruled plan, not a consensus plan.
 
 Return ONLY valid JSON matching this shape:
 {
   "final_md": "Full markdown plan.",
   "ruling_note": "One paragraph explaining the ruling.",
   "dissent_ledger": [ { "seat": "...", "objection": "...", "chair_response": "..." } ]
-}`;
+}`);
   const user = `${intakeBlock(intake)}\n\nLAST CANDIDATE\n${lastCandidate}\n\n${failure}\n\nProduce your JSON now.`;
   await queueSteps(admin, run, {
     run_id: run.id,
@@ -624,7 +671,8 @@ Return ONLY valid JSON matching this shape:
 // then a cheap extraction lifts the features list into JSON.
 export async function queueBlueprint(admin: any, run: any, contentMd: string, intake: any) {
   const manual = await loadFieldManual(admin);
-  const system = `Blueprint — you are the Chair drafting the implementation documents for the locked plan. Turn the plan into a precise PRD.
+  const scope = await getScopeContract(admin, run);
+  const system = withScope(scope, `Blueprint — you are the Chair drafting the implementation documents for the locked plan. Turn the plan into a precise PRD.
 
 ${manual}
 
@@ -640,7 +688,7 @@ Write a full markdown PRD with these exact H2 sections in this exact order:
 
 Every section header must appear exactly as written. Be specific: name concrete tables, columns, page routes, and edge functions. Under ## Features, one bullet per feature: **name** (mvp|later) — one-sentence description.
 
-Respond with the markdown document ONLY — no JSON, no preamble.`;
+Respond with the markdown document ONLY — no JSON, no preamble.`);
   const user = `${intakeBlock(intake)}\n\nLOCKED PLAN\n\n${contentMd}\n\nWrite the PRD now.`;
   await queueSteps(admin, run, {
     run_id: run.id,
@@ -849,22 +897,38 @@ Write the documents at FULL length — never compress them because they are insi
 
 export async function queueBatchesStep(admin: any, run: any) {
   const manual = await loadFieldManual(admin);
-  const plan = await loadLockedPlan(admin, run.project_id);
   const project = await loadProjectMeta(admin, run.project_id);
-  const { data: design } = await admin
-    .from("plan_versions")
-    .select("content_md")
-    .eq("project_id", run.project_id)
-    .eq("kind", "design")
-    .eq("is_build_safe", true)
-    .order("version", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const isImport = !!project?.is_import;
+  const workflow = isImport ? await getImportWorkflow(admin, run) : null;
+  const scope = isImport ? await getScopeContract(admin, run) : "";
+
+  // Scope-conditional artifact loading: never trust request scope, always use
+  // the server-derived workflow. Design-only skips the plan; improvements-only
+  // skips the design brief. Both must still preserve the artifact that IS in
+  // scope; the missing side becomes an "OUT OF SCOPE" instruction, never a
+  // "convene later" suggestion.
+  const requiresPlan = !workflow || workflow.requiresPlan;
+  const requiresDesign = !workflow || workflow.requiresDesign;
+
+  const plan = requiresPlan ? await loadLockedPlan(admin, run.project_id) : null;
+  const { data: design } = requiresDesign
+    ? await admin
+      .from("plan_versions")
+      .select("content_md")
+      .eq("project_id", run.project_id)
+      .eq("kind", "design")
+      .eq("is_build_safe", true)
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    : { data: null } as any;
 
   const compactDesign = compactMarkdown(design?.content_md ?? "", COMPACT_ARTIFACT_CAP);
-  const designSection = compactDesign
-    ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}\n\nBatch 1 MUST install these design tokens (CSS variables, Tailwind config, font imports) BEFORE any feature work.`
-    : `NO LOCKED DESIGN BRIEF — do not fabricate one. The student will convene the Design Council later.`;
+  const designSection = !requiresDesign
+    ? `DESIGN — OUT OF SCOPE. The owner did NOT select Design Review. The existing visual system (tokens, palette, typography, layout, component styling, motion) is LOCKED. Every batch MUST preserve it. Do not restyle, do not add design tokens, do not swap fonts or palettes, do not introduce a design-system replacement.`
+    : compactDesign
+      ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}\n\nBatch 1 MUST install these design tokens (CSS variables, Tailwind config, font imports) BEFORE any feature work.`
+      : `NO LOCKED DESIGN BRIEF — do not fabricate one. The student will convene the Design Council later.`;
 
   // Compact repo contract for batch-generation only. The JIT batch-compiler
   // regrounds each specific batch against the full live code/schema before
@@ -880,11 +944,26 @@ export async function queueBatchesStep(admin: any, run: any) {
   // minimum needed to cover the locked improvement plan). Greenfield stays
   // 6-8 (prefer 6). The validator globally accepts 3-8 so this prompt-side
   // range simply constrains the model within the allowed window.
-  const isImport = !!project?.is_import;
   const policy = batchPromptPolicy(isImport);
   const batchRangeText = policy.rangeText;
   const batchRangePrompt = policy.rangePrompt;
   const batchCountRule = policy.countRule;
+
+  // Scope-aware rules. Design-only imports have no plan/features/PRD; the
+  // greenfield "EVERY feature in FEATURES must land in some batch" rule
+  // does not apply. Improvements-only imports must preserve the existing
+  // visual system. Full and greenfield keep the original coverage rule.
+  const featureCoverageRule = !requiresPlan
+    ? `- FEATURES — OUT OF SCOPE. No FEATURES / PRD / product-scope list applies. Do NOT invent features, monetization, positioning, or new routes/tables. Do NOT add Enhancement batches from imagined value.`
+    : `- EVERY feature in the FEATURES list must land in some batch. Must-have/high-priority features go in the core batches; lower-priority features go in final batches titled "Enhancement — <name>" (same skeleton, same rigor). Never silently drop a listed feature.\n- If a DEFERRED VALUE section is provided, harvest the still-valuable ideas that do not contradict the locked plan into the Enhancement batches too. Never resurrect anything the board explicitly rejected as harmful.`;
+
+  const visualPreservationRule = !requiresDesign && isImport
+    ? `- DESIGN PRESERVATION (blocking): the existing visual system is FROZEN. No batch may add or edit design tokens, palette, typography, spacing, shape language, or motion. UI edits must reuse existing components and tokens verbatim.`
+    : "";
+
+  const designOnlyBatchGuide = !requiresPlan && requiresDesign
+    ? `\n\nDESIGN-ONLY BUILD (scope-locked): produce the smallest valid 3-6 batch sequence that APPLIES the locked design brief to the real current UI shown in the LIVE REPO CONTRACT. No behavior changes, no data-model changes, no new backend, no new routes, no new features. Sequence: (1) tokens/typography/spacing install, (2..N) apply the tokens per surface area, (last) a11y/motion/regression polish. Every batch MUST be single-concern and reuse existing routes/components verbatim.`
+    : "";
 
   const system = `You are the Chair, sequencing this student's build for their Lovable project. ${batchRangePrompt}
 
@@ -898,7 +977,7 @@ OUTPUT DISCIPLINE (hard limits — the run FAILS if you exceed them):
 - Total serialized JSON payload: <=24,000 characters. If you approach that, cut prose — not scope.
 
 Rules for EVERY batch:
-- Numbered items with EXACT scope — no wishlists. Name exact routes, components, tables, and columns from the PRD in every item.
+- Numbered items with EXACT scope — no wishlists. Name exact routes, components, tables, and columns${requiresPlan ? " from the PRD" : ""} in every item.
 - Acceptance checks MUST match the batch's actual layer. Never require preview clicks as the only proof for backend work.
   * channel 'lovable' (UI/frontend): 2-4 observable preview interactions — clicks, form submits, visible state/copy, plus console/network checks when relevant.
   * channel 'supabase' (backend/DB/RLS/edge): 2-4 concrete BACKEND checks — migration applied / schema query result, RLS positive + negative case, edge-function request/response, DB constraint or trigger behavior, logs, or automated test. NEVER a "click in the preview" check on a supabase-only batch.
@@ -909,9 +988,8 @@ Rules for EVERY batch:
 - Channel 'human' = things only the student can do in external consoles (Stripe, DNS, OAuth apps, App Store, domain purchase) — write plain-language numbered steps, no code, no acceptance checks, no typecheck line.
 - Channel 'lovable' = frontend + integration work the student will paste into Lovable.
 - Sequence so nothing depends on a later batch. Auth/data foundations early. Polish/SEO/analytics late.
-- EVERY feature in the FEATURES list must land in some batch. Must-have/high-priority features go in the core batches; lower-priority features go in final batches titled "Enhancement — <name>" (same skeleton, same rigor). Never silently drop a listed feature.
-- If a DEFERRED VALUE section is provided, harvest the still-valuable ideas that do not contradict the locked plan into the Enhancement batches too. Never resurrect anything the board explicitly rejected as harmful.
-- REPO GROUNDING (critical): The LIVE REPO CONTRACT is authoritative. Any path/route/component/table/function that already exists there is an UPDATE target and MUST match the contract verbatim. Anything not in the contract MUST be labelled CREATE/ADD, and its dependencies MUST be sequenced earlier. Never invent an UPDATE against a filename that is not in the contract.
+${featureCoverageRule}
+${visualPreservationRule ? visualPreservationRule + "\n" : ""}- REPO GROUNDING (critical): The LIVE REPO CONTRACT is authoritative. Any path/route/component/table/function that already exists there is an UPDATE target and MUST match the contract verbatim. Anything not in the contract MUST be labelled CREATE/ADD, and its dependencies MUST be sequenced earlier. Never invent an UPDATE against a filename that is not in the contract.
 - Every prompt_md follows this skeleton:
   """
   Batch N — <one-line batch name>. Numbered items only, no scope creep.
@@ -926,7 +1004,7 @@ Rules for EVERY batch:
 
   Keep everything else identical.
   Typecheck when done.  ← omit for channel 'human'
-  """
+  """${designOnlyBatchGuide}
 
 Return ONLY valid JSON:
 {
@@ -937,19 +1015,29 @@ Return ONLY valid JSON:
 
 Constraints: ${batchRangeText} batches, unique ascending integer batch_no starting at 1, every prompt_md within character limits, following the skeleton exactly.`;
 
-  const featuresBlock = Array.isArray(plan?.features) && plan!.features.length
-    ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
-    : "(none listed)";
+  const featuresBlock = !requiresPlan
+    ? "(out of scope — design-only workflow; no feature list applies)"
+    : Array.isArray(plan?.features) && plan!.features.length
+      ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
+      : "(none listed)";
 
   const deferredRaw = {
     decision_log: (plan as any)?.decision_log ?? null,
     dissent_ledger: (plan as any)?.dissent_ledger ?? null,
   };
-  const deferredBlock = (deferredRaw.decision_log || deferredRaw.dissent_ledger)
+  const deferredBlock = requiresPlan && (deferredRaw.decision_log || deferredRaw.dissent_ledger)
     ? `\n\nDEFERRED VALUE (board decision log + dissent ledger) — ideas debated and not adopted into the core plan. Harvest anything still valuable and consistent with the locked plan into the final Enhancement batches:\n${JSON.stringify(deferredRaw).slice(0, 4000)}`
     : "";
 
-  const user = `${repoContract}\n\nLOCKED PLAN (compact — full text is in the plan_versions table)\n\n${compactPlan || "(no plan)"}\n\nPRD (compact — full text is in plan_versions.prd_md)\n\n${compactPrd || "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}${deferredBlock}\n\nProduce the JSON now.`;
+  const planSection = !requiresPlan
+    ? "LOCKED PLAN\n(out of scope — design-only workflow; product scope, features, routes, data model, auth, integrations, and business logic are FROZEN)"
+    : `LOCKED PLAN (compact — full text is in the plan_versions table)\n\n${compactPlan || "(no plan)"}`;
+  const prdSection = !requiresPlan
+    ? "PRD\n(out of scope — no PRD applies for design-only workflows)"
+    : `PRD (compact — full text is in plan_versions.prd_md)\n\n${compactPrd || "(no PRD)"}`;
+
+  const user = `${repoContract}\n\n${planSection}\n\n${prdSection}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}${deferredBlock}\n\nProduce the JSON now.`;
+
 
   await queueSteps(admin, run, {
     run_id: run.id,
@@ -965,7 +1053,7 @@ Constraints: ${batchRangeText} batches, unique ascending integer batch_no starti
       _is_import: isImport,
 
       messages: [
-        { role: "system", content: system },
+        { role: "system", content: withScope(scope, system) },
         { role: "user", content: user },
       ],
     },
@@ -978,21 +1066,30 @@ Constraints: ${batchRangeText} batches, unique ascending integer batch_no starti
 // scope + security. Blocking issues send the draft back to the Chair once.
 export async function queueBatchesReview(admin: any, run: any, draftJson: any) {
   const manual = await loadFieldManual(admin);
-  const plan = await loadLockedPlan(admin, run.project_id);
   const project = await loadProjectMeta(admin, run.project_id);
+  const isImport = !!project?.is_import;
+  const workflow = isImport ? await getImportWorkflow(admin, run) : null;
+  const scope = isImport ? await getScopeContract(admin, run) : "";
+  const requiresPlan = !workflow || workflow.requiresPlan;
+  const requiresDesign = !workflow || workflow.requiresDesign;
+  const plan = requiresPlan ? await loadLockedPlan(admin, run.project_id) : null;
   const repoContract = await loadCompactBatchRepoContract(admin, project);
-  const { data: design } = await admin
-    .from("plan_versions")
-    .select("content_md")
-    .eq("project_id", run.project_id)
-    .eq("kind", "design")
-    .eq("is_build_safe", true)
-    .order("version", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const featuresBlock = Array.isArray(plan?.features) && plan!.features.length
-    ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
-    : "(none listed)";
+  const { data: design } = requiresDesign
+    ? await admin
+      .from("plan_versions")
+      .select("content_md")
+      .eq("project_id", run.project_id)
+      .eq("kind", "design")
+      .eq("is_build_safe", true)
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    : { data: null } as any;
+  const featuresBlock = !requiresPlan
+    ? "(out of scope — design-only workflow)"
+    : Array.isArray(plan?.features) && plan!.features.length
+      ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
+      : "(none listed)";
   const draftBlock = JSON.stringify(draftJson?.batches ?? [], null, 2);
   const shape = `Return ONLY valid JSON:
 {
@@ -1013,36 +1110,49 @@ Review rules (apply strictly):
 - BLOCKING: any batch that asserts "React + Vite" (or any specific stack) as a universal rule when the LIVE REPO CONTRACT shows a different stack (e.g. src/routes/__root.tsx + @tanstack/react-start indicates TanStack Start, not React+Vite). Flag stack assumptions that don't match the detected stack.
 - BLOCKING: any batch that asks Lovable to run browser tests in the SAME prompt as a large build change — verification must be a separate follow-up prompt.
 - BLOCKING: test-tool mismatch — a lovable/UI batch that demands Deno edge tests, or a supabase/backend batch that demands browser-flow tests. Frontend uses Lovable's browser testing + optional frontend tests; backend uses direct edge-fn/RPC calls + Deno tests.
+- BLOCKING: any batch outside the SCOPE CONTRACT above (feature/monetization/product-scope work when improvements is not selected; design/token/typography changes when design_review is not selected). Name the offending batch and say to drop or relabel it.
 - NOT A FINDING: treating a filename alone as proof of a leaked secret. Public Supabase anon/publishable keys are not secret exposure. Only flag secrets when the batch itself embeds or exports actual secret material.`;
 
+  const coverageRule = !requiresPlan
+    ? `- FEATURES / PRD are OUT OF SCOPE for this design-only workflow. Flag any batch that invents features, monetization, positioning, or new routes/tables (blocking).`
+    : `- Every MVP feature in the PRD lands in some batch; name any orphan (blocking).\n- Every OTHER feature in the FEATURES list lands in some batch (core or Enhancement); name any silently-dropped feature (major).`;
+  const designInstallRule = !requiresDesign
+    ? `- The existing visual system is FROZEN by scope. Flag any batch that adds or edits design tokens, palette, typography, spacing, or motion (blocking).`
+    : `- Design tokens are installed before any feature work that uses them.`;
+
   const prompts: Record<string, string> = {
-    inspector: `Batches review — Inspector. Check the drafted build sequence for coverage and dependency integrity:
-- Every MVP feature in the PRD lands in some batch; name any orphan (blocking).
-- Every OTHER feature in the FEATURES list lands in some batch (core or Enhancement); name any silently-dropped feature (major).
+    inspector: withScope(scope, `Batches review — Inspector. Check the drafted build sequence for coverage and dependency integrity:
+${coverageRule}
 - No batch references a table, route, component, or function created in a LATER batch (blocking).
-- Design tokens are installed before any feature work that uses them.
+${designInstallRule}
 - Code batches carry acceptance checks a non-coder can run by clicks alone; skeleton followed exactly.
 
 ${manual}
 
-${shape}`,
-    contrarian: `Batches review — Contrarian. Attack the drafted build sequence:
+${shape}`),
+    contrarian: withScope(scope, `Batches review — Contrarian. Attack the drafted build sequence:
 - Any single batch too big for Lovable to execute faithfully in one paste (mixes concerns, >~5 files, vague items) — blocking; say how to split.
 - Any table created without explicit access rules stated in plain words — blocking.
 - Human-channel work (Stripe, OAuth, DNS) hidden inside a code batch — blocking.
-- Scope creep beyond the locked plan — major; name the cut. (Clearly-labeled Enhancement batches carrying FEATURES-list items or DEFERRED VALUE are NOT scope creep — but newly invented scope inside them is.)
+- Scope creep beyond the SCOPE CONTRACT or the locked plan — major (blocking if it violates the SCOPE CONTRACT); name the cut. (Clearly-labeled Enhancement batches carrying FEATURES-list items or DEFERRED VALUE are NOT scope creep — but newly invented scope inside them is.)
 
 ${manual}
 
-${shape}`,
+${shape}`),
   };
-  const compactPlan = compactMarkdown(plan?.content_md ?? "", COMPACT_ARTIFACT_CAP);
-  const compactPrd = compactMarkdown(plan?.prd_md ?? "", COMPACT_ARTIFACT_CAP);
-  const compactDesign = compactMarkdown(design?.content_md ?? "", COMPACT_ARTIFACT_CAP);
-  const designSection = compactDesign
-    ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}`
-    : `NO LOCKED DESIGN BRIEF.`;
-  const user = `${repoContract}\n\nLOCKED PLAN (compact)\n\n${compactPlan || "(no plan)"}\n\nPRD (compact)\n\n${compactPrd || "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nDRAFT BATCHES\n\n${draftBlock}\n\nProduce your JSON now.`;
+  const compactPlan = requiresPlan ? compactMarkdown(plan?.content_md ?? "", COMPACT_ARTIFACT_CAP) : "";
+  const compactPrd = requiresPlan ? compactMarkdown(plan?.prd_md ?? "", COMPACT_ARTIFACT_CAP) : "";
+  const compactDesign = requiresDesign ? compactMarkdown(design?.content_md ?? "", COMPACT_ARTIFACT_CAP) : "";
+  const planSection = !requiresPlan
+    ? "LOCKED PLAN\n(out of scope — design-only workflow; product/features/routes/data FROZEN)"
+    : `LOCKED PLAN (compact)\n\n${compactPlan || "(no plan)"}`;
+  const prdSection = !requiresPlan ? "PRD\n(out of scope)" : `PRD (compact)\n\n${compactPrd || "(no PRD)"}`;
+  const designSection = !requiresDesign
+    ? "DESIGN — OUT OF SCOPE (existing visual system is FROZEN and must be preserved verbatim)"
+    : compactDesign
+      ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}`
+      : `NO LOCKED DESIGN BRIEF.`;
+  const user = `${repoContract}\n\n${planSection}\n\n${prdSection}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nDRAFT BATCHES\n\n${draftBlock}\n\nProduce your JSON now.`;
   const rows = (["inspector", "contrarian"] as const).map((seat) => ({
     run_id: run.id,
     user_id: run.user_id,
@@ -1053,14 +1163,6 @@ ${shape}`,
     request: {
       json_output: true,
       temperature: 0.2,
-      // BATCH-REVIEW-LOW-REASONING-R1: live run b67878e0 truncated
-      // batches_review_inspector at tokens_out 2,486 / response 301 chars,
-      // ended inside issue.text — same reasoning-budget starvation as the
-      // now-fixed batches_revise_chair. These reviewer jobs are bounded
-      // schema validation (max 8 issues, 280 chars each, <=4,500 serialized
-      // chars) — low reasoning leaves the entire 2,500 output budget for the
-      // concise JSON. batches_chair keeps "high"; batches_revise_chair
-      // keeps "low".
       reasoning_effort: "low",
       max_tokens: 2500,
 
@@ -1069,6 +1171,7 @@ ${shape}`,
         { role: "user", content: user },
       ],
     },
+
   }));
   await queueSteps(admin, run, rows);
 }
@@ -1076,29 +1179,37 @@ ${shape}`,
 
 export async function queueBatchesRevise(admin: any, run: any, draftJson: any, reviewSteps: any[]) {
   const manual = await loadFieldManual(admin);
-  const plan = await loadLockedPlan(admin, run.project_id);
   const project = await loadProjectMeta(admin, run.project_id);
+  const isImport = !!project?.is_import;
+  const workflow = isImport ? await getImportWorkflow(admin, run) : null;
+  const scope = isImport ? await getScopeContract(admin, run) : "";
+  const requiresPlan = !workflow || workflow.requiresPlan;
+  const requiresDesign = !workflow || workflow.requiresDesign;
+  const plan = requiresPlan ? await loadLockedPlan(admin, run.project_id) : null;
   const repoContract = await loadCompactBatchRepoContract(admin, project);
-  const { data: design } = await admin
-    .from("plan_versions")
-    .select("content_md")
-    .eq("project_id", run.project_id)
-    .eq("kind", "design")
-    .eq("is_build_safe", true)
-    .order("version", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const featuresBlock = Array.isArray(plan?.features) && plan!.features.length
-    ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
-    : "(none listed)";
+  const { data: design } = requiresDesign
+    ? await admin
+      .from("plan_versions")
+      .select("content_md")
+      .eq("project_id", run.project_id)
+      .eq("kind", "design")
+      .eq("is_build_safe", true)
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    : { data: null } as any;
+  const featuresBlock = !requiresPlan
+    ? "(out of scope — design-only workflow)"
+    : Array.isArray(plan?.features) && plan!.features.length
+      ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
+      : "(none listed)";
   const issues = reviewSteps
     .map((s: any) => `--- ${SEAT_LABEL[s.seat as Seat]} ---\n${JSON.stringify(s.response_json ?? { missing: true }, null, 2)}`)
     .join("\n\n");
-  const isImport = !!project?.is_import;
   const revisePolicy = batchPromptPolicy(isImport);
   const batchRangeText = revisePolicy.rangeText;
   const batchCountRule = revisePolicy.countRule;
-  const system = `Batches revision — you are the Chair. The Inspector and Contrarian reviewed your drafted build sequence and found issues. FIX every blocking issue and every major issue you agree with — do not merely acknowledge them. Keep every uncontested batch verbatim. The LIVE REPO CONTRACT outranks any guessed name in your original draft or the PRD; correct invented paths to the real ones, or relabel them CREATE/ADD with proper dependency ordering.
+  const baseSystem = `Batches revision — you are the Chair. The Inspector and Contrarian reviewed your drafted build sequence and found issues. FIX every blocking issue and every major issue you agree with — do not merely acknowledge them. Keep every uncontested batch verbatim. The LIVE REPO CONTRACT outranks any guessed name in your original draft or the PRD; correct invented paths to the real ones, or relabel them CREATE/ADD with proper dependency ordering. Preserve the SCOPE CONTRACT above at all times — never re-introduce out-of-scope work even if a reviewer requested it.
 
 ${manual}
 
@@ -1114,13 +1225,20 @@ Return ONLY the same JSON shape as the original draft:
 }
 
 Constraints: ${batchRangeText} batches, unique ascending integer batch_no starting at 1, every prompt_md within character limits, following the batch skeleton exactly (numbered items, acceptance checks for code batches, "Keep everything else identical.", "Typecheck when done." for code batches). Never delete Enhancement batches to satisfy a reviewer unless the reviewer explicitly flagged them. For imported apps, NEVER pad to six batches to match a greenfield default.`;
-  const compactPlan = compactMarkdown(plan?.content_md ?? "", COMPACT_ARTIFACT_CAP);
-  const compactPrd = compactMarkdown(plan?.prd_md ?? "", COMPACT_ARTIFACT_CAP);
-  const compactDesign = compactMarkdown(design?.content_md ?? "", COMPACT_ARTIFACT_CAP);
-  const designSection = compactDesign
-    ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}`
-    : `NO LOCKED DESIGN BRIEF.`;
-  const user = `${repoContract}\n\nLOCKED PLAN (compact)\n\n${compactPlan || "(no plan)"}\n\nPRD (compact)\n\n${compactPrd || "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nYOUR DRAFT\n\n${JSON.stringify(draftJson?.batches ?? [], null, 2)}\n\nREVIEW ISSUES\n\n${issues}\n\nProduce the revised JSON now.`;
+  const system = withScope(scope, baseSystem);
+  const compactPlan = requiresPlan ? compactMarkdown(plan?.content_md ?? "", COMPACT_ARTIFACT_CAP) : "";
+  const compactPrd = requiresPlan ? compactMarkdown(plan?.prd_md ?? "", COMPACT_ARTIFACT_CAP) : "";
+  const compactDesign = requiresDesign ? compactMarkdown(design?.content_md ?? "", COMPACT_ARTIFACT_CAP) : "";
+  const planSection = !requiresPlan
+    ? "LOCKED PLAN\n(out of scope — design-only workflow; product/features/routes/data FROZEN)"
+    : `LOCKED PLAN (compact)\n\n${compactPlan || "(no plan)"}`;
+  const prdSection = !requiresPlan ? "PRD\n(out of scope)" : `PRD (compact)\n\n${compactPrd || "(no PRD)"}`;
+  const designSection = !requiresDesign
+    ? "DESIGN — OUT OF SCOPE (existing visual system is FROZEN and must be preserved verbatim)"
+    : compactDesign
+      ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}`
+      : `NO LOCKED DESIGN BRIEF.`;
+  const user = `${repoContract}\n\n${planSection}\n\n${prdSection}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nYOUR DRAFT\n\n${JSON.stringify(draftJson?.batches ?? [], null, 2)}\n\nREVIEW ISSUES\n\n${issues}\n\nProduce the revised JSON now.`;
   await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
@@ -1130,13 +1248,6 @@ Constraints: ${batchRangeText} batches, unique ascending integer batch_no starti
     status: "queued",
     request: {
       json_output: true,
-      // BATCH-REVISE-LOW-REASONING-R1: live run 7bb72f5a truncated
-      // batches_revise_chair with reasoning_effort=high + max_tokens=8000
-      // (tokens_out 7,986; response only 3,102 chars, ended mid-string in a
-      // quoted prompt_md). This step is a bounded review/merge, not a
-      // deliberative draft — low reasoning leaves the entire 8k output
-      // budget for the concise JSON that the <=24,000-char contract requires.
-      // The initial draft (batches_chair) keeps its "high" reasoning.
       reasoning_effort: "low",
       max_tokens: 8000,
       _is_import: isImport,
@@ -1148,6 +1259,7 @@ Constraints: ${batchRangeText} batches, unique ascending integer batch_no starti
     },
   });
 }
+
 
 
 
