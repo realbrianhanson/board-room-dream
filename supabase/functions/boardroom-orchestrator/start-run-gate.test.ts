@@ -90,3 +90,21 @@ Deno.test("start_run batches: legacy no-goals expects full pipeline", () => {
   assert(!evaluateStartRunGate(w, "batches", state({})).allowed);
   assert(evaluateStartRunGate(w, "batches", state({ auditComplete: true, planLocked: true, designLocked: true })).allowed);
 });
+
+Deno.test("start_run repo gate: plan blocked without github_repo", () => {
+  const w = deriveImportWorkflow(["improvements"]);
+  const d = evaluateStartRunGate(w, "plan", state({ hasRepo: false }));
+  assert(!d.allowed && d.nextStep === "repo_setup" && /Link your GitHub repo/i.test(d.reason));
+});
+
+Deno.test("start_run repo gate: design blocked without github_repo", () => {
+  const w = deriveImportWorkflow(["design_review"]);
+  const d = evaluateStartRunGate(w, "design", state({ hasRepo: false }));
+  assert(!d.allowed && d.nextStep === "repo_setup");
+});
+
+Deno.test("start_run repo gate: batches blocked without github_repo", () => {
+  const w = deriveImportWorkflow(["design_review"]);
+  const d = evaluateStartRunGate(w, "batches", state({ designLocked: true, hasRepo: false }));
+  assert(!d.allowed && d.nextStep === "repo_setup");
+});
