@@ -18,11 +18,24 @@ export type StartRunState = {
   auditComplete: boolean; // successful final_az audit present
   planLocked: boolean;
   designLocked: boolean;
+  /**
+   * A GitHub repo is linked to this project (`projects.github_repo` non-null).
+   * Plan / design / batches all compile against live code, so this MUST be
+   * checked before the artifact prerequisites.
+   */
+  hasRepo: boolean;
 };
 
 export type GateDecision =
   | { allowed: true }
-  | { allowed: false; reason: string; nextStep?: "audit" | "plan" | "design" };
+  | {
+      allowed: false;
+      reason: string;
+      nextStep?: "repo_setup" | "audit" | "plan" | "design";
+    };
+
+const REPO_REQUIRED_REASON =
+  "Link your GitHub repo in Audit Center before this stage runs. The board compiles against live code.";
 
 /**
  * Deterministic authorization for boardroom start_run against the persisted
@@ -42,6 +55,9 @@ export function evaluateStartRunGate(
           "Improvements are not in the selected scope. Product improvement plans only run when the Product Improvements goal is selected.",
       };
     }
+    if (!state.hasRepo) {
+      return { allowed: false, reason: REPO_REQUIRED_REASON, nextStep: "repo_setup" };
+    }
     if (workflow.requiresAudit && !state.auditComplete) {
       return {
         allowed: false,
@@ -59,6 +75,9 @@ export function evaluateStartRunGate(
         reason:
           "Design Council is not in the selected scope. Enable Design Upgrade to run a design brief.",
       };
+    }
+    if (!state.hasRepo) {
+      return { allowed: false, reason: REPO_REQUIRED_REASON, nextStep: "repo_setup" };
     }
     if (workflow.requiresAudit && !state.auditComplete) {
       return {
@@ -86,6 +105,9 @@ export function evaluateStartRunGate(
         "The selected scope ends at the audit report. Add Design Review or Product Improvements to generate build prompts.",
     };
   }
+  if (!state.hasRepo) {
+    return { allowed: false, reason: REPO_REQUIRED_REASON, nextStep: "repo_setup" };
+  }
   if (workflow.requiresAudit && !state.auditComplete) {
     return {
       allowed: false,
@@ -109,6 +131,7 @@ export function evaluateStartRunGate(
   }
   return { allowed: true };
 }
+
 
 /**
  * Human-readable scope contract inserted into LLM prompts. Prevents seats
