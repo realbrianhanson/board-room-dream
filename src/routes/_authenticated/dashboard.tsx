@@ -286,20 +286,46 @@ function DashboardPage() {
     const allPassedSet = new Set<string>();
     const importAuditSet = new Set<string>();
     const finalAuditSet = new Set<string>();
+    const goalsByProject = new Map<string, ImportGoal[]>();
     if (ids.length) {
-      const [pvsRes, bsRes, auRes] = await Promise.all([
+      const importIds = rows.filter((r) => r.is_import).map((r) => r.id);
+      // One batched intake query for every imported project — never per-row
+      // N+1. Latest-per-project is picked client-side from an ordered result.
+      const intakePromise = importIds.length
+        ? supabase
+            .from("intakes")
+            .select("project_id, answers, created_at")
+            .in("project_id", importIds)
+            .order("created_at", { ascending: false })
+        : Promise.resolve({ data: [], error: null } as { data: Array<{ project_id: string; answers: unknown; created_at: string }>; error: null });
+      const [pvsRes, bsRes, auRes, intakeRes] = await Promise.all([
         supabase.from("plan_versions").select("project_id, kind, locked_at").in("project_id", ids).eq("is_build_safe", true),
         supabase.from("batches").select("project_id, batch_no, status, built_at, sent_at, created_at").in("project_id", ids),
         supabase.from("audits").select("project_id, kind, status, created_at").in("project_id", ids).eq("kind", "final_az").in("status", ["clean", "findings"]),
+        intakePromise,
       ]);
       // Secondary query failure MUST surface as a load error — silently
       // computing all-false stages here is what recreated the wrong
-      // "shipped" journey. Bail out and let the user retry.
-      if (pvsRes.error || bsRes.error || auRes.error) {
-        const msg = pvsRes.error?.message ?? bsRes.error?.message ?? auRes.error?.message ?? "Failed to load project stages";
+      // "shipped" journey. Bail out and let the user retry. Intake failure
+      // is truthful for imports (goals drive scope/journey/resume routing).
+      const intakeErr = importIds.length ? (intakeRes as { error: { message: string } | null }).error : null;
+      if (pvsRes.error || bsRes.error || auRes.error || intakeErr) {
+        const msg = pvsRes.error?.message ?? bsRes.error?.message ?? auRes.error?.message ?? intakeErr?.message ?? "Failed to load project stages";
         toast.error(msg);
         setLoadError(msg);
         return;
+      }
+      // Latest intake wins — result is ordered created_at desc.
+      for (const r of ((intakeRes as { data: Array<{ project_id: string; answers: unknown }> }).data ?? [])) {
+        if (goalsByProject.has(r.project_id)) continue;
+        const answers = r.answers && typeof r.answers === "object" ? (r.answers as Record<string, unknown>) : {};
+        const raw = answers.goals;
+        goalsByProject.set(
+          r.project_id,
+          Array.isArray(raw)
+            ? (raw.filter((v) => typeof v === "string" && (IMPORT_GOALS as readonly string[]).includes(v)) as ImportGoal[])
+            : [],
+        );
       }
       const planLockedAt = new Map<string, number | null>();
       for (const r of (pvsRes.data ?? []) as Array<{ project_id: string; kind: string; locked_at: string }>) {
@@ -370,9 +396,13 @@ function DashboardPage() {
         all_passed: allPassedSet.has(r.id),
         has_import_audit: importAuditSet.has(r.id),
         has_final_audit: finalAuditSet.has(r.id),
+        // Undefined (not empty) for legacy imports without an intake row so
+        // `deriveImportWorkflow` falls back to the full workflow.
+        goals: r.is_import ? goalsByProject.get(r.id) ?? undefined : undefined,
       }) as Project),
     );
   }
+
 
 
   useEffect(() => {
