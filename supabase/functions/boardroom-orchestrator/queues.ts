@@ -1179,29 +1179,37 @@ ${shape}`),
 
 export async function queueBatchesRevise(admin: any, run: any, draftJson: any, reviewSteps: any[]) {
   const manual = await loadFieldManual(admin);
-  const plan = await loadLockedPlan(admin, run.project_id);
   const project = await loadProjectMeta(admin, run.project_id);
+  const isImport = !!project?.is_import;
+  const workflow = isImport ? await getImportWorkflow(admin, run) : null;
+  const scope = isImport ? await getScopeContract(admin, run) : "";
+  const requiresPlan = !workflow || workflow.requiresPlan;
+  const requiresDesign = !workflow || workflow.requiresDesign;
+  const plan = requiresPlan ? await loadLockedPlan(admin, run.project_id) : null;
   const repoContract = await loadCompactBatchRepoContract(admin, project);
-  const { data: design } = await admin
-    .from("plan_versions")
-    .select("content_md")
-    .eq("project_id", run.project_id)
-    .eq("kind", "design")
-    .eq("is_build_safe", true)
-    .order("version", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const featuresBlock = Array.isArray(plan?.features) && plan!.features.length
-    ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
-    : "(none listed)";
+  const { data: design } = requiresDesign
+    ? await admin
+      .from("plan_versions")
+      .select("content_md")
+      .eq("project_id", run.project_id)
+      .eq("kind", "design")
+      .eq("is_build_safe", true)
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    : { data: null } as any;
+  const featuresBlock = !requiresPlan
+    ? "(out of scope — design-only workflow)"
+    : Array.isArray(plan?.features) && plan!.features.length
+      ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
+      : "(none listed)";
   const issues = reviewSteps
     .map((s: any) => `--- ${SEAT_LABEL[s.seat as Seat]} ---\n${JSON.stringify(s.response_json ?? { missing: true }, null, 2)}`)
     .join("\n\n");
-  const isImport = !!project?.is_import;
   const revisePolicy = batchPromptPolicy(isImport);
   const batchRangeText = revisePolicy.rangeText;
   const batchCountRule = revisePolicy.countRule;
-  const system = `Batches revision — you are the Chair. The Inspector and Contrarian reviewed your drafted build sequence and found issues. FIX every blocking issue and every major issue you agree with — do not merely acknowledge them. Keep every uncontested batch verbatim. The LIVE REPO CONTRACT outranks any guessed name in your original draft or the PRD; correct invented paths to the real ones, or relabel them CREATE/ADD with proper dependency ordering.
+  const baseSystem = `Batches revision — you are the Chair. The Inspector and Contrarian reviewed your drafted build sequence and found issues. FIX every blocking issue and every major issue you agree with — do not merely acknowledge them. Keep every uncontested batch verbatim. The LIVE REPO CONTRACT outranks any guessed name in your original draft or the PRD; correct invented paths to the real ones, or relabel them CREATE/ADD with proper dependency ordering. Preserve the SCOPE CONTRACT above at all times — never re-introduce out-of-scope work even if a reviewer requested it.
 
 ${manual}
 
@@ -1217,13 +1225,20 @@ Return ONLY the same JSON shape as the original draft:
 }
 
 Constraints: ${batchRangeText} batches, unique ascending integer batch_no starting at 1, every prompt_md within character limits, following the batch skeleton exactly (numbered items, acceptance checks for code batches, "Keep everything else identical.", "Typecheck when done." for code batches). Never delete Enhancement batches to satisfy a reviewer unless the reviewer explicitly flagged them. For imported apps, NEVER pad to six batches to match a greenfield default.`;
-  const compactPlan = compactMarkdown(plan?.content_md ?? "", COMPACT_ARTIFACT_CAP);
-  const compactPrd = compactMarkdown(plan?.prd_md ?? "", COMPACT_ARTIFACT_CAP);
-  const compactDesign = compactMarkdown(design?.content_md ?? "", COMPACT_ARTIFACT_CAP);
-  const designSection = compactDesign
-    ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}`
-    : `NO LOCKED DESIGN BRIEF.`;
-  const user = `${repoContract}\n\nLOCKED PLAN (compact)\n\n${compactPlan || "(no plan)"}\n\nPRD (compact)\n\n${compactPrd || "(no PRD)"}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nYOUR DRAFT\n\n${JSON.stringify(draftJson?.batches ?? [], null, 2)}\n\nREVIEW ISSUES\n\n${issues}\n\nProduce the revised JSON now.`;
+  const system = withScope(scope, baseSystem);
+  const compactPlan = requiresPlan ? compactMarkdown(plan?.content_md ?? "", COMPACT_ARTIFACT_CAP) : "";
+  const compactPrd = requiresPlan ? compactMarkdown(plan?.prd_md ?? "", COMPACT_ARTIFACT_CAP) : "";
+  const compactDesign = requiresDesign ? compactMarkdown(design?.content_md ?? "", COMPACT_ARTIFACT_CAP) : "";
+  const planSection = !requiresPlan
+    ? "LOCKED PLAN\n(out of scope — design-only workflow; product/features/routes/data FROZEN)"
+    : `LOCKED PLAN (compact)\n\n${compactPlan || "(no plan)"}`;
+  const prdSection = !requiresPlan ? "PRD\n(out of scope)" : `PRD (compact)\n\n${compactPrd || "(no PRD)"}`;
+  const designSection = !requiresDesign
+    ? "DESIGN — OUT OF SCOPE (existing visual system is FROZEN and must be preserved verbatim)"
+    : compactDesign
+      ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}`
+      : `NO LOCKED DESIGN BRIEF.`;
+  const user = `${repoContract}\n\n${planSection}\n\n${prdSection}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nYOUR DRAFT\n\n${JSON.stringify(draftJson?.batches ?? [], null, 2)}\n\nREVIEW ISSUES\n\n${issues}\n\nProduce the revised JSON now.`;
   await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
@@ -1233,13 +1248,6 @@ Constraints: ${batchRangeText} batches, unique ascending integer batch_no starti
     status: "queued",
     request: {
       json_output: true,
-      // BATCH-REVISE-LOW-REASONING-R1: live run 7bb72f5a truncated
-      // batches_revise_chair with reasoning_effort=high + max_tokens=8000
-      // (tokens_out 7,986; response only 3,102 chars, ended mid-string in a
-      // quoted prompt_md). This step is a bounded review/merge, not a
-      // deliberative draft — low reasoning leaves the entire 8k output
-      // budget for the concise JSON that the <=24,000-char contract requires.
-      // The initial draft (batches_chair) keeps its "high" reasoning.
       reasoning_effort: "low",
       max_tokens: 8000,
       _is_import: isImport,
@@ -1251,6 +1259,7 @@ Constraints: ${batchRangeText} batches, unique ascending integer batch_no starti
     },
   });
 }
+
 
 
 
