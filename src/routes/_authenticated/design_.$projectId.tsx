@@ -46,7 +46,10 @@ function DesignStudioPage() {
 
 
   const loadLocked = useCallback(async () => {
-    const { data } = await supabase
+    // Surface Supabase errors truthfully — a silent `null` would
+    // recreate the "no locked design" empty state on a transient
+    // failure and hide the retry affordance from the owner.
+    const { data, error } = await supabase
       .from("plan_versions")
       .select("id, version, content_md, is_chair_ruled, locked_at, dissent_ledger")
       .eq("project_id", projectId)
@@ -55,8 +58,13 @@ function DesignStudioPage() {
       .order("version", { ascending: false })
       .limit(1)
       .maybeSingle();
+    if (error) {
+      setLoadError(error.message);
+      return;
+    }
     setLocked((data as PlanVersion) ?? null);
   }, [projectId]);
+
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -340,16 +348,31 @@ function DesignNeedsPrereqCard({
   state: Extract<DesignGateState, { kind: "needs-prereq" }>;
 }) {
   const missing = state.missing;
-  const title = missing === "audit"
-    ? "Complete the A–Z audit first."
-    : "The board locks a build-safe plan before it debates the look.";
-  const body = missing === "audit"
-    ? "You selected code_audit + design_review. Design opens once the A–Z audit is complete and the findings are on record."
-    : state.isImport
+  const title =
+    missing === "repo"
+      ? "Link your GitHub repo before Design opens."
+      : missing === "audit"
+      ? "Complete the A–Z audit first."
+      : "The board locks a build-safe plan before it debates the look.";
+  const body =
+    missing === "repo"
+      ? "The Design Council compiles against your real repo at HEAD. Link your GitHub repository in the Audit Center, then return here to open the design brief."
+      : missing === "audit"
+      ? "You selected code_audit + design_review. Design opens once the A–Z audit is complete and the findings are on record."
+      : state.isImport
       ? "You selected improvements + design_review. Convene the improvement board and lock a plan under the current founder-authority rules first."
       : "Take this project through the Boardroom first.";
-  const to = missing === "audit" ? "/audits/$projectId" : "/boardroom/$projectId";
-  const label = missing === "audit" ? "Open the Audit Center" : "To the Boardroom";
+  const to =
+    missing === "repo" || missing === "audit"
+      ? "/audits/$projectId"
+      : "/boardroom/$projectId";
+  const label =
+    missing === "repo"
+      ? "Link the repo in Audit Center"
+      : missing === "audit"
+      ? "Open the Audit Center"
+      : "To the Boardroom";
+
   return (
     <div className="rounded-xl border border-dashed border-border bg-surface-1/40 px-8 py-20 text-center">
       <Palette className="mx-auto h-6 w-6 text-muted-foreground" />

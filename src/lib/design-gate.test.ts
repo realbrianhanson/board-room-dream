@@ -159,3 +159,34 @@ describe("computeDesignGate — imported scope semantics", () => {
     expect(s.nextRoute.kind).toBe("repo_setup");
   });
 });
+
+describe("computeDesignGate — repo prerequisite (imports compile live code)", () => {
+  const base = {
+    loading: false as const,
+    error: null as string | null,
+    isImport: true,
+    projectId: "p",
+    hasRepo: true,
+    hasSuccessfulAudit: false,
+    hasBuildSafePlan: false,
+    hasBuildSafeDesign: false,
+  };
+  it("design-only without repo → needs-prereq missing=repo", () => {
+    const s = computeDesignGate({ ...base, goals: ["design_review"], hasRepo: false });
+    expect(s.kind).toBe("needs-prereq");
+    if (s.kind === "needs-prereq") expect(s.missing).toBe("repo");
+  });
+  it("needs-repo beats missing audit for audit+design", () => {
+    const s = computeDesignGate({
+      ...base,
+      goals: ["code_audit", "design_review"],
+      hasRepo: false,
+    });
+    expect(s.kind).toBe("needs-prereq");
+    if (s.kind === "needs-prereq") expect(s.missing).toBe("repo");
+  });
+  it("design not in scope → out-of-scope regardless of repo", () => {
+    const s = computeDesignGate({ ...base, goals: ["improvements"], hasRepo: false });
+    expect(s.kind).toBe("out-of-scope");
+  });
+});

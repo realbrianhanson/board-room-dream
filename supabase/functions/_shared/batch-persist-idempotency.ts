@@ -140,19 +140,31 @@ export function decideConflictOutcome(
     if (allExactSafe) return { kind: "accept_existing", count: existing.length };
   }
 
-  // Path 2 — stale untouched draft: the existing set differs from the fresh
-  // draft (different plan revision, different count, different wording —
-  // any of these), but EVERY existing row is still in the safe
-  // pre-execution shape and belongs to the SAME project + user the new
-  // draft targets. Nothing real was ever built on it, so replacing it loses
-  // no founder progress. This is what makes "revise the plan, then
-  // regenerate the build sequence" self-heal without manual intervention.
+  // Path 2 — stale untouched draft from an OLDER plan/design version.
+  //
+  // Supersession only applies when EVERY existing row is:
+  //   (a) still in the safe pre-execution shape (never sent / built /
+  //       compiled / no compile artifacts / no outcome), AND
+  //   (b) owned by the same project + user the new draft targets, AND
+  //   (c) tagged with a DIFFERENT plan_version_id than the fresh draft.
+  //
+  // (c) is what distinguishes "the founder revised the locked plan/design
+  // and this is a genuinely stale prior sequence" from "same plan revision
+  // but the fresh draft drifted in wording, count, or numbering" — the
+  // latter is intra-plan drift and must reject loudly at Path 3 rather
+  // than silently overwriting a set the founder can still reasonably
+  // expect to see.
+  const plannedPlanVersion = planned[0].plan_version_id ?? null;
   const sameOwner = existing.length > 0 && existing.every((e) =>
     e.project_id === planned[0].project_id && e.user_id === planned[0].user_id
   );
-  if (sameOwner && existing.every(isSafePreExecution)) {
+  const allFromOlderPlanRevision = existing.length > 0 && existing.every((e) =>
+    (e.plan_version_id ?? null) !== plannedPlanVersion
+  );
+  if (sameOwner && allFromOlderPlanRevision && existing.every(isSafePreExecution)) {
     return { kind: "supersede_stale", replaced: existing.length };
   }
+
 
   // Path 3 — at least one existing row has real progress, or the existing
   // set belongs to a different project/user, or there is no existing set at

@@ -193,3 +193,32 @@ describe("computeBoardroomGate — out-of-scope routing", () => {
     expect(s.nextRoute.path).toBe(`/audits/${PID}`);
   });
 });
+
+describe("computeBoardroomGate — repo prerequisite (imports compile live code)", () => {
+  it("returns needs-repo when improvements selected but no GitHub repo linked", () => {
+    const s = computeBoardroomGate({
+      ...baseImportInputs,
+      goals: ["improvements"],
+      hasRepo: false,
+    });
+    expect(s.kind).toBe("needs-repo");
+    if (s.kind === "needs-repo") expect(s.workflow.requiresPlan).toBe(true);
+  });
+  it("needs-repo beats needs-import-audit when both are missing", () => {
+    const s = computeBoardroomGate({
+      ...baseImportInputs,
+      goals: ["code_audit", "improvements"],
+      hasRepo: false,
+      hasSuccessfulAudit: false,
+    });
+    expect(s.kind).toBe("needs-repo");
+  });
+  it("out-of-scope still fires when improvements not selected, regardless of repo", () => {
+    const s = computeBoardroomGate({
+      ...baseImportInputs,
+      goals: ["code_audit"],
+      hasRepo: false,
+    });
+    expect(s.kind).toBe("out-of-scope");
+  });
+});

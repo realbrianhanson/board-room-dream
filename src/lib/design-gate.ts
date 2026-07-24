@@ -39,14 +39,15 @@ export type DesignGateState =
       nextRoute: ImportNextRoute;
     }
   | {
-      // Prerequisite for design is missing (audit or plan) — Design can't
-      // open yet. Route renders a precise next-step card.
+      // Prerequisite for design is missing (repo, audit, or plan) — Design
+      // can't open yet. Route renders a precise next-step card.
       kind: "needs-prereq";
       workflow: ImportWorkflow | null;
-      missing: "audit" | "plan";
+      missing: "repo" | "audit" | "plan";
       isImport: boolean;
     }
   | { kind: "ready"; workflow: ImportWorkflow | null };
+
 
 export function computeDesignGate(inputs: DesignGateInputs): DesignGateState {
   if (inputs.loading) return { kind: "loading" };
@@ -73,6 +74,13 @@ export function computeDesignGate(inputs: DesignGateInputs): DesignGateState {
     return { kind: "out-of-scope", workflow, nextRoute };
   }
 
+  // Design compiles against live code — require the linked repo before any
+  // artifact prerequisite checks. Audit itself is allowed without a repo,
+  // but design is not.
+  if (!inputs.hasRepo) {
+    return { kind: "needs-prereq", workflow, missing: "repo", isImport: true };
+  }
+
   if (workflow.requiresAudit && !inputs.hasSuccessfulAudit) {
     return { kind: "needs-prereq", workflow, missing: "audit", isImport: true };
   }
@@ -83,3 +91,4 @@ export function computeDesignGate(inputs: DesignGateInputs): DesignGateState {
 
   return { kind: "ready", workflow };
 }
+

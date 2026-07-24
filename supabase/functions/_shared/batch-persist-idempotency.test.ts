@@ -108,11 +108,14 @@ Deno.test("prompt_md drift rejects the conflict (no silent overwrite)", () => {
   if (d.kind === "reject") assert(d.reason.includes("prompt_md_mismatch_batch_2"));
 });
 
-Deno.test("title / channel / plan / user mismatch each reject loudly", () => {
+Deno.test("title / channel / user / project mismatch reject loudly (same plan revision)", () => {
+  // These are intra-plan drift: same plan_version_id, but the persisted
+  // row's identity differs. Supersession never applies within one plan
+  // revision — reject with the most specific reason so the operator can
+  // see WHY the fresh draft disagrees with the persisted set.
   for (const [name, e] of [
     ["title", existing(1, { title: "Other" })],
     ["channel", existing(1, { channel: "supabase" })],
-    ["plan_version", existing(1, { plan_version_id: "different-plan" })],
     ["user", existing(1, { user_id: "different-user" })],
     ["project", existing(1, { project_id: "different-project" })],
   ] as const) {
@@ -120,6 +123,56 @@ Deno.test("title / channel / plan / user mismatch each reject loudly", () => {
     assertEquals(d.kind, "reject", `${name} should reject`);
   }
 });
+
+Deno.test("plan_version mismatch on a fully safe set supersedes the stale draft", () => {
+  // The founder revised the locked plan/design and this batches run was
+  // drafted against the new plan_version_id. The persisted set is safe
+  // pre-execution and carries the OLD plan_version_id → replace it, do
+  // not reject.
+  const p = [1, 2, 3].map((n) => planned(n));
+  const e = [1, 2, 3].map((n) => existing(n, { plan_version_id: "stale-older-plan" }));
+  const d = decideConflictOutcome(p, e);
+  assertEquals(d.kind, "supersede_stale");
+  if (d.kind === "supersede_stale") assertEquals(d.replaced, 3);
+});
+
+Deno.test("plan_version mismatch is NOT superseded when any persisted row has progressed", () => {
+  // Same "founder revised the plan" scenario, but one row was already
+  // sent into Lovable. Never silently destroy real progress.
+  const p = [1, 2, 3].map((n) => planned(n));
+  const e = [
+    existing(1, { plan_version_id: "stale-older-plan" }),
+    existing(2, { plan_version_id: "stale-older-plan", status: "sent", sent_at: "2026-07-23T00:00:00Z" }),
+    existing(3, { plan_version_id: "stale-older-plan" }),
+  ];
+  const d = decideConflictOutcome(p, e);
+  assertEquals(d.kind, "reject");
+});
+
+Deno.test("plan_version mismatch is NOT superseded when any persisted row was compiled", () => {
+  const p = [1, 2].map((n) => planned(n));
+  const e = [
+    existing(1, { plan_version_id: "stale-older-plan" }),
+    existing(2, { plan_version_id: "stale-older-plan", compiled_prompt_md: "# compiled" }),
+  ];
+  const d = decideConflictOutcome(p, e);
+  assertEquals(d.kind, "reject");
+});
+
+Deno.test("plan_version mismatch requires EVERY existing row to be from an older revision", () => {
+  // Mixed: one row carries the fresh plan_version_id, one carries the old
+  // one. That's not "the founder cleanly revised the plan" — it's a
+  // corrupted persist state. Path 2 must decline and let Path 3 report
+  // the specific drift.
+  const p = [1, 2].map((n) => planned(n));
+  const e = [
+    existing(1), // same plan_version as planned
+    existing(2, { plan_version_id: "stale-older-plan" }),
+  ];
+  const d = decideConflictOutcome(p, e);
+  assertEquals(d.kind, "reject");
+});
+
 
 Deno.test("partial persisted set rejects — no silent fill-in", () => {
   const p = [1, 2, 3, 4, 5, 6].map((n) => planned(n));

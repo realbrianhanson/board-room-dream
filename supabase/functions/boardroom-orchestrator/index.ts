@@ -135,7 +135,7 @@ function fireSelfTick(body: any = {}) {
 // Idempotent alert insert: skip if there's an OPEN alert for (project, kind).
 async function insertAlert(
   admin: any,
-  args: { user_id: string; project_id: string; kind: "stuck_48h" | "audit_loop" | "spend_cap" | "never_locked" | "owner_authority_violation"; detail?: any },
+  args: { user_id: string; project_id: string; kind: "stuck_48h" | "audit_loop" | "spend_cap" | "never_locked" | "owner_authority_violation" | "fix_batch_sanitize_empty"; detail?: any },
 ) {
   try {
     const { data: proj } = await admin
@@ -2135,10 +2135,12 @@ async function handleRequest(req: Request): Promise<Response> {
         auditComplete,
         planLocked: !!planLockedRow.data,
         designLocked: !!designLockedRow.data,
+        hasRepo: !!project.github_repo,
       });
       if (!decision.allowed) {
         return j(409, { error: decision.reason, next_step: decision.nextStep });
       }
+
     } else {
       // Legacy / non-import gates are preserved unchanged.
       if (kind === "plan" && project.is_import) {

@@ -10,8 +10,10 @@ const st = (over: Partial<StartRunState> = {}): StartRunState => ({
   auditComplete: false,
   planLocked: false,
   designLocked: false,
+  hasRepo: true,
   ...over,
 });
+
 
 Deno.test("plan gate: blocks when improvements not selected", () => {
   assertEquals(
@@ -114,4 +116,35 @@ Deno.test("scopeContractForPrompt: design-only preserves product scope", () => {
 Deno.test("scopeContractForPrompt: audit-only marks report-only deliverable", () => {
   const c = scopeContractForPrompt(deriveImportWorkflow(["code_audit"]));
   assertMatch(c, /audit report only/);
+});
+
+Deno.test("repo gate: plan requires GitHub repo (improvements-only)", () => {
+  const w = deriveImportWorkflow(["improvements"]);
+  const r = evaluateStartRunGate(w, "plan", st({ hasRepo: false }));
+  assertEquals(r.allowed, false);
+  if (!r.allowed) {
+    assertEquals(r.nextStep, "repo_setup");
+    assertMatch(r.reason, /Link your GitHub repo/);
+  }
+});
+
+Deno.test("repo gate: design requires GitHub repo (design-only)", () => {
+  const w = deriveImportWorkflow(["design_review"]);
+  const r = evaluateStartRunGate(w, "design", st({ hasRepo: false }));
+  assertEquals(r.allowed, false);
+  if (!r.allowed) assertEquals(r.nextStep, "repo_setup");
+});
+
+Deno.test("repo gate: batches requires GitHub repo (design-only, design locked)", () => {
+  const w = deriveImportWorkflow(["design_review"]);
+  const r = evaluateStartRunGate(w, "batches", st({ designLocked: true, hasRepo: false }));
+  assertEquals(r.allowed, false);
+  if (!r.allowed) assertEquals(r.nextStep, "repo_setup");
+});
+
+Deno.test("repo gate: out-of-scope reject beats missing repo", () => {
+  const w = deriveImportWorkflow(["code_audit"]);
+  const r = evaluateStartRunGate(w, "plan", st({ hasRepo: false, auditComplete: true }));
+  assertEquals(r.allowed, false);
+  if (!r.allowed) assertEquals(r.nextStep, undefined);
 });
