@@ -301,6 +301,8 @@ function IntakePage() {
         verdict={verdict}
         scores={scores}
         onEnterBoardroom={() => navigate({ to: "/boardroom/$projectId", params: { projectId } })}
+        onProceedAnyway={proceedAnyway}
+        onUsePivot={scores.pivot ? usePivot : undefined}
         onRevise={reviseIdea}
       />
     );
