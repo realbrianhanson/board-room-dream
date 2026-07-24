@@ -20,6 +20,9 @@ import {
   startCtaLabel,
 } from "@/lib/audit-retry";
 import { groupOpenFindingsByAudit } from "@/lib/audit-findings-grouping";
+import { computeAuditScope, type AuditContinueCta } from "@/lib/audit-scope";
+import { IMPORT_GOALS, type ImportGoal } from "@/lib/import-workflow";
+
 
 
 export const Route = createFileRoute("/_authenticated/audits_/$projectId")({
