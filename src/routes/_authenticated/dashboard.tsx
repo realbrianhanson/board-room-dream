@@ -476,14 +476,33 @@ function DashboardPage() {
         },
       });
       if (iErr) throw iErr;
-      toast.success(
-        "Project opened. Fill in strategy context and link GitHub in the Audit Center — the A–Z audit requires credible owner context on the six required strategy fields. Price and upgrade trigger are optional owner decisions.",
-      );
+      // Scope-aware toast — never claim the A–Z audit is required when the
+      // owner only asked for a design review or product improvements.
+      const scopedWorkflow = deriveImportWorkflow(impGoals);
+      if (scopedWorkflow.auditOnly) {
+        toast.success("Project opened. Link GitHub in the Audit Center — the A–Z audit reads your repo directly.");
+      } else if (scopedWorkflow.requiresPlan) {
+        toast.success(
+          "Project opened. Fill in the strategy context and link GitHub in the Audit Center — the improvement analysis needs credible owner context on the six required strategy fields.",
+        );
+      } else {
+        toast.success(
+          "Project opened. Link GitHub in the Audit Center. Strategy context is optional for this scope — add it any time from the Audit Center.",
+        );
+      }
 
       const newProjectId = proj.id;
+      const firstRoute = nextImportRoute(scopedWorkflow, {
+        projectId: newProjectId,
+        hasRepo: false,
+        auditComplete: false,
+        planComplete: false,
+        designComplete: false,
+      });
       resetForms();
       await load();
-      navigate({ to: "/audits/$projectId", params: { projectId: newProjectId } });
+      navigateImportRoute(navigate, newProjectId, firstRoute);
+
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
