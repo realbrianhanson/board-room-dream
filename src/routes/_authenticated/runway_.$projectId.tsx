@@ -10,6 +10,8 @@ import { startGithubConnect } from "@/lib/github-connect";
 import { selectDisplayedRun } from "@/lib/run-selection";
 import { ProjectJourneyStrip } from "@/components/project-journey";
 import { useProjectJourney } from "@/hooks/use-project-journey";
+import { computeRunwayEligibility } from "@/lib/runway-eligibility";
+import { IMPORT_GOALS, type ImportGoal } from "@/lib/import-workflow";
 import {
   AlertTriangle,
   ArrowRight,
