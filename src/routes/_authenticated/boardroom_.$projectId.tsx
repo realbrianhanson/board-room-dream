@@ -173,7 +173,9 @@ function BoardroomProjectPage() {
         </div>
       </div>
 
-      {gateState.kind === "out-of-scope" ? (
+      {gateState.kind === "loading" ? (
+        <div className="h-32 animate-pulse rounded-xl bg-surface-1" role="status" aria-label="Loading Boardroom gate" />
+      ) : gateState.kind === "out-of-scope" ? (
         <BoardroomOutOfScopeCard
           projectId={projectId}
           scopeLabel={gateState.workflow.scopeLabel}
