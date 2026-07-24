@@ -154,6 +154,7 @@ function RunwayPage() {
   const [project, setProject] = useState<Project | null>(null);
   const [hasPlan, setHasPlan] = useState<boolean | null>(null);
   const [hasDesign, setHasDesign] = useState<boolean>(false);
+  const [goals, setGoals] = useState<ImportGoal[] | null>(null);
   const [batches, setBatches] = useState<Batch[] | null>(null);
   const [run, setRun] = useState<Run | null>(null);
   const [generating, setGenerating] = useState(false);
