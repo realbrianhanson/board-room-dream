@@ -187,11 +187,28 @@ function MiniRing({ status }: { status: string }) {
 }
 
 type NewMode = null | "chooser" | "idea" | "import";
-const IMPORT_GOAL_OPTIONS = [
-  { value: "code_audit", label: "Code audit" },
-  { value: "design_review", label: "Design review" },
-  { value: "improvements", label: "Improvements & missing features" },
+const IMPORT_GOAL_CARDS: ReadonlyArray<{
+  value: ImportGoal;
+  title: string;
+  description: string;
+}> = [
+  {
+    value: "code_audit",
+    title: "Red-Team Audit",
+    description: "Evidence-backed report. Add another goal if you also want build prompts.",
+  },
+  {
+    value: "design_review",
+    title: "Design Upgrade",
+    description: "Design brief and design-only Lovable prompts. Behavior stays intact.",
+  },
+  {
+    value: "improvements",
+    title: "Product Improvements",
+    description: "Improvement plan and Lovable prompts. Existing visual system stays intact.",
+  },
 ] as const;
+
 
 function DashboardPage() {
   const navigate = useNavigate();
