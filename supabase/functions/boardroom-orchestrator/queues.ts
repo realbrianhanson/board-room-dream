@@ -636,14 +636,15 @@ export async function queueFinalRuling(admin: any, run: any, steps: any[]) {
   const lastLoop = run.loop_no; // by now already incremented to 3
   const previousLoop = Math.max(0, lastLoop - 1);
   const failure = priorRoundFailureBlock(steps, previousLoop);
-  const system = `The board has failed to reach consensus after three synthesis loops. You are the Chair — RULE. Accept some outstanding objections, reject others, and produce the final plan. This is a chair-ruled plan, not a consensus plan.
+  const scope = await getScopeContract(admin, run);
+  const system = withScope(scope, `The board has failed to reach consensus after three synthesis loops. You are the Chair — RULE. Accept some outstanding objections, reject others, and produce the final plan. This is a chair-ruled plan, not a consensus plan.
 
 Return ONLY valid JSON matching this shape:
 {
   "final_md": "Full markdown plan.",
   "ruling_note": "One paragraph explaining the ruling.",
   "dissent_ledger": [ { "seat": "...", "objection": "...", "chair_response": "..." } ]
-}`;
+}`);
   const user = `${intakeBlock(intake)}\n\nLAST CANDIDATE\n${lastCandidate}\n\n${failure}\n\nProduce your JSON now.`;
   await queueSteps(admin, run, {
     run_id: run.id,
