@@ -604,16 +604,40 @@ function RunwayPage() {
         )}
       </div>
 
-      {/* State A: no locked plan */}
-      {!hasPlan && (
-        project?.is_import ? (
+      {/* State A: prerequisites for the selected scope aren't ready yet.
+          Covers greenfield without a locked plan, imports that need a repo
+          link, imports missing selected artifacts (audit / plan / design),
+          and audit-only imports (this scope is terminal — the report is
+          the deliverable, no prompts). */}
+      {total === 0 && eligibility.kind === "audit-only-terminal" && (
+        <EmptyState
+          icon={<ShieldCheck className="h-6 w-6 text-muted-foreground" />}
+          title="This scope ends with the audit report."
+          subtitle="You picked the red-team audit only — no build prompts are generated for this project. Open the Audit Center for the report."
+          actionTo="/audits/$projectId"
+          actionParams={{ projectId }}
+          actionLabel="Open the Audit Center"
+        />
+      )}
+      {total === 0 && eligibility.kind === "needs-repo" && (
+        <EmptyState
+          icon={<Github className="h-6 w-6 text-muted-foreground" />}
+          title="Link your GitHub repo to compile prompts against live code."
+          subtitle="The Chair needs your current code to compile safe, grounded batch prompts. Link the repo in the Audit Center, then come back."
+          actionTo="/audits/$projectId"
+          actionParams={{ projectId }}
+          actionLabel="Open the Audit Center"
+        />
+      )}
+      {total === 0 && eligibility.kind === "needs-prereq" && (
+        eligibility.isImport ? (
           <EmptyState
             icon={<Lock className="h-6 w-6 text-muted-foreground" />}
-            title="Imported apps start with the A–Z audit."
-            subtitle="Run the required A–Z audit against the current code, then the Boardroom will convene to lock the improvement plan."
-            actionTo="/audits/$projectId"
+            title={`Still needed: ${eligibility.missingLabel}.`}
+            subtitle="Finish the selected prerequisite for this scope, then the Chair can sequence your build."
+            actionTo={eligibility.ctaTo}
             actionParams={{ projectId }}
-            actionLabel="Run the A–Z audit"
+            actionLabel={eligibility.ctaLabel}
           />
         ) : (
           <EmptyState
@@ -628,16 +652,26 @@ function RunwayPage() {
       )}
 
 
-      {/* State B: locked plan, no batches, no run */}
-      {hasPlan && total === 0 && !runInFlight && (
+      {/* State B: ready — locked prerequisites, no batches, no run */}
+      {promptsReady && total === 0 && !runInFlight && (
         <div className="rounded-xl border border-border bg-surface-1 p-8">
           <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-primary">The Chair, ready to sequence</p>
           <h2 className="mt-3 font-display text-3xl text-foreground">Turn the locked plan into a build sequence.</h2>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
             The Chair drafts 6–8 (usually 6) numbered batches you paste into Lovable, one at a time. Each batch stays small enough to ship cleanly.
           </p>
+          {eligibility.kind === "ready" && (
+            <p
+              className="mt-3 max-w-2xl text-sm text-foreground/80"
+              data-testid="runway-scope-copy"
+            >
+              {eligibility.promptScopeCopy}
+            </p>
+          )}
 
-          {!hasDesign && (
+          {/* Greenfield design nudge only — modular imports already require
+              (or don't require) the design brief via eligibility. */}
+          {promptScopeVariant === "greenfield" && !hasDesign && (
             <div className="mt-6 flex items-start gap-3 rounded-lg border border-border bg-surface-2 p-4">
               <Palette className="mt-0.5 h-4 w-4 text-primary" />
               <div className="flex-1">
@@ -652,18 +686,27 @@ function RunwayPage() {
             </div>
           )}
 
-          {isOwner && (
-            <div className="mt-6 flex flex-wrap gap-3">
-              <button
-                onClick={generate}
-                disabled={generating || !hasDesign}
-                title={!hasDesign ? "Finish the Design Council first — no build-safe design brief yet." : undefined}
-                className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
-              >
-                <Rocket className="h-4 w-4" /> {generating ? "Convening…" : "Generate the build sequence"}
-              </button>
-            </div>
-          )}
+          {isOwner && (() => {
+            const missingGreenfieldDesign =
+              promptScopeVariant === "greenfield" && !hasDesign;
+            const disabled = generating || missingGreenfieldDesign;
+            const title = missingGreenfieldDesign
+              ? "Finish the Design Council first — no build-safe design brief yet."
+              : undefined;
+            return (
+              <div className="mt-6 flex flex-wrap gap-3">
+                <button
+                  onClick={generate}
+                  disabled={disabled}
+                  title={title}
+                  data-testid="runway-generate"
+                  className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+                >
+                  <Rocket className="h-4 w-4" /> {generating ? "Convening…" : "Generate the build sequence"}
+                </button>
+              </div>
+            );
+          })()}
         </div>
       )}
 
