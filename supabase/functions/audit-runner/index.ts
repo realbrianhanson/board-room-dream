@@ -798,6 +798,7 @@ Deno.serve(async (req) => {
       const res = await beginAudit({
         admin, userId, project, batchId,
         kind: "batch", loopNo, source, pastedCode, budget: 5.0,
+        workflow: null,
       });
       if ("error" in res) return j(400, { error: res.error });
       return j(200, res);
