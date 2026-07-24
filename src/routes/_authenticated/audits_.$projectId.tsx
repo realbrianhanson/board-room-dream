@@ -621,11 +621,16 @@ function AuditCenterPage() {
                 <Check className="h-4 w-4" /> Passed A–Z. Ship it.
               </p>
             )}
-            {finalAudit.status === "clean" && isImport && (
+            {finalAudit.status === "clean" && auditScope.kind === "import-with-audit" && (
               <p className="mt-3 text-sm text-foreground/85">
-                Clean read. Convene the improvement board to plan what to build next.
+                {auditScope.postAuditCta?.kind === "plan"
+                  ? "Clean read. Convene the improvement board to plan what to build next."
+                  : auditScope.postAuditCta?.kind === "design"
+                    ? "Clean read. Move to the Design Council to plan the visual pass."
+                    : "Clean read. Your requested red-team report is ready."}
               </p>
             )}
+
 
             {/* Retry / re-run controls. Owner-only. Never shown while running. */}
             {isOwner && finalAudit.status !== "running" && (
