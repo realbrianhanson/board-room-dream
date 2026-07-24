@@ -638,33 +638,84 @@ function DashboardPage() {
             />
           </div>
           <div>
-            <label className="mb-2 block font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
-              What do you want from the board?
-            </label>
-            <div className="flex flex-wrap gap-2">
-              {IMPORT_GOAL_OPTIONS.map((g) => {
-                const on = impGoals.includes(g.value);
+            <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+              <label
+                id="import-goals-label"
+                className="block font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground"
+              >
+                What do you want from the board?
+              </label>
+              <div className="flex items-center gap-3">
+                <span
+                  className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted-foreground"
+                  aria-live="polite"
+                >
+                  {impGoals.length === IMPORT_GOALS.length
+                    ? "Full App Blueprint"
+                    : "Custom scope"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setImpGoals([...IMPORT_GOALS])}
+                  disabled={impGoals.length === IMPORT_GOALS.length}
+                  className="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-[11px] font-medium text-foreground transition-colors hover:border-primary/50 disabled:opacity-50"
+                >
+                  Full App Blueprint
+                </button>
+              </div>
+            </div>
+            <div role="group" aria-labelledby="import-goals-label" className="grid gap-2 sm:grid-cols-3">
+              {IMPORT_GOAL_CARDS.map((card) => {
+                const on = impGoals.includes(card.value);
+                const isLastSelected = on && impGoals.length === 1;
                 return (
                   <button
-                    key={g.value}
+                    key={card.value}
                     type="button"
-                    onClick={() =>
+                    role="checkbox"
+                    aria-checked={on}
+                    aria-pressed={on}
+                    aria-disabled={isLastSelected}
+                    title={isLastSelected ? "At least one goal is required" : undefined}
+                    onClick={() => {
+                      if (isLastSelected) {
+                        toast.message("Keep at least one goal — the board needs a job to do.");
+                        return;
+                      }
                       setImpGoals((prev) =>
-                        prev.includes(g.value) ? prev.filter((v) => v !== g.value) : [...prev, g.value],
-                      )
-                    }
-                    className={`rounded-md border px-3 py-1.5 text-xs transition-colors ${
+                        prev.includes(card.value)
+                          ? prev.filter((v) => v !== card.value)
+                          : [...prev, card.value],
+                      );
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === " " || e.key === "Enter") {
+                        e.preventDefault();
+                        (e.currentTarget as HTMLButtonElement).click();
+                      }
+                    }}
+                    className={`group relative flex h-full flex-col items-start gap-2 rounded-xl border p-4 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 ${
                       on
-                        ? "border-primary/60 bg-primary/15 text-foreground"
+                        ? "border-primary/60 bg-primary/10 text-foreground"
                         : "border-border bg-surface-2 text-muted-foreground hover:border-primary/40 hover:text-foreground"
                     }`}
                   >
-                    {g.label}
+                    <span
+                      aria-hidden
+                      className={`flex h-5 w-5 items-center justify-center rounded border transition-colors ${
+                        on ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface-1"
+                      }`}
+                    >
+                      {on && <Check className="h-3.5 w-3.5" />}
+                    </span>
+                    <span className="font-display text-sm text-foreground">{card.title}</span>
+                    <span className="text-xs leading-relaxed">{card.description}</span>
                   </button>
                 );
               })}
             </div>
           </div>
+
           <details className="rounded-lg border border-border bg-surface-2/40 p-4">
             <summary className="cursor-pointer list-none">
               <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
