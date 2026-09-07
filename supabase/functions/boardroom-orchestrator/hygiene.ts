@@ -222,3 +222,39 @@ export async function requeueLegacyNullStartOrphans(
     not_found,
   };
 }
+
+// ============================== Validation retry budget ==============================
+
+// Chair steps that emit a whole document / full batch set inside JSON. They
+// may widen to 10,000 visible tokens on a truncated retry — the ceiling that
+// still finishes inside the proxy's non-streaming abort at the observed
+// ~90-110 tok/s. Everything else (votes, reviews, map chunks) caps at 6,000.
+const WIDE_RETRY_STEP_RE =
+  /^(batches_chair|batches_revise_chair|audit_chair_merge|r_final_ruling_chair|cr_verdict_chair|cr_revise_chair)$/;
+export const VALIDATION_RETRY_MAX_TOKENS_CHAIR = 10_000;
+export const VALIDATION_RETRY_MAX_TOKENS_OTHER = 6_000;
+
+export type ValidationRetryBudget = {
+  reasoning_effort: "low";
+  max_tokens?: number;
+};
+
+// Pure. The single correction pass used to re-send the identical max_tokens
+// and reasoning_effort that just failed — a reasoning-eaten cap therefore
+// failed identically and the second miss killed the run (RC-1). Every retry
+// now runs at low reasoning; a TRUNCATED retry additionally doubles the
+// visible cap, bounded per step class. When the base request carried no cap
+// (or 0) the retry stays uncapped — `max_tokens` is left undefined so the
+// spread does not introduce a 0/NaN key.
+export function validationRetryBudget(
+  step: { step_key?: string | null; request?: any },
+  truncated: boolean,
+): ValidationRetryBudget {
+  if (!truncated) return { reasoning_effort: "low" };
+  const prior = Number(step?.request?.max_tokens) || 0;
+  const ceiling = WIDE_RETRY_STEP_RE.test(String(step?.step_key ?? ""))
+    ? VALIDATION_RETRY_MAX_TOKENS_CHAIR
+    : VALIDATION_RETRY_MAX_TOKENS_OTHER;
+  const bumped = Math.min(prior * 2, ceiling) || undefined;
+  return bumped ? { max_tokens: bumped, reasoning_effort: "low" } : { reasoning_effort: "low" };
+}

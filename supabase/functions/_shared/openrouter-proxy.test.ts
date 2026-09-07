@@ -4,7 +4,9 @@ import { assert, assertEquals, assertStringIncludes } from "https://deno.land/st
 import {
   decideTransportRequeue,
   isBodyTransportError,
+  isBudgetExhausted,
   ProxyTimeoutError,
+  reasoningAllowance,
   shouldQuickRetry,
 } from "./openrouter-proxy.ts";
 
@@ -128,4 +130,55 @@ Deno.test("decideTransportRequeue — counter is preserved across the transition
   step.request._transport_attempts = first.attempts;
   const second = decideTransportRequeue(step);
   assertEquals(second.action, "terminal");
+});
+
+// --- reasoning allowance: wire cap = visible budget + hidden-thinking room ---
+
+Deno.test("reasoningAllowance — thinking-by-default families get room even with no effort set", () => {
+  assertEquals(reasoningAllowance("google/gemini-3.1-pro"), 2500);
+  assertEquals(reasoningAllowance("x-ai/grok-4.5"), 2500);
+  assertEquals(reasoningAllowance("moonshotai/kimi-k3"), 2500);
+});
+
+Deno.test("reasoningAllowance — anthropic/openai get zero room when no effort is requested", () => {
+  assertEquals(reasoningAllowance("anthropic/some-model"), 0);
+  assertEquals(reasoningAllowance("openai/some-model"), 0);
+  assertEquals(reasoningAllowance("", undefined), 0);
+});
+
+Deno.test("reasoningAllowance — effort table scales per family", () => {
+  assertEquals(reasoningAllowance("google/gemini-3.1-pro", "low"), 2500);
+  assertEquals(reasoningAllowance("google/gemini-3.1-pro", "medium"), 5000);
+  assertEquals(reasoningAllowance("google/gemini-3.1-pro", "high"), 8000);
+  assertEquals(reasoningAllowance("anthropic/some-model", "low"), 1500);
+  assertEquals(reasoningAllowance("anthropic/some-model", "medium"), 3000);
+  assertEquals(reasoningAllowance("openai/some-model", "high"), 6000);
+});
+
+Deno.test("reasoningAllowance — the live batches_review shape: 2,500 visible + low on Gemini = 5,000 on the wire", () => {
+  // Live run b67878e0: ~2,200 of 2,500 tokens went to reasoning and the
+  // visible JSON was ~300 chars. With the allowance the visible 2,500 survive.
+  assertEquals(2500 + reasoningAllowance("google/gemini-3.1-pro", "low"), 5000);
+});
+
+// --- budget exhausted: finish_reason OR token count at the wire cap --------
+
+Deno.test("isBudgetExhausted — finish_reason length / max_tokens always exhaust", () => {
+  assert(isBudgetExhausted("length", 10, 8000));
+  assert(isBudgetExhausted("max_tokens", 10, 0));
+  assert(!isBudgetExhausted("stop", 10, 8000));
+});
+
+Deno.test("isBudgetExhausted — tokens_out == max_tokens exhausts even when finish_reason says stop", () => {
+  // Live batches_chair Jul 24: tokens_out 8000 == max_tokens 8000.
+  assert(isBudgetExhausted("stop", 8000, 8000));
+  assert(isBudgetExhausted(undefined, 8000, 8000));
+  // Within 8 tokens of the cap counts too (providers round).
+  assert(isBudgetExhausted("stop", 7992, 8000));
+  assert(!isBudgetExhausted("stop", 7991, 8000));
+});
+
+Deno.test("isBudgetExhausted — uncapped calls never exhaust by count", () => {
+  assert(!isBudgetExhausted("stop", 50_000, 0));
+  assert(!isBudgetExhausted(undefined, 0, 0));
 });

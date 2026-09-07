@@ -316,7 +316,7 @@ export function correctionForStep(stepKey: string, opts?: { isImport?: boolean }
     } else {
       range = "the same count range as the original system contract above (3-6 for imports, 6-8 for greenfield — prefer 6). Do NOT invent extra batches; pick the smallest count that fully covers the locked scope without padding.";
     }
-    return `Your JSON was truncated. Return ${range} Each prompt_md 900-2,600 characters; total JSON <=24,000 characters. Preserve required coverage but remove repeated context and prose. Do not silently pad to 6 to satisfy an old default.`;
+    return `Your JSON was truncated. Return ${range} Each prompt_md 900-1,800 characters; total JSON <=16,000 characters. Preserve required coverage but remove repeated context and prose. Do not silently pad to 6 to satisfy an old default.`;
   }
   if (key === "batches_review_inspector" || key === "batches_review_contrarian") {
     return "Your review JSON was truncated. Return ONLY {verdict, issues}; max 8 issues; each issue.text 10-280 characters; total JSON <=4,500 characters. Preserve every blocking issue, merge duplicates, no prose.";

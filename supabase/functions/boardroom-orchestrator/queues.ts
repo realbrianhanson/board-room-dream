@@ -435,6 +435,7 @@ export async function queueRound1(admin: any, run: any) {
       // Round 1 is the divergence round — hotter sampling so four seats
       // actually produce four different drafts worth debating.
       temperature: 0.85,
+      max_tokens: 8000,
       messages: [
         { role: "system", content: system },
         { role: "user", content: withImages(userContent, imageParts) },
@@ -474,6 +475,7 @@ Requirements: at least ONE objection targeting EACH of the three other seats, at
       status: "queued",
       request: {
         json_output: true,
+        reasoning_effort: "low",
         max_tokens: 3500,
         messages: [
           { role: "system", content: system },
@@ -537,7 +539,7 @@ Respond with the markdown document ONLY — no JSON, no preamble, no closing rem
     seat: "chair",
     status: "queued",
     request: {
-      reasoning_effort: "high",
+      reasoning_effort: loop === 0 ? "medium" : "low",
       max_tokens: 10000,
       messages: [
         { role: "system", content: system },
@@ -624,6 +626,7 @@ Resolution discipline: an objection is "resolved" ONLY if you can quote the exac
         json_output: true,
         // Voting is a judgment call, not a creative act — keep it cold.
         temperature: 0.2,
+        reasoning_effort: "low",
         max_tokens: 3500,
         messages: [
           { role: "system", content: system },
@@ -705,7 +708,7 @@ Respond with the markdown document ONLY — no JSON, no preamble.`);
     seat: "chair",
     status: "queued",
     request: {
-      reasoning_effort: "high",
+      reasoning_effort: "medium",
       max_tokens: 10000,
 
       messages: [
@@ -767,6 +770,7 @@ Return ONLY valid JSON matching this shape:
     status: "queued",
     request: {
       json_output: true,
+      reasoning_effort: "low",
       max_tokens: 3500,
       messages: [
 
@@ -808,6 +812,7 @@ If rejected, amended_* may be empty strings / empty array.`;
     status: "queued",
     request: {
       json_output: true,
+      reasoning_effort: "low",
       max_tokens: 10000,
       messages: [
 
@@ -856,6 +861,7 @@ Return ONLY valid JSON:
     request: {
       json_output: true,
       temperature: 0.2,
+      reasoning_effort: "low",
       max_tokens: 3500,
 
       messages: [
@@ -890,7 +896,7 @@ Write the documents at FULL length — never compress them because they are insi
     status: "queued",
     request: {
       json_output: true,
-      reasoning_effort: "high",
+      reasoning_effort: "low",
       max_tokens: 10000,
 
       messages: [
@@ -1055,7 +1061,7 @@ Constraints: ${batchRangeText} batches, unique ascending integer batch_no starti
     status: "queued",
     request: {
       json_output: true,
-      reasoning_effort: "high",
+      reasoning_effort: "low",
       max_tokens: 8000,
       _is_import: isImport,
 

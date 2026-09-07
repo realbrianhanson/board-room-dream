@@ -292,6 +292,65 @@ Deno.test("buildValidationRetryRequest — near-cap base + oversized echo drops 
   assert(!msgs.some((m: any) => m.role === "assistant"), "assistant echo must be dropped");
 });
 
+Deno.test("buildValidationRetryRequest — TRUNCATED batches_chair / batches_revise_chair never echo the draft (RC-1)", () => {
+  const baseMessages = [
+    { role: "system", content: "OWNER AUTHORITY marker" },
+    { role: "user", content: "Draft the batches now." },
+  ];
+  for (const stepKey of ["batches_chair", "batches_revise_chair"]) {
+    const out = buildValidationRetryRequest({
+      stepKey,
+      baseRequest: { model: "chair", max_tokens: 8000, reasoning_effort: "low", messages: baseMessages },
+      baseMessages,
+      assistantContent: '{"batches":[{"batch_no":1,"title":"Foundation","channel":"lovable","prompt_md":"cut mid',
+      validationError: "Response was not parseable JSON.",
+      truncated: true,
+      correction: "TRUNCATION CORRECTION",
+    });
+    assertEquals(out.mode, "without_echo", `${stepKey} truncated retry must drop the echo`);
+    const msgs = (out.request as any).messages;
+    assertEquals(msgs.length, baseMessages.length + 1);
+    assert(!msgs.some((m: any) => m.role === "assistant"), "assistant echo must be dropped");
+    assertStringIncludes(msgs[msgs.length - 1].content, "TRUNCATION CORRECTION");
+    assertStringIncludes(msgs[msgs.length - 1].content, "do NOT reconstruct it verbatim");
+    // The builder never touches the budget — the orchestrator's retry bump owns that.
+    assertEquals((out.request as any).max_tokens, 8000);
+    assertEquals((out.request as any).reasoning_effort, "low");
+  }
+});
+
+Deno.test("buildValidationRetryRequest — NON-truncated batches_chair still echoes (invalid-but-complete JSON needs the echo)", () => {
+  const baseMessages = [{ role: "system", content: "OWNER AUTHORITY marker" }];
+  const out = buildValidationRetryRequest({
+    stepKey: "batches_chair",
+    baseRequest: { model: "chair", messages: baseMessages },
+    baseMessages,
+    assistantContent: '{"batches":[]}',
+    validationError: "batches must contain 3-8 items.",
+    truncated: false,
+    correction: "c",
+  });
+  assertEquals(out.mode, "with_echo");
+});
+
+Deno.test("buildValidationRetryRequest — truncated batches_chair over the cap even without echo throws BatchContextTooLarge", () => {
+  const oversized = "z".repeat(MAX_BATCH_REQUEST_CHARS + 5_000);
+  const baseMessages = [{ role: "system", content: oversized }];
+  assertThrows(
+    () =>
+      buildValidationRetryRequest({
+        stepKey: "batches_chair",
+        baseRequest: { model: "chair", messages: baseMessages },
+        baseMessages,
+        assistantContent: "x",
+        validationError: "e",
+        truncated: true,
+        correction: "c",
+      }),
+    BatchContextTooLarge,
+  );
+});
+
 Deno.test("buildValidationRetryRequest — impossible base (already over cap) throws BatchContextTooLarge", () => {
   const oversized = "z".repeat(MAX_BATCH_REQUEST_CHARS + 5_000);
   const baseMessages = [{ role: "system", content: oversized }];

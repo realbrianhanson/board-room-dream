@@ -107,8 +107,46 @@ export type ProxyResult = {
   costUsd: number;
   raw: any;
   finishReason?: string;
+  /** Hidden reasoning tokens reported by the provider (0 when not reported). */
+  reasoningTokens?: number;
+  /** The max_tokens actually sent on the wire (visible budget + reasoning allowance), 0 when uncapped. */
+  wireMaxTokens?: number;
+  /** True when the completion hit the wire cap — by finish_reason OR by token count. */
+  budgetExhausted?: boolean;
   fallback?: FallbackMeta;
 };
+
+// Reasoning models count their hidden thinking tokens INSIDE max_tokens, so a
+// cap sized for the visible answer alone gets eaten by the thinking and the
+// answer is cut off (batches_chair ran 8000/8000 with the JSON cut mid-prompt;
+// batches_review_inspector spent ~2,200 of 2,500 tokens on reasoning and
+// returned ~300 chars). Callers keep `max_tokens` as the VISIBLE budget; the
+// wire cap adds a per-model allowance for the thinking. Keyed on the RESOLVED
+// model id (primary or fallback) because the same step can run on either.
+// google/x-ai/moonshotai models think by default even with no effort set.
+export function reasoningAllowance(modelId: string, effort?: "low" | "medium" | "high"): number {
+  const thinking = /^(google|x-ai|moonshotai)\//.test(String(modelId ?? ""));
+  if (!effort) return thinking ? 2500 : 0;
+  const table = thinking
+    ? { low: 2500, medium: 5000, high: 8000 }
+    : { low: 1500, medium: 3000, high: 6000 };
+  return table[effort] ?? 0;
+}
+
+// Pure truncation signal. finish_reason alone is not enough: some providers
+// report "stop" after cutting at the cap, and the orchestrator's visible-chars
+// heuristic cannot see reasoning-eaten budgets. Treat a completion whose
+// token count is within 8 of the wire cap as exhausted.
+export function isBudgetExhausted(
+  finishReason: string | undefined,
+  tokensOut: number,
+  wireMaxTokens: number,
+): boolean {
+  if (finishReason === "length" || finishReason === "max_tokens") return true;
+  const cap = Number(wireMaxTokens) || 0;
+  const out = Number(tokensOut) || 0;
+  return cap > 0 && out >= cap - 8;
+}
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -313,7 +351,15 @@ function isRefusal(content: string, finishReason: string | undefined, jsonMode: 
 async function callOpenRouter(
   apiKey: string,
   body: any,
-): Promise<{ content: string; finishReason: string | undefined; usage: any; raw: any }> {
+): Promise<{
+  content: string;
+  finishReason: string | undefined;
+  usage: any;
+  raw: any;
+  reasoningTokens: number;
+  wireMaxTokens: number;
+  budgetExhausted: boolean;
+}> {
   // BUILD: 2026-07-22.atomic-accounting.1 — timer stays live through the
   // ENTIRE response lifecycle (fetch + non-OK body read + r.json body read),
   // and is cleared exactly once in the outer finally. The prior code cleared
@@ -382,11 +428,17 @@ async function callOpenRouter(
       throw e;
     }
     const choice = json?.choices?.[0];
+    const finishReason = choice?.finish_reason;
+    const wireMaxTokens = Number(body?.max_tokens ?? 0) || 0;
+    const tokensOut = Number(json?.usage?.completion_tokens ?? 0) || 0;
     return {
       content: choice?.message?.content ?? "",
-      finishReason: choice?.finish_reason,
+      finishReason,
       usage: json?.usage ?? {},
       raw: json,
+      reasoningTokens: Number(json?.usage?.completion_tokens_details?.reasoning_tokens ?? 0) || 0,
+      wireMaxTokens,
+      budgetExhausted: isBudgetExhausted(finishReason, tokensOut, wireMaxTokens),
     };
   } finally {
     clearTimeout(timer);
@@ -574,7 +626,12 @@ export async function callSeat(
     if (options.json) body.response_format = { type: "json_object" };
     if (options.reasoningEffort) body.reasoning = { effort: options.reasoningEffort };
     if (options.online) body.plugins = [{ id: "web", max_results: 5 }];
-    if (options.maxTokens && options.maxTokens > 0) body.max_tokens = options.maxTokens;
+    // `maxTokens` is the VISIBLE budget the step was sized for; the wire cap
+    // adds the resolved model's reasoning allowance so hidden thinking cannot
+    // eat the answer (see reasoningAllowance).
+    if (options.maxTokens && options.maxTokens > 0) {
+      body.max_tokens = options.maxTokens + reasoningAllowance(modelId, options.reasoningEffort);
+    }
     return body;
   };
 
@@ -627,6 +684,9 @@ export async function callSeat(
       costUsd: fbAttempt.costUsd,
       raw: fbAttempt.raw,
       finishReason: fbAttempt.finishReason,
+      reasoningTokens: fbAttempt.reasoningTokens,
+      wireMaxTokens: fbAttempt.wireMaxTokens,
+      budgetExhausted: fbAttempt.budgetExhausted,
       fallback: {
         fallback_model_used: fbAttempt.modelId,
         primary_model: seatRow.model_id,
@@ -643,6 +703,9 @@ export async function callSeat(
     costUsd: attempt.costUsd,
     raw: attempt.raw,
     finishReason: attempt.finishReason,
+    reasoningTokens: attempt.reasoningTokens,
+    wireMaxTokens: attempt.wireMaxTokens,
+    budgetExhausted: attempt.budgetExhausted,
   };
 }
 

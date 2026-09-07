@@ -356,7 +356,12 @@ export function buildValidationRetryRequest(input: ValidationRetryInput): Valida
   // truncated near-cap output was letting the model re-emit and re-truncate
   // in the same shape. The correction copy alone (see correctionForStep)
   // asks for a materially smaller schema, so no echo is needed.
-  if (isAuditNoEchoStep(stepKey)) {
+  // Truncated batch drafts (batches_chair / batches_revise_chair) take the
+  // same no-echo path: re-sending a 13K-char truncated draft only invites
+  // the model to reconstruct it verbatim and truncate again, and the echo
+  // alone can push the retry past the batch-context cap.
+  const truncatedBatchDraft = truncated && (stepKey === "batches_chair" || stepKey === "batches_revise_chair");
+  if (isAuditNoEchoStep(stepKey) || truncatedBatchDraft) {
     const noEchoText = truncated
       ? `${correctionText}\n\n(Retry note: your prior response was truncated at ${assistantContent.length} chars — do NOT reconstruct it verbatim. Emit only complete objects and close the schema properly.)`
       : `${correctionText}\n\n(Retry note: your prior response failed validation at ${assistantContent.length} chars — do NOT reconstruct it verbatim. Emit only complete objects and close the schema properly.)`;
@@ -364,7 +369,12 @@ export function buildValidationRetryRequest(input: ValidationRetryInput): Valida
       ...baseRequest,
       messages: [...baseMessages, { role: "user", content: noEchoText }],
     };
-    return { request: req, mode: "without_echo", chars: JSON.stringify(req).length };
+    const chars = JSON.stringify(req).length;
+    // Batch-generation steps keep the hard cap even on the no-echo path.
+    if (isBatchGenerationStep(stepKey) && chars > MAX_BATCH_REQUEST_CHARS) {
+      throw new BatchContextTooLarge(stepKey, chars);
+    }
+    return { request: req, mode: "without_echo", chars };
   }
 
   const withEcho = {

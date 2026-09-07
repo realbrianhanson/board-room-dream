@@ -1,7 +1,8 @@
 // BATCH-REVISE-LOW-REASONING-R1 regression: assert queues.ts wires
-// batches_revise_chair with low reasoning while the deliberative draft
-// step (batches_chair) and other high-reasoning deliberative steps keep
-// their existing reasoning_effort. Also confirms truncated mid-string
+// batches_revise_chair with low reasoning. RC-1: the draft step
+// (batches_chair) is now ALSO low — its 8,000 visible-token cap was shared
+// with "high" reasoning and every batches_chair on record truncated on its
+// first attempt (live run Jul 24: tokens_out 8000/8000, JSON cut mid-prompt). Also confirms truncated mid-string
 // output remains fail-closed under the generic JSON-tail recovery.
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { tryCloseJsonTail } from "./audit-findings.ts";
@@ -28,9 +29,14 @@ Deno.test("queues.ts — batches_revise_chair uses low reasoning (bounded review
   );
 });
 
-Deno.test("queues.ts — batches_chair (initial draft) still uses high reasoning", () => {
+Deno.test("queues.ts — batches_chair (initial draft) uses low reasoning (RC-1: cap was shared with high thinking)", () => {
   const block = requestBlockFor("batches_chair");
-  assertStringIncludes(block, `reasoning_effort: "high"`);
+  assertStringIncludes(block, `reasoning_effort: "low"`);
+  assert(
+    !/reasoning_effort:\s*"high"/.test(block),
+    `batches_chair must NOT be reasoning_effort=high; every live batches_chair truncated at 8000/8000 under it. Got: ${block}`,
+  );
+  assertStringIncludes(block, "max_tokens: 8000");
 });
 
 Deno.test("queues.ts — batches_revise_chair keeps the 8,000 output cap (no unrelated budget increase)", () => {

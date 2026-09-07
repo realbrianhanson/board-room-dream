@@ -115,6 +115,7 @@ import {
   requeueLegacyNullStartOrphans,
   requeueStepIfParentActive,
   TERMINAL_RUN_STATUSES,
+  validationRetryBudget,
 } from "./hygiene.ts";
 
 function fireSelfTick(body: any = {}) {
@@ -253,11 +254,19 @@ async function requeueForValidation(admin: any, run: any, step: any, baseMessage
       truncated,
       correction: correctionForStep(step.step_key, { isImport: step.request?._is_import === true ? true : step.request?._is_import === false ? false : undefined }),
     });
+    // The correction pass used to re-send the identical max_tokens / effort
+    // that just failed, so a reasoning-eaten cap failed identically and the
+    // second miss killed the run. Force low reasoning on every retry and,
+    // when the output was truncated, widen the visible cap (bounded so the
+    // call still finishes inside the proxy abort). Applied HERE, not in
+    // buildValidationRetryRequest, which stays a pure message builder.
+    const bumped = validationRetryBudget(step, truncated);
     return await requeueStepIfParentActive(
       admin,
       step.id,
       {
         ...newRequest,
+        ...bumped,
         _validation_attempts: attempts,
         _validation_retry_mode: mode,
       },
@@ -430,6 +439,14 @@ async function executeStep(admin: any, run: any, step: any) {
     const content = result.content;
     const usage = { tokensIn: result.tokensIn, tokensOut: result.tokensOut, costUsd: result.costUsd };
     const fallbackMeta = result.fallback ?? null;
+    // Persisted on every step so a truncation is diagnosable from the row
+    // alone (finish_reason + how much of the wire cap the thinking consumed).
+    const outputMeta = {
+      finish_reason: result.finishReason ?? null,
+      tokens_out: usage.tokensOut,
+      reasoning_tokens: Number(result.reasoningTokens ?? 0) || 0,
+      wire_max_tokens: Number(result.wireMaxTokens ?? 0) || 0,
+    };
 
     if (jsonMode) {
       let candidate: any = null;
@@ -470,13 +487,19 @@ async function executeStep(admin: any, run: any, step: any) {
       }
       const err = candidate ? validateStepJson(step.step_key, candidate, run.kind) : "Response was not parseable JSON.";
       if (err) {
-        // Detect truncation: provider finish_reason of length/max_tokens, OR
-        // unparseable JSON whose content is close to the requested max_tokens
-        // ceiling (heuristic: >=95% of max_tokens * ~4 chars/token).
-        const finishReason = (result as any)?.finishReason;
+        // Detect truncation: the proxy's budgetExhausted signal (provider
+        // finish_reason of length/max_tokens OR completion tokens at the wire
+        // cap), OR — secondary heuristics — unparseable JSON whose content is
+        // close to the requested visible max_tokens ceiling (>=95% of
+        // max_tokens * ~4 chars/token), OR completion tokens at >=90% of the
+        // wire cap. The last one catches a reasoning-eaten budget: 300 visible
+        // chars out of 2,500 tokens never trips the chars heuristic, and some
+        // providers still report "stop" after cutting at the cap.
         const maxTokens = Number(step.request?.max_tokens) > 0 ? Number(step.request.max_tokens) : 0;
         const nearMax = !candidate && maxTokens > 0 && content.length >= Math.floor(maxTokens * 4 * 0.95);
-        const truncated = finishReason === "length" || finishReason === "max_tokens" || nearMax;
+        const wireMax = outputMeta.wire_max_tokens;
+        const nearWireCap = !candidate && wireMax > 0 && usage.tokensOut >= Math.floor(wireMax * 0.9);
+        const truncated = !!result.budgetExhausted || nearMax || nearWireCap;
 
         // Invocation-safe correction: NEVER mark completed with invalid output
         // and NEVER make two long model calls in one invocation. Queue the
@@ -490,6 +513,7 @@ async function executeStep(admin: any, run: any, step: any) {
               status: "failed",
               error: truncated ? "truncated_after_correction" : "invalid_json_after_correction",
               response_text: content,
+              response_json: { _meta: { ...outputMeta, ...(fallbackMeta ? { fallback: fallbackMeta } : {}) } },
               tokens_in: usage.tokensIn,
               tokens_out: usage.tokensOut,
               cost_usd: usage.costUsd,
@@ -507,15 +531,14 @@ async function executeStep(admin: any, run: any, step: any) {
         return;
       }
       let parsed: any = candidate;
-      if (fallbackMeta || tailClosed || recoveryMode) {
-        if (!parsed || typeof parsed !== "object") parsed = {};
-        parsed._meta = {
-          ...(parsed._meta ?? {}),
-          ...(fallbackMeta ? { fallback: fallbackMeta } : {}),
-          ...(tailClosed ? { tail_closed: tailClosed } : {}),
-          ...(recoveryMode ? { recovery_mode: recoveryMode } : {}),
-        };
-      }
+      if (!parsed || typeof parsed !== "object") parsed = {};
+      parsed._meta = {
+        ...(parsed._meta ?? {}),
+        ...outputMeta,
+        ...(fallbackMeta ? { fallback: fallbackMeta } : {}),
+        ...(tailClosed ? { tail_closed: tailClosed } : {}),
+        ...(recoveryMode ? { recovery_mode: recoveryMode } : {}),
+      };
       await admin
         .from("run_steps")
         .update({
@@ -538,7 +561,7 @@ async function executeStep(admin: any, run: any, step: any) {
       .update({
         status: "completed",
         response_text: content,
-        response_json: fallbackMeta ? { _meta: { fallback: fallbackMeta } } : null,
+        response_json: { _meta: { ...outputMeta, ...(fallbackMeta ? { fallback: fallbackMeta } : {}) } },
         tokens_in: usage.tokensIn,
         tokens_out: usage.tokensOut,
         cost_usd: usage.costUsd,

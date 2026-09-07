@@ -7,6 +7,9 @@ import {
   requeueLegacyNullStartOrphans,
   requeueStepIfParentActive,
   TERMINAL_RUN_STATUSES,
+  VALIDATION_RETRY_MAX_TOKENS_CHAIR,
+  VALIDATION_RETRY_MAX_TOKENS_OTHER,
+  validationRetryBudget,
 } from "./hygiene.ts";
 
 type Run = { id: string; status: string; error: string | null; kind?: string; consensus?: any };
@@ -371,4 +374,47 @@ Deno.test("failRun (audit): falls back to safe-plan selector when previous_proje
   const admin = makeFakeAdmin(state);
   await failRun(admin, state.runs[0] as any, "boom");
   assertEquals(state.projects[0].status, "imported");
+});
+
+// ============================== validationRetryBudget ==============================
+// RC-1: the correction pass must never re-send the identical budget that
+// just truncated. Every retry drops to low reasoning; a truncated retry also
+// doubles the visible cap, bounded per step class.
+
+Deno.test("validationRetryBudget: non-truncated retry only forces low reasoning (cap untouched)", () => {
+  const b = validationRetryBudget({ step_key: "r4_vote_inspector_loop0", request: { max_tokens: 3500, reasoning_effort: "high" } }, false);
+  assertEquals(b, { reasoning_effort: "low" });
+});
+
+Deno.test("validationRetryBudget: truncated non-chair step doubles up to 6,000", () => {
+  assertEquals(
+    validationRetryBudget({ step_key: "batches_review_inspector", request: { max_tokens: 2500 } }, true),
+    { max_tokens: 5000, reasoning_effort: "low" },
+  );
+  assertEquals(
+    validationRetryBudget({ step_key: "audit_inspector_c15", request: { max_tokens: 4000 } }, true),
+    { max_tokens: VALIDATION_RETRY_MAX_TOKENS_OTHER, reasoning_effort: "low" },
+  );
+});
+
+Deno.test("validationRetryBudget: truncated chair document steps double up to 10,000 (105s clock)", () => {
+  assertEquals(
+    validationRetryBudget({ step_key: "batches_chair", request: { max_tokens: 8000, reasoning_effort: "low" } }, true),
+    { max_tokens: VALIDATION_RETRY_MAX_TOKENS_CHAIR, reasoning_effort: "low" },
+  );
+  assertEquals(
+    validationRetryBudget({ step_key: "audit_chair_merge", request: { max_tokens: 6500 } }, true),
+    { max_tokens: 10000, reasoning_effort: "low" },
+  );
+  for (const key of ["batches_revise_chair", "r_final_ruling_chair", "cr_verdict_chair", "cr_revise_chair"]) {
+    assertEquals(validationRetryBudget({ step_key: key, request: { max_tokens: 10000 } }, true).max_tokens, 10000);
+  }
+});
+
+Deno.test("validationRetryBudget: uncapped base request stays uncapped (no 0/NaN max_tokens key)", () => {
+  const b = validationRetryBudget({ step_key: "batches_chair", request: {} }, true);
+  assertEquals(b, { reasoning_effort: "low" });
+  assertEquals("max_tokens" in b, false);
+  const spread = { ...{ max_tokens: undefined, messages: [] }, ...b };
+  assertEquals(spread.reasoning_effort, "low");
 });
