@@ -11,6 +11,15 @@ import {
   SEAT_ORDER as VOTE_SEAT_ORDER,
   type VoteSegment,
 } from "@/lib/vote-ring-segments";
+import {
+  formatSeatScore,
+  loopLabel,
+  readScorecard,
+  scorecardVerdictLabel,
+  synthesisLoopCount,
+  VOTING_SEATS,
+  type RunScorecard,
+} from "@/lib/scorecard";
 
 export type Seat = "chair" | "strategist" | "contrarian" | "inspector";
 const SEAT_ORDER: Seat[] = VOTE_SEAT_ORDER;
@@ -32,7 +41,7 @@ export type SessionRun = {
   budget_usd: number;
   spent_usd: number;
   budget_warning: boolean;
-  consensus: { awaiting?: string } | null;
+  consensus: { awaiting?: string; scorecard?: RunScorecard | null } | null;
   founder_notes: string | null;
   error: string | null;
   created_at: string;
@@ -118,6 +127,7 @@ export function BoardroomSession(props: BoardroomSessionProps) {
   const [runError, setRunError] = useState<string | null>(null);
   const [runStale, setRunStale] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const consensusPulseRef = useRef<HTMLDivElement | null>(null);
 
   const loadSteps = useCallback(async (runId: string) => {
@@ -293,6 +303,8 @@ export function BoardroomSession(props: BoardroomSessionProps) {
     [steps, rubric],
   );
 
+  const loopCount = useMemo(() => synthesisLoopCount(steps), [steps]);
+  const scorecard = useMemo(() => readScorecard(run?.consensus), [run?.consensus]);
   const roundOneFill = completedR1 / totalR1;
   const votesFilled = segments.filter((s) => s.result !== "empty").length;
   const votesFraction = segments.length ? votesFilled / segments.length : 0;
@@ -332,6 +344,25 @@ export function BoardroomSession(props: BoardroomSessionProps) {
     if (!run) return;
     const { error } = await supabase.functions.invoke("boardroom-orchestrator", { body: { action: "resume", run_id: run.id } });
     if (error) toast.error(error.message); else toast.success("Session resumed.");
+  }
+  // Failed run: requeue the cancelled siblings and the step that failed,
+  // keeping every completed (paid) step — instead of convening from zero.
+  async function resumeFailedRun() {
+    if (!run || resuming) return;
+    setResuming(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("boardroom-orchestrator", {
+        body: { action: "resume_failed", run_id: run.id },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      toast.success("Resuming where it stopped.");
+      await loadRun();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setResuming(false);
+    }
   }
   async function retryStep(stepId: string) {
     if (!run) return;
@@ -457,6 +488,8 @@ export function BoardroomSession(props: BoardroomSessionProps) {
 
       {locked && !isLegacy && run && lockCard?.(run)}
 
+      {locked && !isLegacy && scorecard && <ScorecardCard scorecard={scorecard} />}
+
       {isLegacy && run && (
         <div className="mt-8 flex items-start gap-3 rounded-xl border border-primary/40 bg-primary/5 p-5">
           <AlertTriangle className="mt-0.5 h-4 w-4 text-primary" />
@@ -483,12 +516,24 @@ export function BoardroomSession(props: BoardroomSessionProps) {
       )}
 
       {terminal && !readOnly && isOwner && (
-        <div className="mt-6 flex justify-end">
+        <div className="mt-6 flex flex-wrap justify-end gap-3">
+          {run?.status === "failed" && (
+            <button
+              onClick={resumeFailedRun}
+              disabled={resuming || convening}
+              data-testid="session-resume-failed"
+              className="rounded-md bg-primary px-4 py-2 font-mono text-[11px] uppercase tracking-widest text-primary-foreground hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {resuming ? "Resuming…" : "Resume where it stopped"}
+            </button>
+          )}
           <button
             onClick={convene}
-            disabled={convening || hasKey === false || !!gateReason}
+            disabled={convening || resuming || hasKey === false || !!gateReason}
             title={gateReason ?? (hasKey === false ? "Seat the board first — add your OpenRouter key in Settings." : undefined)}
-            className="rounded-md border border-primary/50 bg-primary/10 px-4 py-2 font-mono text-[11px] uppercase tracking-widest text-primary hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
+            className={run?.status === "failed"
+              ? "rounded-md border border-border bg-surface-2 px-4 py-2 font-mono text-[11px] uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              : "rounded-md border border-primary/50 bg-primary/10 px-4 py-2 font-mono text-[11px] uppercase tracking-widest text-primary hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-50"}
           >
             {convening
               ? "Reconvening…"
@@ -556,7 +601,7 @@ export function BoardroomSession(props: BoardroomSessionProps) {
         ) : (
           <div className="space-y-4">
             {steps.map((s) => (
-              <TranscriptCard key={s.id} step={s} rubric={rubric} isOwner={isOwner} onRetry={() => retryStep(s.id)} />
+              <TranscriptCard key={s.id} step={s} rubric={rubric} isOwner={isOwner} onRetry={() => retryStep(s.id)} loopCount={loopCount} />
             ))}
           </div>
         )}
@@ -734,6 +779,49 @@ function RollCall({
   );
 }
 
+// The vote as a scorecard: one row per voting seat (mean and minimum rubric
+// score, blocking objections) plus how the run locked. Read off
+// run.consensus.scorecard; older runs without one render nothing.
+function ScorecardCard({ scorecard }: { scorecard: RunScorecard }) {
+  const verdict = scorecardVerdictLabel(scorecard);
+  return (
+    <div className="mt-4 rounded-xl border border-border bg-surface-1/60 px-6 py-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+          The vote · threshold {scorecard.threshold}
+        </p>
+        <span className="rounded-full border border-primary/50 px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-primary">
+          {verdict}
+        </span>
+      </div>
+      <div className="mt-3 grid grid-cols-[1fr_auto_auto_auto] gap-x-6 gap-y-1.5 font-mono text-[11px]">
+        <span className="text-[9px] uppercase tracking-widest text-muted-foreground">Seat</span>
+        <span className="text-right text-[9px] uppercase tracking-widest text-muted-foreground">Mean</span>
+        <span className="text-right text-[9px] uppercase tracking-widest text-muted-foreground">Min</span>
+        <span className="text-right text-[9px] uppercase tracking-widest text-muted-foreground">Blocking</span>
+        {VOTING_SEATS.map((seat) => {
+          const row = formatSeatScore(scorecard.seats[seat]);
+          const blocked = (scorecard.seats[seat]?.blocking ?? 0) > 0;
+          return (
+            <ScorecardRow key={seat} seat={seat} row={row} blocked={blocked} />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ScorecardRow({ seat, row, blocked }: { seat: Seat; row: { mean: string; min: string; blocking: string }; blocked: boolean }) {
+  return (
+    <>
+      <span className="font-display text-sm text-foreground" style={{ color: `hsl(${SEAT_META[seat].hue})` }}>{SEAT_META[seat].label}</span>
+      <span className="text-right text-foreground">{row.mean}</span>
+      <span className="text-right text-muted-foreground">{row.min}</span>
+      <span className={`text-right ${blocked ? "text-destructive" : "text-muted-foreground"}`}>{row.blocking}</span>
+    </>
+  );
+}
+
 function FallbackChip({ meta }: { meta?: { fallback_model_used?: string; primary_model?: string } | null }) {
   if (!meta?.fallback_model_used) return null;
   const label = meta.fallback_model_used.split("/").pop() ?? meta.fallback_model_used;
@@ -789,15 +877,17 @@ function FounderNoteBox({ run, onSaved }: { run: SessionRun; onSaved: () => void
 
 // ============================== Transcript ==============================
 
-function stepRoundLabel(step: SessionStep): string {
+function stepRoundLabel(step: SessionStep, loopCount: number): string {
   if (step.step_key.startsWith("r1_")) return "Round 1 — Independent drafts";
   if (step.step_key.startsWith("r2_exam_")) return "Round 2 — Cross-examination";
   const loopMatch = /_loop(\d+)/.exec(step.step_key);
   const loop = loopMatch ? Number(loopMatch[1]) : 0;
-  if (step.step_key.startsWith("r3_synthesis_")) return `Round 3 — Synthesis (loop ${loop})`;
-  if (step.step_key.startsWith("r3_draft_")) return `Round 3 — Synthesis (loop ${loop})`;
-  if (step.step_key.startsWith("r3_extract_")) return `Round 3 — Decision log (loop ${loop})`;
-  if (step.step_key.startsWith("r4_vote_")) return `Round 4 — The vote (loop ${loop})`;
+  // Loop-cap aware: a single-loop run (the default) never mentions loops.
+  const loopTag = loopLabel(loop, loopCount);
+  if (step.step_key.startsWith("r3_synthesis_")) return `Round 3 — Synthesis${loopTag}`;
+  if (step.step_key.startsWith("r3_draft_")) return `Round 3 — Synthesis${loopTag}`;
+  if (step.step_key.startsWith("r3_extract_")) return `Round 3 — Decision log${loopTag}`;
+  if (step.step_key.startsWith("r4_vote_")) return `Round 4 — The vote${loopTag}`;
   if (step.step_key === "r_final_ruling_chair") return "Final ruling — Chair rules";
   if (step.step_key === "r5_blueprint_chair") return "Blueprint — The Chair drafts the documents";
   if (step.step_key === "r5_blueprint_extract_chair") return "Blueprint — Features extract";
@@ -812,12 +902,12 @@ function stepRoundLabel(step: SessionStep): string {
 }
 
 function TranscriptCard({
-  step, rubric, isOwner, onRetry,
+  step, rubric, isOwner, onRetry, loopCount,
 }: {
-  step: SessionStep; rubric: readonly string[]; isOwner: boolean; onRetry: () => void;
+  step: SessionStep; rubric: readonly string[]; isOwner: boolean; onRetry: () => void; loopCount: number;
 }) {
   const meta = SEAT_META[step.seat];
-  const roundLabel = stepRoundLabel(step);
+  const roundLabel = stepRoundLabel(step, loopCount);
   const failed = step.status === "failed";
   return (
     <div className={`transcript-enter rounded-xl border bg-surface-1 p-5 ${failed ? "border-l-2 border-l-destructive border-border" : "border-border"}`}>

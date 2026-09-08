@@ -1,9 +1,11 @@
 // deno-lint-ignore-file no-explicit-any
 // The board's protocol: seats, rubrics, step validation, consensus rules,
 // and the pure helpers that read candidate documents out of step history.
-// No step queuing here; the only I/O is the consensus-threshold lookup.
+// No step queuing here; the only I/O is the consensus-threshold and
+// synthesis-loop-cap lookups.
 
-import { evaluateChairMergeCandidate } from "../_shared/audit-findings.ts";
+import { CAPS, evaluateChairMergeCandidate } from "../_shared/audit-findings.ts";
+import { FULL_LOOP_CAP, isSmokeRun, SMOKE_LOOP_CAP } from "../_shared/smoke-mode.ts";
 
 export const SEATS = ["chair", "strategist", "contrarian", "inspector"] as const;
 
@@ -63,14 +65,38 @@ ${JSON.stringify(intake?.validation_scores ?? null, null, 2)}`;
 
 
 
-export function draftsBlock(steps: any[], forSeat?: Seat) {
+// `maxCharsPerDraft` bounds each draft (design Round-3 input diet, RC-4): the
+// cut is on a code-point boundary and carries an explicit note so the Chair
+// knows the draft continues past what it sees. Unset = full drafts (Round 2
+// exams need them whole).
+export function draftsBlock(steps: any[], forSeat?: Seat, maxCharsPerDraft?: number) {
   return SEATS
     .filter((s) => (forSeat ? s !== forSeat : true))
     .map((s) => {
       const step = steps.find((x) => x.step_key === `r1_draft_${s}` && x.status === "completed");
-      return `--- ${SEAT_LABEL[s]} (${s}) DRAFT ---\n${step?.response_text ?? "(no draft)"}`;
+      let text = String(step?.response_text ?? "(no draft)");
+      if (maxCharsPerDraft && maxCharsPerDraft > 0 && text.length > maxCharsPerDraft) {
+        let cut = maxCharsPerDraft;
+        const code = text.charCodeAt(cut - 1);
+        if (code >= 0xD800 && code <= 0xDBFF) cut -= 1;
+        text = `${text.slice(0, cut)}\n\n[draft truncated at ${maxCharsPerDraft} chars of ${text.length}]`;
+      }
+      return `--- ${SEAT_LABEL[s]} (${s}) DRAFT ---\n${text}`;
     })
     .join("\n\n");
+}
+
+
+// A step's stored response_json as it may be re-sent to the NEXT model.
+// The orchestrator persists a diagnostic `_meta` (finish_reason, token
+// counts, wire cap, fallback) on every step row; that is for the UI and for
+// humans reading the row, never prompt material — stringifying it into a
+// later prompt leaks internal budgets and invites the model to echo the key
+// back. Pure; non-objects and arrays pass through untouched.
+export function promptJson(json: any): any {
+  if (!json || typeof json !== "object" || Array.isArray(json)) return json;
+  const { _meta: _omit, ...rest } = json;
+  return rest;
 }
 
 
@@ -79,7 +105,7 @@ export function objectionsAndStealsBlock(steps: any[]) {
   for (const s of SEATS) {
     const step = steps.find((x) => x.step_key === `r2_exam_${s}` && x.status === "completed");
     if (!step?.response_json) continue;
-    const j = step.response_json;
+    const j = promptJson(step.response_json);
     parts.push(`--- ${SEAT_LABEL[s]} (${s}) — OBJECTIONS AND STEALS ---
 ${JSON.stringify(j, null, 2)}`);
   }
@@ -87,7 +113,9 @@ ${JSON.stringify(j, null, 2)}`);
 }
 
 
-export function priorRoundFailureBlock(steps: any[], previousLoop: number) {
+// `threshold` is the resolved consensus gate (resolveConsensusThreshold) so
+// the Chair is shown the same bar the vote was judged against.
+export function priorRoundFailureBlock(steps: any[], previousLoop: number, threshold: number = 8) {
   const votes = SEATS
     .map((s) => steps.find((x) => x.step_key === `r4_vote_${s}_loop${previousLoop}` && x.status === "completed"))
     .filter(Boolean);
@@ -98,7 +126,7 @@ export function priorRoundFailureBlock(steps: any[], previousLoop: number) {
     (jj.blocking_objections ?? []).forEach((b: string) => blocking.push(`- [${v.seat}] ${b}`));
     for (const k of [...PLAN_RUBRIC, ...DESIGN_RUBRIC]) {
       const n = Number(jj?.scores?.[k]);
-      if (Number.isFinite(n) && n < 8) lowScores.push(`- [${v.seat}] ${k}: ${n}`);
+      if (Number.isFinite(n) && n < threshold) lowScores.push(`- [${v.seat}] ${k}: ${n}`);
     }
   }
   return `PRIOR VOTE FAILED (loop ${previousLoop})
@@ -106,7 +134,7 @@ export function priorRoundFailureBlock(steps: any[], previousLoop: number) {
 BLOCKING OBJECTIONS STILL STANDING:
 ${blocking.length ? blocking.join("\n") : "(none)"}
 
-RUBRIC SCORES BELOW 8:
+RUBRIC SCORES BELOW ${threshold}:
 ${lowScores.length ? lowScores.join("\n") : "(none)"}
 
 Revise ONLY the contested parts. Preserve agreed parts verbatim.`;
@@ -131,6 +159,109 @@ export function lastCandidateLoop(steps: any[]): number {
 
 
 // ============================== Validation ==============================
+
+function clipText(s: string, n: number): string {
+  const t = s.trim();
+  return t.length > n ? t.slice(0, n - 1).trimEnd() + "…" : t;
+}
+
+// "The Chair" / "Chair" / "chair" -> "chair". Anything else passes through
+// untouched so the validator still rejects an unknown seat.
+export function seatIdFromLabel(v: unknown): unknown {
+  if (typeof v !== "string") return v;
+  const key = v.trim().toLowerCase().replace(/^the\s+/, "");
+  return (SEATS as readonly string[]).includes(key) ? key : v;
+}
+
+// Normalize-then-validate. Models round-trip the schema with small,
+// mechanical deviations (a 7.5 score, "The Inspector" for a seat id, a
+// "resolved" objection with no quote, nine review issues, a 300-char issue
+// text, batch_no 1,2,2,4) that used to cost a full correction pass and, on
+// the second miss, the run. Each of those is coerced here deterministically
+// — never invented — and the coerced value is what validateStepJson sees and
+// what the caller must persist. Hard failures (a missing required top-level
+// key, a non-numeric score, a prompt_md outside its size contract) still
+// come back as `error`. Pure; the input object is not mutated.
+export function normalizeStepJson(
+  stepKey: string,
+  parsed: any,
+  kind: string = "plan",
+): { value: any; error: string | null } {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { value: parsed, error: validateStepJson(stepKey, parsed, kind) };
+  }
+  const value: any = JSON.parse(JSON.stringify(parsed));
+
+  if (stepKey.startsWith("r2_exam_")) {
+    if (Array.isArray(value.objections)) {
+      for (const o of value.objections) {
+        if (o && typeof o === "object") o.target_seat = seatIdFromLabel(o.target_seat);
+      }
+    }
+    if (Array.isArray(value.steals)) {
+      for (const s of value.steals) {
+        if (s && typeof s === "object") s.from_seat = seatIdFromLabel(s.from_seat);
+      }
+    }
+  }
+
+  if (stepKey.startsWith("r4_vote_")) {
+    if (value.scores && typeof value.scores === "object") {
+      for (const k of rubricForKind(kind)) {
+        const n = Number(value.scores[k]);
+        if (Number.isFinite(n)) value.scores[k] = Math.max(1, Math.min(10, Math.round(n)));
+      }
+    }
+    if (Array.isArray(value.objection_resolutions)) {
+      for (const r of value.objection_resolutions) {
+        if (r && typeof r === "object" && r.status === "resolved" && !String(r.evidence_quote ?? "").trim()) {
+          // No quote = it still stands (the prompt's own rule).
+          r.status = "standing";
+        }
+      }
+    }
+  }
+
+  if (stepKey.startsWith("batches_review_") || stepKey === "cr_review_inspector") {
+    if (Array.isArray(value.issues)) {
+      const issues = value.issues
+        .filter((iss: any) => iss && typeof iss === "object" && typeof iss.text === "string" && iss.text.trim().length >= 10)
+        .slice(0, 8)
+        .map((iss: any) => ({ ...iss, text: clipText(iss.text, 280) }));
+      value.issues = issues;
+      // The total-size cap is a wire budget, not a judgment: drop trailing
+      // issues (blocking ones are listed first by the prompt) until it fits.
+      while (value.issues.length && JSON.stringify(value).length > 4500) value.issues.pop();
+    }
+  }
+
+  if (stepKey === "batches_chair" || stepKey === "batches_revise_chair") {
+    if (Array.isArray(value.batches)) {
+      value.batches.forEach((b: any, i: number) => {
+        if (b && typeof b === "object") b.batch_no = i + 1;
+      });
+    }
+  }
+
+  return { value, error: validateStepJson(stepKey, value, kind) };
+}
+
+// What to persist when a NON-chair judgment step is still invalid after its
+// one correction pass. A single dead vote must fail that loop's consensus
+// (checkConsensus treats scores:null as a fail and the Chair sees the
+// marker as a standing objection), and a dead reviewer must count as an
+// empty review — neither is worth cancelling every paid sibling. Returns
+// null for every other step: chair steps stay run-fatal.
+export function degradedStepJson(stepKey: string, error: string): Record<string, unknown> | null {
+  const key = String(stepKey ?? "");
+  if (key.startsWith("r4_vote_")) {
+    return { scores: null, blocking_objections: ["vote_unparseable"], _meta: { degraded: error } };
+  }
+  if (key.startsWith("batches_review_")) {
+    return { verdict: "approve", issues: [], _meta: { degraded: error } };
+  }
+  return null;
+}
 
 export function validateStepJson(stepKey: string, parsed: any, kind: string = "plan"): string | null {
   if (!parsed || typeof parsed !== "object") return "Response is not a JSON object.";
@@ -316,7 +447,7 @@ export function correctionForStep(stepKey: string, opts?: { isImport?: boolean }
     } else {
       range = "the same count range as the original system contract above (3-6 for imports, 6-8 for greenfield — prefer 6). Do NOT invent extra batches; pick the smallest count that fully covers the locked scope without padding.";
     }
-    return `Your JSON was truncated. Return ${range} Each prompt_md 900-2,600 characters; total JSON <=24,000 characters. Preserve required coverage but remove repeated context and prose. Do not silently pad to 6 to satisfy an old default.`;
+    return `Your JSON was truncated. Return ${range} Each prompt_md 900-1,800 characters; total JSON <=16,000 characters. Preserve required coverage but remove repeated context and prose. Do not silently pad to 6 to satisfy an old default.`;
   }
   if (key === "batches_review_inspector" || key === "batches_review_contrarian") {
     return "Your review JSON was truncated. Return ONLY {verdict, issues}; max 8 issues; each issue.text 10-280 characters; total JSON <=4,500 characters. Preserve every blocking issue, merge duplicates, no prose.";
@@ -324,10 +455,12 @@ export function correctionForStep(stepKey: string, opts?: { isImport?: boolean }
   if (key === "audit_chair_merge") {
     // AUDIT-MERGE-BOUNDED-R3 + AUDIT-FINALIZATION-R2: never restate the
     // 30/18,000 shape that caused the original truncation, and require the
-    // exact QUOTE/WHY evidence marker within the existing 140-char correction
-    // evidence cap. Serious findings without a verbatim quote get downgraded
-    // by the shared validator; correction should not solicit paraphrases.
-    return "Your prior audit merge JSON was invalid or truncated. Emit ONLY compact one-line valid JSON with keys verdict, summary, findings (and fix_prompt_md if any supported P0/P1 remains). HARD MAX 8 highest-severity findings; total JSON <=6,000 characters; summary <=360 characters; each finding description <=240 characters; each finding evidence <=140 characters. For every P0/P1 the evidence MUST use the exact marker form 'QUOTE: <short exact excerpt from the cited file> | WHY: <short reason it proves the issue>' — a paraphrase without a verbatim quote will be downgraded to P2. Drop the lowest-severity duplicates first; keep every supported P0/P1. If evidence for a finding is uncertain, OMIT the finding rather than expand or guess. Do NOT emit 30 findings or an 18,000-character schema — that limit caused the original truncation.";
+    // exact QUOTE/WHY evidence marker. Serious findings without a verbatim
+    // quote get downgraded by the shared validator; correction should not
+    // solicit paraphrases. Every number is read from CAPS.mergeCorrection*
+    // so the copy cannot drift from the caps the code applies.
+    const fmt = (n: number) => n.toLocaleString("en-US");
+    return `Your prior audit merge JSON was invalid or truncated. Emit ONLY compact one-line valid JSON with keys verdict, summary, findings (and fix_prompt_md if any supported P0/P1 remains). HARD MAX ${CAPS.mergeCorrectionFindingsMax} highest-severity findings; total JSON <=${fmt(CAPS.mergeCorrectionSerializedMax)} characters; summary <=${CAPS.mergeCorrectionSummaryMax} characters; each finding description <=${CAPS.mergeCorrectionDescriptionMax} characters; each finding evidence <=${CAPS.mergeCorrectionEvidenceMax} characters. For every P0/P1 the evidence MUST use the exact marker form 'QUOTE: <short exact excerpt from the cited file> | WHY: <short reason it proves the issue>' — a paraphrase without a verbatim quote will be downgraded to P2. Drop the lowest-severity duplicates first; keep every supported P0/P1. If evidence for a finding is uncertain, OMIT the finding rather than expand or guess. Do NOT emit 30 findings or an 18,000-character schema — that limit caused the original truncation.`;
   }
 
   if (/^audit_(chair|strategist|contrarian|inspector|reserve)(_c\d+)?$/.test(key)) {
@@ -388,4 +521,109 @@ export function checkConsensus(voteSteps: any[], kind: string = "plan", threshol
     if (Array.isArray(j.blocking_objections) && j.blocking_objections.length > 0) pass = false;
   }
   return { pass, scores: scoreSets };
+}
+
+
+// ============================== Synthesis loops / scorecard ==============================
+
+// How many Chair synthesis loops a plan/design run gets before the Chair
+// rules. Production evidence: no run ever reached consensus after loop 0,
+// and loops 1-2 added ~40% of a run's cost without changing the outcome, so
+// the default is ONE loop (vote once, then rule). An admin can raise it via
+// app_settings key "max_synthesis_loops" = {"loops": N}, clamped to
+// 1..FULL_LOOP_CAP; a smoke run is always one loop.
+export const DEFAULT_SYNTHESIS_LOOPS = 1;
+export const MAX_SYNTHESIS_LOOPS = FULL_LOOP_CAP;
+
+export function synthesisLoopCap(run: { consensus?: unknown } | null | undefined, setting: unknown): number {
+  if (isSmokeRun(run)) return SMOKE_LOOP_CAP;
+  const n = Number((setting as { loops?: unknown } | null | undefined)?.loops);
+  if (!Number.isFinite(n)) return DEFAULT_SYNTHESIS_LOOPS;
+  return Math.max(1, Math.min(MAX_SYNTHESIS_LOOPS, Math.floor(n)));
+}
+
+// Same short module-scope cache the proxy uses for the constitution: warm
+// isolates skip the read, an admin edit lands within the TTL.
+const LOOP_CAP_TTL_MS = 30_000;
+let _loopCapSetting: { value: unknown; at: number } | null = null;
+
+export async function resolveSynthesisLoopCap(admin: any, run: any): Promise<number> {
+  const now = Date.now();
+  if (!_loopCapSetting || now - _loopCapSetting.at >= LOOP_CAP_TTL_MS) {
+    let value: unknown = null;
+    try {
+      const { data } = await admin
+        .from("app_settings")
+        .select("value")
+        .eq("key", "max_synthesis_loops")
+        .maybeSingle();
+      value = data?.value ?? null;
+    } catch { /* default */ }
+    _loopCapSetting = { value, at: now };
+  }
+  return synthesisLoopCap(run, _loopCapSetting.value);
+}
+
+/** "the synthesis loop" for one loop, "two synthesis loops" for two, ... */
+export function synthesisLoopsPhrase(loops: number): string {
+  const n = Math.max(1, Math.floor(Number(loops) || 0));
+  if (n === 1) return "the synthesis loop";
+  const word = n === 2 ? "two" : n === 3 ? "three" : String(n);
+  return `${word} synthesis loops`;
+}
+
+// The vote as a scorecard: one row per voting seat (mean and minimum rubric
+// score, count of blocking objections), derived from the vote steps that
+// already exist. Persisted on the run and on the plan version so the
+// outcome of the vote survives without re-reading the transcript. A seat
+// whose vote is missing (or unparseable, scores:null) reads as mean/min null.
+export const VOTING_SEATS = ["strategist", "contrarian", "inspector"] as const;
+export type VotingSeat = typeof VOTING_SEATS[number];
+export type SeatScorecard = { mean: number | null; min: number | null; blocking: number };
+export type Scorecard = {
+  threshold: number;
+  passed: boolean;
+  seats: Record<VotingSeat, SeatScorecard>;
+};
+
+export function voteScorecard(voteSteps: any[], kind: string, threshold: number, passed: boolean): Scorecard {
+  const rubric = rubricForKind(kind);
+  const seats = {} as Record<VotingSeat, SeatScorecard>;
+  for (const seat of VOTING_SEATS) {
+    const v = voteSteps.find((x: any) => x?.seat === seat);
+    const j = v?.response_json ?? {};
+    const nums = rubric.map((k) => Number(j?.scores?.[k])).filter((n) => Number.isFinite(n));
+    const mean = nums.length ? Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 10) / 10 : null;
+    const min = nums.length ? Math.min(...nums) : null;
+    const blocking = Array.isArray(j?.blocking_objections) ? j.blocking_objections.length : 0;
+    seats[seat] = { mean, min, blocking };
+  }
+  return { threshold, passed, seats };
+}
+
+/** The decision_log entry that carries the scorecard on plan_versions. */
+export function scorecardDecisionEntry(scorecard: Scorecard): Record<string, unknown> {
+  const line = VOTING_SEATS
+    .map((s) => {
+      const c = scorecard.seats[s];
+      const mean = c.mean == null ? "no score" : `${c.mean} (min ${c.min})`;
+      return `${s} ${mean}, ${c.blocking} blocking`;
+    })
+    .join("; ");
+  return {
+    from_seat: "board",
+    decision: "scorecard",
+    reason: `${scorecard.passed ? "Consensus" : "Chair ruled"} at threshold ${scorecard.threshold}: ${line}.`,
+    scorecard,
+  };
+}
+
+/**
+ * A locked plan's decision_log minus the scorecard entry. The batch
+ * compiler's "deferred value" block harvests ideas the board debated and did
+ * not adopt; the vote record is not one of them and should not spend that
+ * block's character budget. Anything that is not an array passes through.
+ */
+export function deferredDecisionEntries<T>(log: T): T {
+  return Array.isArray(log) ? (log.filter((d: any) => d?.decision !== "scorecard") as T) : log;
 }

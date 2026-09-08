@@ -55,6 +55,18 @@ The quote must exist verbatim (case/whitespace-insensitive) in the cited owner s
 
 If a high-impact idea lacks verified provenance, label it "proposal_requires_owner_approval", exclude it from locked/executable scope, and surface a concise approval-needed reason to the founder. Chair rulings, loop 3, consensus scores, and locked plans CANNOT override this rule. A deterministic post-validator runs after the model and will block outputs that violate this contract.`;
 
+// The constitution v3 (prepended by the proxy on every call) already states
+// the owner-authority doctrine, so queueSteps sends OWNER_AUTHORITY_RULES only
+// to runs pinned to an older constitution — one copy per call, not two.
+// Change-request runs keep the rules: their CR-identity clause (the CR under
+// review is exposed as approved_change_request:<id>) is not in v3.
+export function ownerAuthorityRulesNeeded(
+  run: { constitution_version?: unknown; kind?: unknown } | null | undefined,
+): boolean {
+  if (Number(run?.constitution_version) >= 3 && run?.kind !== "change_request") return false;
+  return true;
+}
+
 // ---- Loader -----------------------------------------------------------------
 export async function loadOwnerAuthority(
   admin: any,

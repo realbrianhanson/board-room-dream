@@ -2,13 +2,16 @@
 // must run at low reasoning (bounded schema-validation review). Live run
 // b67878e0 truncated Inspector at 2,486 output tokens / 301 chars because no
 // explicit reasoning_effort was set and the provider default consumed the
-// budget before the concise review JSON could finish. Chair draft stays high;
-// revise stays low; caps unchanged; retries preserve low via spread of
-// baseRequest in buildValidationRetryRequest.
+// budget before the concise review JSON could finish. Chair draft and revise
+// are both low (RC-1); the VISIBLE caps are unchanged — the proxy adds the
+// resolved model's reasoning allowance on the wire; reviewer retries preserve
+// low via spread of baseRequest in buildValidationRetryRequest (the budget
+// bump for truncated retries lives in the orchestrator, not here).
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { tryCloseJsonTail } from "./audit-findings.ts";
 import { buildValidationRetryRequest } from "./batch-context.ts";
 import { correctionForStep } from "../boardroom-orchestrator/protocol.ts";
+import { batchesReviewSeats } from "./smoke-mode.ts";
 
 const queuesSrc = await Deno.readTextFile(new URL("../boardroom-orchestrator/queues.ts", import.meta.url));
 
@@ -39,8 +42,11 @@ Deno.test("queues.ts — batches_review_{inspector,contrarian} use low reasoning
     !/reasoning_effort:\s*"high"/.test(block),
     `reviewer request must NOT be reasoning_effort=high (live run b67878e0 truncated at provider default). Got: ${block}`,
   );
-  // The shared rows.map serves BOTH inspector and contrarian — the ["inspector", "contrarian"] tuple must still be there.
-  assertStringIncludes(queuesSrc, `(["inspector", "contrarian"] as const).map`);
+  // The shared rows.map serves BOTH inspector and contrarian on a full run —
+  // the seat list comes from batchesReviewSeats (inspector alone only in
+  // smoke mode; see _shared/smoke-mode.ts and smoke-mode.test.ts).
+  assertStringIncludes(queuesSrc, `batchesReviewSeats(isSmokeRun(run)).map`);
+  assertEquals([...batchesReviewSeats(false)], ["inspector", "contrarian"]);
 });
 
 Deno.test("queues.ts — reviewer output cap unchanged at 2,500 (no unrelated budget increase)", () => {
@@ -48,9 +54,10 @@ Deno.test("queues.ts — reviewer output cap unchanged at 2,500 (no unrelated bu
   assertStringIncludes(block, "max_tokens: 2500");
 });
 
-Deno.test("queues.ts — batches_chair draft still high; batches_revise_chair still low (no cross-regression)", () => {
+Deno.test("queues.ts — batches_chair draft and batches_revise_chair both low (no cross-regression)", () => {
   const draft = requestBlockFor("batches_chair");
-  assertStringIncludes(draft, `reasoning_effort: "high"`);
+  assertStringIncludes(draft, `reasoning_effort: "low"`);
+  assert(!/reasoning_effort:\s*"high"/.test(draft), `batches_chair must not be high. Got: ${draft}`);
   const revise = requestBlockFor("batches_revise_chair");
   assertStringIncludes(revise, `reasoning_effort: "low"`);
 });

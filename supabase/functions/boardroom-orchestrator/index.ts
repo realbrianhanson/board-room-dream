@@ -9,6 +9,7 @@ import {
   decideTransportRequeue,
   isBodyTransportError,
   NoUserKey,
+  SeatBudgetExceeded,
   SeatUnavailable,
   shouldQuickRetry,
 } from "../_shared/openrouter-proxy.ts";
@@ -21,7 +22,12 @@ import {
   lastCandidateLoop,
   checkConsensus,
   resolveConsensusThreshold,
+  resolveSynthesisLoopCap,
+  scorecardDecisionEntry,
+  voteScorecard,
   validateStepJson,
+  normalizeStepJson,
+  degradedStepJson,
   correctionForStep,
 } from "./protocol.ts";
 import {
@@ -43,8 +49,10 @@ import {
   queueRound4,
   RepoContractUnavailable,
 } from "./queues.ts";
-import { BatchContextTooLarge, MarkdownCompactionImpossible, buildValidationRetryRequest } from "../_shared/batch-context.ts";
+import { BatchContextTooLarge, MarkdownCompactionImpossible, buildValidationRetryRequest, continuationPrefix, joinContinuation } from "../_shared/batch-context.ts";
+import { isSmokeRun, keepSmoke, runBudgetUsd } from "../_shared/smoke-mode.ts";
 import { tryCloseJsonTail, tryRecoverTrailingRedundantCloser } from "../_shared/audit-findings.ts";
+import { extractJsonCandidate, repairTruncatedStepJson } from "../_shared/json-extract.ts";
 import {
   decideConflictOutcome,
   isUniqueViolation,
@@ -108,13 +116,30 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-29.import-workflow-gate.r1";
+const BUILD_VERSION = "2026-09-08.p0-fixes.r2";
 
 import {
+  auditSeatCoverage,
+  decideInfraRequeue,
   failRun,
+  hasActiveSteps,
+  isAbandonedSeed,
+  isStepLocalFailure,
+  isTransientInfraError,
+  seatCapPause,
+  planResumeFailed,
   requeueLegacyNullStartOrphans,
   requeueStepIfParentActive,
+  resetRequestForResume,
+  reverseAuditFailure,
+  runStepsPhase,
+  STALE_RUNNING_STEP_MS,
+  STALLED_RUN_MS,
+  sweepOrphanSteps,
   TERMINAL_RUN_STATUSES,
+  validationRetryBudget,
+  timeoutRequeueRequest,
+  staleRequeueRequest,
 } from "./hygiene.ts";
 
 function fireSelfTick(body: any = {}) {
@@ -211,17 +236,13 @@ function withHardTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T
 // without booting Deno.serve. See that module for behavior contracts.
 
 
+// Payload built by the pure timeoutRequeueRequest (hygiene.ts): reserve
+// model, low reasoning, same visible cap.
 async function requeueForTimeout(admin: any, step: any): Promise<string> {
-  const timeoutAttempts = Number(step.request?._timeout_attempts ?? 0) + 1;
   return await requeueStepIfParentActive(
     admin,
     step.id,
-    {
-      ...(step.request ?? {}),
-      _timeout_attempts: timeoutAttempts,
-      // Never switch back to the timed-out primary — the reserve answers next.
-      force_fallback: true,
-    },
+    timeoutRequeueRequest(step.request),
     "timeout_failover",
   );
 }
@@ -241,7 +262,16 @@ async function requeueForBodyTransport(admin: any, step: any, attempts: number):
   );
 }
 
-async function requeueForValidation(admin: any, run: any, step: any, baseMessages: any[], assistantContent: string, validationError: string, truncated: boolean): Promise<string> {
+async function requeueForValidation(
+  admin: any,
+  run: any,
+  step: any,
+  baseMessages: any[],
+  assistantContent: string,
+  validationError: string,
+  truncated: boolean,
+  continuation = false,
+): Promise<string> {
   const attempts = Number(step.request?._validation_attempts ?? 0) + 1;
   try {
     const { request: newRequest, mode } = buildValidationRetryRequest({
@@ -251,13 +281,25 @@ async function requeueForValidation(admin: any, run: any, step: any, baseMessage
       assistantContent,
       validationError,
       truncated,
+      continuation,
       correction: correctionForStep(step.step_key, { isImport: step.request?._is_import === true ? true : step.request?._is_import === false ? false : undefined }),
     });
+    // The correction pass used to re-send the identical max_tokens / effort
+    // that just failed, so a reasoning-eaten cap failed identically and the
+    // second miss killed the run. Force low reasoning on every retry and,
+    // when the output was truncated, widen the visible cap (bounded so the
+    // call still finishes inside the proxy abort). Applied HERE, not in
+    // buildValidationRetryRequest, which stays a pure message builder.
+    // A markdown continuation keeps its visible cap: only the remainder is
+    // requested, and a bounded "widening" could SHRINK a draft's cap (8,000 ->
+    // 6,000) and re-cut a genuinely long document.
+    const bumped = continuation ? { reasoning_effort: "low" as const } : validationRetryBudget(step, truncated);
     return await requeueStepIfParentActive(
       admin,
       step.id,
       {
         ...newRequest,
+        ...bumped,
         _validation_attempts: attempts,
         _validation_retry_mode: mode,
       },
@@ -308,6 +350,7 @@ async function executeStep(admin: any, run: any, step: any) {
           json: jsonMode,
           forceFallback: !!step.request?.force_fallback,
           maxTokens: Number(step.request?.max_tokens) > 0 ? Number(step.request.max_tokens) : undefined,
+          smoke: isSmokeRun(run),
         }),
         STEP_HARD_TIMEOUT_MS,
         step.step_key,
@@ -346,6 +389,24 @@ async function executeStep(admin: any, run: any, step: any) {
         }
         return;
       }
+      // Per-seat cap (model_registry.max_cost_per_run): pause exactly like
+      // the run budget instead of failing the run. The proxy re-checks the
+      // cap before every call, so resuming with the cap unchanged pauses
+      // again without spending (RC-10).
+      if (e instanceof SeatBudgetExceeded) {
+        const pause = seatCapPause(e, run);
+        await admin.from("run_steps").update(pause.step).eq("id", step.id);
+        await admin.from("boardroom_runs").update(pause.run).eq("id", run.id);
+        if (run.project_id && run.user_id) {
+          await insertAlert(admin, {
+            user_id: run.user_id,
+            project_id: run.project_id,
+            kind: "spend_cap",
+            detail: pause.alert,
+          });
+        }
+        return;
+      }
       if (e instanceof NoUserKey || e instanceof SeatUnavailable) {
         await admin
           .from("run_steps")
@@ -369,6 +430,8 @@ async function executeStep(admin: any, run: any, step: any) {
             .update({ status: "failed", error: "timeout_failover_exhausted", completed_at: new Date().toISOString() })
             .eq("id", step.id)
             .eq("status", "running");
+          // An audit map chunk fails alone; the merge reports the gap (RC-2).
+          if (isStepLocalFailure(run, step)) { fireSelfTick(); return; }
           await failRun(admin, run, tmsg);
           return;
         }
@@ -404,6 +467,7 @@ async function executeStep(admin: any, run: any, step: any) {
           })
           .eq("id", step.id)
           .eq("status", "running");
+        if (isStepLocalFailure(run, step)) { fireSelfTick(); return; }
         await failRun(admin, run, decision.message);
         return;
       }
@@ -417,11 +481,26 @@ async function executeStep(admin: any, run: any, step: any) {
       }
       const msg = (e as Error).message ?? String(e);
       console.log(`[exec] ERROR step=${step.step_key} run=${run.id} msg=${msg}`);
+      // A database RPC failing around the call (the cost ledger after the
+      // model answered) is not a verdict on the step: requeue fresh on the
+      // same model, bounded by INFRA_REQUEUE_MAX, instead of failing the run.
+      if (isTransientInfraError(msg)) {
+        const decision = decideInfraRequeue(step);
+        console.log(`[exec] INFRA step=${step.step_key} run=${run.id} decision=${decision.action} attempts=${decision.attempts}`);
+        if (decision.action === "requeue") {
+          const outcome = await requeueStepIfParentActive(admin, step.id, decision.request, "infra_requeued");
+          if (outcome === "cancelled_parent_terminal") {
+            console.log(`[exec] INFRA step=${step.step_key} parent already terminal — step cancelled`);
+          }
+          return;
+        }
+      }
       await admin
         .from("run_steps")
         .update({ status: "failed", error: msg, completed_at: new Date().toISOString() })
         .eq("id", step.id)
         .eq("status", "running");
+      if (isStepLocalFailure(run, step)) { fireSelfTick(); return; }
       await failRun(admin, run, msg);
       return;
     }
@@ -430,6 +509,18 @@ async function executeStep(admin: any, run: any, step: any) {
     const content = result.content;
     const usage = { tokensIn: result.tokensIn, tokensOut: result.tokensOut, costUsd: result.costUsd };
     const fallbackMeta = result.fallback ?? null;
+    // Persisted on every step so a truncation is diagnosable from the row
+    // alone (finish_reason + how much of the wire cap the thinking consumed).
+    const outputMeta = {
+      finish_reason: result.finishReason ?? null,
+      tokens_out: usage.tokensOut,
+      reasoning_tokens: Number(result.reasoningTokens ?? 0) || 0,
+      wire_max_tokens: Number(result.wireMaxTokens ?? 0) || 0,
+      // The model that actually answered. A smoke run borrows the smoke (or
+      // inspector) row's model for every seat, so the row must say which.
+      model: result.model ?? null,
+      ...(result.smokeSource ? { smoke_model_source: result.smokeSource } : {}),
+    };
 
     if (jsonMode) {
       let candidate: any = null;
@@ -445,6 +536,19 @@ async function executeStep(admin: any, run: any, step: any) {
         if (rec.ok) {
           candidate = rec.value;
           recoveryMode = "trailing_redundant_closer";
+        }
+      }
+      if (!candidate) {
+        // Tolerant extraction (RC-3): the answer IS the right JSON but wrapped
+        // — ``` fences, a "Here is the JSON:" preamble, a "Note: done" trailer.
+        // Parses the first balanced top-level value as-is and ignores the
+        // rest; nothing is repaired. Sits between the redundant-closer rescue
+        // and the tail-closer so a complete-but-wrapped answer never reaches
+        // the closer heuristics. Still validated below like any other parse.
+        const ext = extractJsonCandidate(content);
+        if (ext.ok) {
+          candidate = ext.value;
+          recoveryMode = ext.mode;
         }
       }
       if (!candidate) {
@@ -468,28 +572,91 @@ async function executeStep(admin: any, run: any, step: any) {
           tailClosed = rescued.closed;
         }
       }
-      const err = candidate ? validateStepJson(step.step_key, candidate, run.kind) : "Response was not parseable JSON.";
+      // Normalize-then-validate: mechanical schema deviations (7.5 scores,
+      // seat labels, a "resolved" objection with no quote, nine review
+      // issues, misnumbered batches) are coerced deterministically and the
+      // coerced value is what gets validated AND persisted.
+      let normalized = candidate
+        ? normalizeStepJson(step.step_key, candidate, run.kind)
+        : { value: null as any, error: "Response was not parseable JSON." as string | null };
+      let err = normalized.error;
+      let repairedMeta: { mode: string; dropped_chars: number } | null = null;
       if (err) {
-        // Detect truncation: provider finish_reason of length/max_tokens, OR
-        // unparseable JSON whose content is close to the requested max_tokens
-        // ceiling (heuristic: >=95% of max_tokens * ~4 chars/token).
-        const finishReason = (result as any)?.finishReason;
+        // Detect truncation: the proxy's budgetExhausted signal (provider
+        // finish_reason of length/max_tokens OR completion tokens at the wire
+        // cap), OR — secondary heuristics — unparseable JSON whose content is
+        // close to the requested visible max_tokens ceiling (>=95% of
+        // max_tokens * ~4 chars/token), OR completion tokens at >=90% of the
+        // wire cap. The last one catches a reasoning-eaten budget: 300 visible
+        // chars out of 2,500 tokens never trips the chars heuristic, and some
+        // providers still report "stop" after cutting at the cap.
         const maxTokens = Number(step.request?.max_tokens) > 0 ? Number(step.request.max_tokens) : 0;
         const nearMax = !candidate && maxTokens > 0 && content.length >= Math.floor(maxTokens * 4 * 0.95);
-        const truncated = finishReason === "length" || finishReason === "max_tokens" || nearMax;
+        const wireMax = outputMeta.wire_max_tokens;
+        const nearWireCap = !candidate && wireMax > 0 && usage.tokensOut >= Math.floor(wireMax * 0.9);
+        const truncated = !!result.budgetExhausted || nearMax || nearWireCap;
 
         // Invocation-safe correction: NEVER mark completed with invalid output
         // and NEVER make two long model calls in one invocation. Queue the
         // correction into a fresh invocation, exactly one retry before failing.
         const validationAttempts = Number(step.request?._validation_attempts ?? 0);
-        if (validationAttempts >= 1) {
+        if (validationAttempts >= 1 && truncated) {
+          // Last resort, AFTER the widened correction pass also came back
+          // cut: keep the complete elements of a count-tolerant list step
+          // (audit map / merge findings, batch plans above the contract
+          // minimum) rather than fail the run. Allow-list and minimum-count
+          // guard live in repairTruncatedStepJson; the repaired value must
+          // still pass the same normalize/validate gate as a clean answer.
+          const repaired = repairTruncatedStepJson(step.step_key, content, {
+            isImport: step.request?._is_import === true,
+          });
+          if (repaired.ok) {
+            const again = normalizeStepJson(step.step_key, repaired.value, run.kind);
+            if (!again.error) {
+              normalized = again;
+              err = null;
+              repairedMeta = { mode: "truncation_cut", dropped_chars: repaired.dropped_chars };
+              console.log(`[exec] REPAIRED step=${step.step_key} run=${run.id} dropped_chars=${repaired.dropped_chars}`);
+            } else {
+              console.log(`[exec] REPAIR_REJECTED step=${step.step_key} run=${run.id} reason=${again.error}`);
+            }
+          } else {
+            console.log(`[exec] REPAIR_REFUSED step=${step.step_key} run=${run.id} reason=${repaired.reason}`);
+          }
+        }
+        if (err && validationAttempts >= 1) {
           const vmsg = `Step ${step.step_key} produced invalid JSON after one correction pass: ${err}`;
+          // A dead vote or reviewer degrades (fails that loop's consensus /
+          // counts as an empty review) instead of cancelling every paid
+          // sibling; chair steps and everything else stay run-fatal.
+          const degraded = degradedStepJson(step.step_key, err);
+          if (degraded) {
+            console.log(`[exec] DEGRADED step=${step.step_key} run=${run.id} err=${err}`);
+            await admin
+              .from("run_steps")
+              .update({
+                status: "completed",
+                response_text: content,
+                response_json: {
+                  ...degraded,
+                  _meta: { ...outputMeta, ...(fallbackMeta ? { fallback: fallbackMeta } : {}), ...(degraded._meta as any) },
+                },
+                tokens_in: usage.tokensIn,
+                tokens_out: usage.tokensOut,
+                cost_usd: usage.costUsd,
+                completed_at: new Date().toISOString(),
+              })
+              .eq("id", step.id)
+              .eq("status", "running");
+            return;
+          }
           await admin
             .from("run_steps")
             .update({
               status: "failed",
               error: truncated ? "truncated_after_correction" : "invalid_json_after_correction",
               response_text: content,
+              response_json: { _meta: { ...outputMeta, ...(fallbackMeta ? { fallback: fallbackMeta } : {}) } },
               tokens_in: usage.tokensIn,
               tokens_out: usage.tokensOut,
               cost_usd: usage.costUsd,
@@ -497,25 +664,28 @@ async function executeStep(admin: any, run: any, step: any) {
             })
             .eq("id", step.id)
             .eq("status", "running");
+          if (isStepLocalFailure(run, step)) { fireSelfTick(); return; }
           await failRun(admin, run, vmsg);
           return;
         }
-        const vOutcome = await requeueForValidation(admin, run, step, baseMessages, content, err, truncated);
-        if (vOutcome === "cancelled_parent_terminal") {
-          console.log(`[exec] VALIDATION step=${step.step_key} parent already terminal — step cancelled`);
+        if (err) {
+          const vOutcome = await requeueForValidation(admin, run, step, baseMessages, content, err, truncated);
+          if (vOutcome === "cancelled_parent_terminal") {
+            console.log(`[exec] VALIDATION step=${step.step_key} parent already terminal — step cancelled`);
+          }
+          return;
         }
-        return;
       }
-      let parsed: any = candidate;
-      if (fallbackMeta || tailClosed || recoveryMode) {
-        if (!parsed || typeof parsed !== "object") parsed = {};
-        parsed._meta = {
-          ...(parsed._meta ?? {}),
-          ...(fallbackMeta ? { fallback: fallbackMeta } : {}),
-          ...(tailClosed ? { tail_closed: tailClosed } : {}),
-          ...(recoveryMode ? { recovery_mode: recoveryMode } : {}),
-        };
-      }
+      let parsed: any = normalized.value;
+      if (!parsed || typeof parsed !== "object") parsed = {};
+      parsed._meta = {
+        ...(parsed._meta ?? {}),
+        ...outputMeta,
+        ...(fallbackMeta ? { fallback: fallbackMeta } : {}),
+        ...(tailClosed ? { tail_closed: tailClosed } : {}),
+        ...(recoveryMode ? { recovery_mode: recoveryMode } : {}),
+        ...(repairedMeta ? { repaired: repairedMeta } : {}),
+      };
       await admin
         .from("run_steps")
         .update({
@@ -532,13 +702,37 @@ async function executeStep(admin: any, run: any, step: any) {
       return;
     }
 
-    // Non-JSON free-markdown path — complete as-is.
+    // Non-JSON free-markdown path. A draft cut at the budget used to complete
+    // as-is and become the locked plan verbatim (RC-4). Now: one continuation
+    // pass in a fresh invocation (text so far replayed, low reasoning, same
+    // cap), joined here on completion; a continuation that is itself cut
+    // completes with what exists and is stamped truncated for the UI.
+    const validationAttempts = Number(step.request?._validation_attempts ?? 0);
+    if (result.budgetExhausted && validationAttempts === 0) {
+      console.log(`[exec] TRUNCATED_MARKDOWN step=${step.step_key} run=${run.id} chars=${content.length} — queueing continuation`);
+      const cOutcome = await requeueForValidation(admin, run, step, baseMessages, content, "truncated markdown", true, true);
+      if (cOutcome === "cancelled_parent_terminal") {
+        console.log(`[exec] TRUNCATED_MARKDOWN step=${step.step_key} parent already terminal — step cancelled`);
+      }
+      return;
+    }
+    const prefix = continuationPrefix(step.request);
+    const fullText = prefix ? joinContinuation(prefix, content) : content;
+    const stillCut = !!result.budgetExhausted && validationAttempts >= 1;
+    if (stillCut) console.log(`[exec] TRUNCATED_MARKDOWN step=${step.step_key} run=${run.id} continuation also cut — completing with ${fullText.length} chars`);
     await admin
       .from("run_steps")
       .update({
         status: "completed",
-        response_text: content,
-        response_json: fallbackMeta ? { _meta: { fallback: fallbackMeta } } : null,
+        response_text: fullText,
+        response_json: {
+          _meta: {
+            ...outputMeta,
+            ...(fallbackMeta ? { fallback: fallbackMeta } : {}),
+            ...(prefix ? { continued: true, continuation_prefix_chars: prefix.length } : {}),
+            ...(stillCut ? { truncated: true } : {}),
+          },
+        },
         tokens_in: usage.tokensIn,
         tokens_out: usage.tokensOut,
         cost_usd: usage.costUsd,
@@ -601,8 +795,8 @@ async function lockPlanAndQueueBlueprint(
   // override — but a candidate that violates owner-authority is now sent
   // through a bounded Chair authority-correction step (up to
   // AUTHORITY_CORRECTION_MAX attempts) before the run is terminated. This is
-  // orthogonal to the 3-loop consensus protocol: dissent and loop_no are
-  // preserved verbatim on the run.
+  // orthogonal to the synthesis-loop consensus protocol: dissent and loop_no
+  // are preserved verbatim on the run.
   let authority: Awaited<ReturnType<typeof loadOwnerAuthority>>;
   try {
     authority = await loadOwnerAuthority(admin, {
@@ -666,7 +860,12 @@ async function lockPlanAndQueueBlueprint(
     return m ? Number(m[1]) : -1;
   }));
   const latestVotes = voteSteps.filter((v: any) => v.step_key.endsWith(`_loop${latestLoop}`));
-  const { scores } = checkConsensus(latestVotes, run.kind);
+  const threshold = await resolveConsensusThreshold(admin, run.user_id);
+  const { scores } = checkConsensus(latestVotes, run.kind, threshold);
+  // The vote as a scorecard (derived from the stored vote steps, no model
+  // call): on the run for the UI, in the decision log for the record.
+  const scorecard = voteScorecard(latestVotes, run.kind, threshold, mode === "consensus");
+  decisionLog.push(scorecardDecisionEntry(scorecard));
 
   const { data: inserted } = await admin
     .from("plan_versions")
@@ -692,7 +891,7 @@ async function lockPlanAndQueueBlueprint(
       .from("boardroom_runs")
       .update({
         status: finalStatus,
-        consensus: { scores, plan_version_id: inserted?.id ?? null },
+        consensus: keepSmoke(run, { scores, scorecard, plan_version_id: inserted?.id ?? null }),
         dissent_ledger: dissentLedger,
         updated_at: new Date().toISOString(),
       })
@@ -707,11 +906,12 @@ async function lockPlanAndQueueBlueprint(
     .from("boardroom_runs")
     .update({
       round_no: 6,
-      consensus: {
+      consensus: keepSmoke(run, {
         pending_final_status: mode,
         scores,
+        scorecard,
         plan_version_id: inserted?.id ?? null,
-      },
+      }),
       dissent_ledger: dissentLedger,
       updated_at: new Date().toISOString(),
     })
@@ -803,7 +1003,7 @@ async function finalizeBlueprint(admin: any, run: any, steps: any[]) {
     .from("boardroom_runs")
     .update({
       status: finalStatus,
-      consensus: meta.scores ?? {},
+      consensus: keepSmoke(run, { ...(meta.scores ?? {}), ...(meta.scorecard ? { scorecard: meta.scorecard } : {}) }),
       updated_at: new Date().toISOString(),
     })
     .eq("id", run.id);
@@ -1114,7 +1314,7 @@ async function finalizeBatches(admin: any, run: any, batchesJson: any[]) {
     .from("boardroom_runs")
     .update({
       status: "completed",
-      consensus: { batches_inserted: plannedRows.length },
+      consensus: keepSmoke(run, { batches_inserted: plannedRows.length }),
       updated_at: new Date().toISOString(),
     })
     .eq("id", run.id)
@@ -1216,8 +1416,8 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
   // Normalize → dedupe → downgrade unsupported P0/P1, then re-validate
   // caps. validateStepJson("audit_chair_merge", …) already ran the same
   // pipeline before the step was marked completed (AUDIT-FINALIZATION-R2),
-  // so a violation here means someone bypassed the step path or a schema
-  // drifted — we still fail closed rather than persist an oversized report.
+  // so a residual error here means someone bypassed the step path or a
+  // schema drifted — see the validation_warning handling below.
   const { evaluateChairMergeCandidate } = await import("../_shared/audit-findings.ts");
   // OWNER-AUTHORITY monetization gate: load the project's most recent
   // intake answers to detect whether price_anchor / upgrade_trigger were
@@ -1251,16 +1451,44 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
   }
   const evaluation = evaluateChairMergeCandidate(parsed, ownerContract);
   const { findings, downgrades, summary: mergedSummaryText } = evaluation;
-  if (evaluation.error) {
-    await admin
-      .from("audits")
-      .update({ status: "failed", completed_at: new Date().toISOString(), summary: { error: `merge_validation_failed: ${evaluation.error}` } })
-      .eq("id", auditId);
-    await failRun(admin, run, `audit_chair_merge failed validation: ${evaluation.error}`);
-    return;
+  // RC-3: the evaluator now fits the report into the merge caps instead of
+  // rejecting it, so a residual error here is a fitter/validator drift (or a
+  // merge with no findings array at all). The paid seat work is published
+  // as trimmed, with the warning recorded on the run, rather than failing
+  // the run at its very last step.
+  const validationWarning: string | null = evaluation.error ?? null;
+  if (validationWarning) {
+    console.log(`[audit] finalize run=${run.id} publishing with validation_warning=${validationWarning}`);
   }
+  const consensusWarning = validationWarning ? { validation_warning: validationWarning } : {};
+  let carryError: string | null = null;
 
   const isFinal = audit.kind === "final_az";
+
+  // RC-6 incremental audit: snapshot the prior final audit's unresolved
+  // findings on files this run did not re-read BEFORE supersession resolves
+  // them; they are copied under this audit once its own findings land.
+  const {
+    incrementalMetaFromConsensus,
+    selectCarryForward,
+    carryForwardRow,
+    carryForwardNote,
+    CARRY_FORWARD_STATUSES,
+  } = await import("../_shared/audit-incremental.ts");
+  const incremental = isFinal ? incrementalMetaFromConsensus(run.consensus) : null;
+  let carried: import("../_shared/audit-incremental.ts").PriorFinding[] = [];
+  if (incremental) {
+    const { data: priorRows, error: priorErr } = await admin
+      .from("audit_findings")
+      .select("id, seat, severity, file_path, title, description, evidence, confidence, line_start, line_end, fix_batch_id, status")
+      .eq("audit_id", incremental.prior_audit_id)
+      .in("status", [...CARRY_FORWARD_STATUSES]);
+    if (priorErr) {
+      await failRun(admin, run, `incremental audit: could not read prior findings: ${priorErr.message ?? priorErr}`);
+      return;
+    }
+    carried = selectCarryForward(priorRows ?? [], incremental);
+  }
 
   // FINAL-AUDIT-SUPERSESSION-R1: for a successful final_az finalization
   // (validation passed; clean OR findings verdict), resolve open/fix_drafted
@@ -1276,6 +1504,9 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
         projectId: audit.project_id,
         userId: audit.user_id,
         runId: run.id,
+        // A carried finding's fix batch is not obsolete: it is the only fix
+        // prompt for a P0/P1 this run did not re-read.
+        keepBatchIds: new Set(carried.map((f) => f.fix_batch_id).filter((x): x is string => !!x)),
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -1288,15 +1519,14 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
     }
   }
 
-  const verdict = evaluation.verdict;
+  // Carried-forward findings are still open findings of this audit: a merge
+  // that found nothing in the changed files cannot declare the app clean.
+  const verdict = carried.length && evaluation.verdict === "clean" ? "findings" : evaluation.verdict;
   const filesAnalyzed = Number(run.consensus?.files_analyzed ?? 0) || null;
 
-  const counts = {
-    P0: findings.filter((f) => f.severity === "P0").length,
-    P1: findings.filter((f) => f.severity === "P1").length,
-    P2: findings.filter((f) => f.severity === "P2").length,
-    P3: findings.filter((f) => f.severity === "P3").length,
-  };
+  const countOf = (sev: string) =>
+    findings.filter((f) => f.severity === sev).length + carried.filter((f) => f.severity === sev).length;
+  const counts = { P0: countOf("P0"), P1: countOf("P1"), P2: countOf("P2"), P3: countOf("P3") };
   // R3 — never let the persisted summary.text assert a severity class the
   // post-downgrade counts don't support. Live regression: audit 2d953efb had
   // counts.P0=0 but summary text said "P0". reconcileAuditSummaryText is
@@ -1306,13 +1536,17 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
     .filter((d: any) => d?.disposition === "rejected_unsupported" || d?.published === false)
     .map((d: any) => String(d?.title ?? ""))
     .filter((t: string) => t.length > 0);
-  const reconciledText = reconcileAuditSummaryText(mergedSummaryText, counts, rejectedTitles);
+  const reconciledText = reconcileAuditSummaryText(mergedSummaryText, counts, rejectedTitles) +
+    (incremental ? carryForwardNote(carried.length, incremental.base_sha) : "");
 
   const summary = {
     verdict,
     text: reconciledText,
     counts,
     validation_downgrades: downgrades,
+    ...(incremental
+      ? { carried_forward: { from_audit_id: incremental.prior_audit_id, base_sha: incremental.base_sha, count: carried.length } }
+      : {}),
   };
 
   if (verdict === "clean") {
@@ -1397,7 +1631,7 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
 
     await admin
       .from("boardroom_runs")
-      .update({ status: "consensus", consensus: { ...(run.consensus ?? {}), verdict: "clean" } })
+      .update({ status: "consensus", consensus: { ...(run.consensus ?? {}), verdict: "clean", ...consensusWarning } })
       .eq("id", run.id);
     return;
   }
@@ -1530,6 +1764,24 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
     );
   }
 
+  // Copy (never move) the prior audit's findings on untouched files. A prior
+  // fix batch link is kept only if that batch survived supersession.
+  if (carried.length) {
+    const batchIds = [...new Set(carried.map((f) => f.fix_batch_id).filter((x): x is string => !!x))];
+    const live = new Set<string>();
+    if (batchIds.length) {
+      const { data: liveRows } = await admin.from("batches").select("id").in("id", batchIds);
+      for (const b of liveRows ?? []) live.add(String(b.id));
+    }
+    const { error: carryErr } = await admin
+      .from("audit_findings")
+      .insert(carried.map((f) => carryForwardRow(f, auditId, audit.user_id, live)));
+    if (carryErr) {
+      carryError = `carry-forward insert of ${carried.length} findings failed: ${carryErr.message ?? carryErr}`;
+      console.error(`[audit] finalize run=${run.id} ${carryError}`);
+    }
+  }
+
   if (Number(audit.loop_no ?? 1) >= 2 && findings.length && audit.project_id) {
     let batchTitle = "";
     if (audit.batch_id) {
@@ -1546,17 +1798,51 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
 
   await admin
     .from("boardroom_runs")
-    .update({ status: "consensus", consensus: { ...(run.consensus ?? {}), verdict: "findings", fix_batch_id: fixBatchId } })
+    .update({
+      status: "consensus",
+      consensus: {
+        ...(run.consensus ?? {}),
+        verdict: "findings",
+        fix_batch_id: fixBatchId,
+        ...consensusWarning,
+        ...(carryError ? { carry_forward_error: carryError } : {}),
+      },
+    })
     .eq("id", run.id);
 }
 
 
+// Advance a run once its steps settle. A throw inside advanceRun used to
+// escape processRun / pipelineTick and leave the run 'running' with nothing
+// queued — invisible to every rescue path and blocking the one-active-run
+// slot for its kind. Now it fails the run with the message (first-terminal-
+// wins, so a concurrent failure's error is preserved).
 async function afterStepComplete(admin: any, runIn: any) {
+  try {
+    await advanceRun(admin, runIn);
+  } catch (e) {
+    const msg = (e as Error)?.message ?? String(e);
+    console.error(`[after] advance failed for run ${runIn?.id}: ${msg}`);
+    const run = (await getRun(admin, runIn.id)) ?? runIn;
+    await failRun(admin, run, `advance failed: ${msg}`);
+  }
+}
+
+async function advanceRun(admin: any, runIn: any) {
   const run = await getRun(admin, runIn.id);
   if (!run) return;
   const steps = await loadAllSteps(admin, run.id);
+  const phase = runStepsPhase(steps);
+  // No steps at all = the run is still being seeded (start_run inserts the
+  // run row, then its first steps) or was orphaned before they landed.
+  // Advancing here queued Round 2 against zero drafts and failed a batches
+  // run for a draft that had not been inserted yet.
+  if (phase === "no_steps") {
+    console.log(`[after] run ${run.id} has no steps yet`);
+    return;
+  }
   // Queued steps = claimable work -> kick one tick to pick them up.
-  if (steps.some((s: any) => s.status === "queued")) {
+  if (phase === "queued") {
     fireSelfTick();
     return;
   }
@@ -1565,7 +1851,7 @@ async function afterStepComplete(admin: any, runIn: any) {
   // per-minute cron rescues orphans. Re-firing on merely-running steps created
   // an infinite tick storm that maxed the instance and kept old warm isolates
   // permanently busy so redeployed code never took effect.
-  if (steps.some((s: any) => s.status === "running")) {
+  if (phase === "running") {
     return;
   }
 
@@ -1692,8 +1978,22 @@ async function afterStepComplete(admin: any, runIn: any) {
     }
     if (chair) return; // waiting on chair
     const seatSteps = steps.filter((x: any) => /^audit_(inspector|contrarian|strategist)/.test(x.step_key));
-    const parallelDone = seatSteps.length > 0 && seatSteps.every((x: any) => x.status === "completed");
+    // A seat chunk may fail alone (isStepLocalFailure), so the fan-in waits
+    // for every seat step to reach a terminal state, then merges as long as
+    // coverage clears the floor; the Chair is told which reviews are missing.
+    const terminal = (x: any) => x.status === "completed" || x.status === "failed";
+    const parallelDone = seatSteps.length > 0 && seatSteps.every(terminal);
     if (parallelDone) {
+      const coverage = auditSeatCoverage(seatSteps);
+      if (!coverage.ok) {
+        await failRun(admin, run, `audit coverage below floor: ${coverage.reason}`);
+        return;
+      }
+      const prior: string[] = Array.isArray(run.consensus?.missing_steps) ? run.consensus.missing_steps : [];
+      if (coverage.missing.length || prior.length) {
+        run.consensus = { ...(run.consensus ?? {}), missing_steps: coverage.missing };
+        await admin.from("boardroom_runs").update({ consensus: run.consensus }).eq("id", run.id);
+      }
       await queueAuditChairMerge(admin, run, steps);
       fireSelfTick();
     }
@@ -1702,11 +2002,17 @@ async function afterStepComplete(admin: any, runIn: any) {
 
   if (run.kind === "batches") {
     const draft = steps.find((x: any) => x.step_key === "batches_chair");
-    if (!(draft?.status === "completed" && draft.response_json && !draft.response_json.invalid)) {
-      await admin
-        .from("boardroom_runs")
-        .update({ status: "failed", error: draft?.response_json?.validation_error ?? "batches_chair did not produce a valid response" })
-        .eq("id", run.id);
+    // Absent = still seeding (or orphaned before the row landed) — the
+    // stalled-run detector in pipelineTick fails a run whose draft never
+    // arrives. Only a real failure ends the run here: the step failed, or its
+    // JSON was rejected. failRun (not a bare status write) so the siblings and
+    // the project's zero-batch status are reconciled like every other failure.
+    if (!draft) return;
+    const draftOk = draft.status === "completed" && draft.response_json && !draft.response_json.invalid;
+    if (!draftOk) {
+      if (draft.status === "failed" || draft.response_json?.invalid) {
+        await failRun(admin, run, draft.response_json?.validation_error ?? "batches_chair did not produce a valid response");
+      }
       return;
     }
 
@@ -1724,13 +2030,11 @@ async function afterStepComplete(admin: any, runIn: any) {
         ? validateStepJson("batches_revise_chair", revise.response_json)
         : (revise.response_json?.validation_error ?? revise.error ?? "batches_revise_chair did not complete");
       if (!ok || validationError || !revisedList.length) {
-        await admin
-          .from("boardroom_runs")
-          .update({
-            status: "failed",
-            error: `The Chair's revision failed after reviewers flagged blocking issues: ${validationError ?? "empty batches list"}. Draft and reviewer notes are preserved in run_steps for diagnosis.`,
-          })
-          .eq("id", run.id);
+        await failRun(
+          admin,
+          run,
+          `The Chair's revision failed after reviewers flagged blocking issues: ${validationError ?? "empty batches list"}. Draft and reviewer notes are preserved in run_steps for diagnosis.`,
+        );
         return;
       }
       await finalizeBatches(admin, run, revisedList);
@@ -1842,7 +2146,10 @@ async function afterStepComplete(admin: any, runIn: any) {
       return;
     }
     const nextLoop = loop + 1;
-    if (nextLoop < 3) {
+    // One synthesis loop by default (vote once, then the Chair rules); the
+    // admin setting max_synthesis_loops can allow up to three. A smoke run
+    // always goes straight to the ruling.
+    if (nextLoop < await resolveSynthesisLoopCap(admin, run)) {
       await queueRound3(admin, run, steps, nextLoop);
       await admin
         .from("boardroom_runs")
@@ -1903,11 +2210,27 @@ async function processRun(admin: any, runId: string) {
   // invocation may request up to MAX_STEP_CONCURRENCY but never pushes the run
   // above the per-run limit.
   const claimed: any[] = [];
+  let claimFailed = false;
   while (claimed.length < MAX_STEP_CONCURRENCY) {
-    const step = await claimOneStep(admin, runId, MAX_STEP_CONCURRENCY);
+    let step: any;
+    try {
+      step = await claimOneStep(admin, runId, MAX_STEP_CONCURRENCY);
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e);
+      // A failed claim RPC leaves every step queued: that IS the requeue
+      // state, so leave the run for the next tick (and let this tick's
+      // other runs proceed) rather than abort the whole tick. Steps
+      // already claimed in this loop still run below; with none claimed
+      // the run must NOT be advanced as if it had no work.
+      if (!isTransientInfraError(msg)) throw e;
+      console.error(`[tick] claim failed for run=${runId}, retrying next tick: ${msg}`);
+      claimFailed = true;
+      break;
+    }
     if (!step) break;
     claimed.push(step);
   }
+  if (!claimed.length && claimFailed) return;
   if (!claimed.length) {
     await afterStepComplete(admin, run);
     return;
@@ -1920,10 +2243,88 @@ async function processRun(admin: any, runId: string) {
 }
 
 
+// Heartbeat: proves the tick is actually reaching the function. pg_cron
+// reporting "succeeded" only means the HTTP request was enqueued.
+async function writeTickHeartbeat(admin: any) {
+  try {
+    const now = new Date().toISOString();
+    const { error } = await admin
+      .from("app_settings")
+      .upsert({ key: "orchestrator_last_tick", value: { at: now }, updated_at: now }, { onConflict: "key" });
+    if (error) console.error(`[tick] heartbeat write failed: ${error.message ?? error}`);
+  } catch (e) {
+    console.error(`[tick] heartbeat write failed: ${(e as Error)?.message ?? e}`);
+  }
+}
+
+// Stalled-run detector. A run 'running' with nothing queued or in flight for
+// STALLED_RUN_MS is given one advance; if that queues nothing and the run is
+// still 'running', it is failed as stalled_no_work so it stops blocking the
+// one-active-run-per-kind slot and the owner sees a real error instead of a
+// spinner (the Revven "stuck for 48h" shape).
+async function failStalledRuns(admin: any): Promise<number> {
+  const cutoff = new Date(Date.now() - STALLED_RUN_MS).toISOString();
+  const { data: stale } = await admin
+    .from("boardroom_runs")
+    .select("*")
+    .eq("status", "running")
+    .lt("updated_at", cutoff)
+    .limit(20);
+  let failed = 0;
+  for (const run of stale ?? []) {
+    if (hasActiveSteps(await loadAllSteps(admin, run.id))) continue;
+    await afterStepComplete(admin, run);
+    const fresh = await getRun(admin, run.id);
+    if (!fresh || fresh.status !== "running") continue;
+    if (hasActiveSteps(await loadAllSteps(admin, run.id))) continue;
+    console.log(`[tick] run ${run.id} (${run.kind}) has been running with no work since ${run.updated_at} — failing as stalled_no_work`);
+    if ((await failRun(admin, fresh, "stalled_no_work")) === "won") failed++;
+  }
+  // Abandoned seed (isAbandonedSeed): start_run / regenerate_batches /
+  // beginAudit insert the run as 'paused' and flip it to 'queued' only once
+  // its first steps exist. An invocation that died in between left a paused,
+  // stepless run that no tick path touches and that holds the
+  // one-active-per-kind slot — fail it through failRun so an audit's row and
+  // project status are reconciled like any other failure.
+  const { data: seeds } = await admin
+    .from("boardroom_runs")
+    .select("*")
+    .eq("status", "paused")
+    .lt("created_at", cutoff)
+    .limit(20);
+  for (const run of seeds ?? []) {
+    if (!isAbandonedSeed(run, await loadAllSteps(admin, run.id))) continue;
+    console.log(`[tick] run ${run.id} (${run.kind}) was seeded as paused at ${run.created_at} and never received a step — failing as seeding_abandoned`);
+    if ((await failRun(admin, run, "seeding_abandoned")) === "won") failed++;
+  }
+  return failed;
+}
+
 async function pipelineTick(admin: any) {
+  try {
+    return await pipelineTickBody(admin);
+  } finally {
+    await writeTickHeartbeat(admin);
+  }
+}
+
+async function pipelineTickBody(admin: any) {
+  // Orphan sweep: queued/running steps under a run that is already terminal
+  // are invisible to the watchdog (it scans 'running' steps) and to the run
+  // loop (it scans active runs). Bounded UPDATE, terminal parents only.
+  let orphansCancelled = 0;
+  try {
+    const sweep = await sweepOrphanSteps(admin);
+    orphansCancelled = sweep.cancelled;
+    console.log(`[tick] orphan sweep: ${sweep.cancelled} step(s) cancelled under ${sweep.terminal_runs} terminal run(s)`);
+  } catch (e) {
+    console.error(`[tick] orphan sweep failed: ${(e as Error)?.message ?? e}`);
+  }
+
   // Last-resort backup for steps orphaned by a dead invocation: the platform
   // can kill an isolate at any moment (~150s cap) and take its in-isolate
-  // timers with it, so a step 'running' for 3+ minutes belongs to an
+  // timers with it, so a step 'running' for STALE_RUNNING_STEP_MS (160 s —
+  // past the ~105 s proxy abort and the isolate cap) belongs to an
   // invocation that no longer exists. The primary timeout failover lives in
   // executeStep — this watchdog only catches the rare case where the
   // invocation died BEFORE executeStep's catch block could requeue.
@@ -1931,7 +2332,7 @@ async function pipelineTick(admin: any) {
   // Escalation preserves prior state so we never switch back to the timed-out
   // primary model: existing force_fallback stays sticky, existing
   // _timeout_attempts is preserved, and _attempts caps the rescue count.
-  const staleCutoff = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+  const staleCutoff = new Date(Date.now() - STALE_RUNNING_STEP_MS).toISOString();
   const { data: staleSteps } = await admin
     .from("run_steps")
     .select("id, run_id, step_key, request")
@@ -1962,6 +2363,7 @@ async function pipelineTick(admin: any) {
         .eq("id", st.id)
         .eq("status", "running");
       if (parentRun) {
+        if (isStepLocalFailure(parentRun, st)) { fireSelfTick(); continue; }
         await failRun(admin, parentRun, `Step ${st.step_key} kept timing out — even the fallback model could not answer in time.`);
       }
       continue;
@@ -1969,16 +2371,12 @@ async function pipelineTick(admin: any) {
     // Atomic parent-aware requeue via RPC — if the parent flips terminal
     // between the check above and this call, the RPC cancels the step
     // instead of resurrecting it.
+    // Payload built by the pure staleRequeueRequest (hygiene.ts): sticky
+    // fallback pin, low reasoning, same visible cap.
     await requeueStepIfParentActive(
       admin,
       st.id,
-      {
-        ...(st.request ?? {}),
-        _attempts: attempts,
-        // Sticky: once force_fallback is on, NEVER switch back to the
-        // timed-out primary. First rescue also forces the fallback.
-        force_fallback: alreadyForced || attempts >= 1,
-      },
+      staleRequeueRequest(st.request, attempts),
       "requeued_stale",
     );
   }
@@ -1990,6 +2388,7 @@ async function pipelineTick(admin: any) {
   // back to 'queued' and resurrected under a dead run.
   await requeueLegacyNullStartOrphans(admin, staleCutoff);
 
+  const stalledFailed = await failStalledRuns(admin);
 
   const { data: runs } = await admin
     .from("boardroom_runs")
@@ -1999,7 +2398,7 @@ async function pipelineTick(admin: any) {
   for (const r of runs ?? []) {
     await processRun(admin, r.id);
   }
-  return { processed: (runs ?? []).length };
+  return { processed: (runs ?? []).length, orphans_cancelled: orphansCancelled, stalled_failed: stalledFailed };
 }
 
 
@@ -2050,6 +2449,15 @@ async function handleRequest(req: Request): Promise<Response> {
     if (!projectId || !kind) return j(400, { error: "Missing project_id or kind" });
     if (!["test", "plan", "features", "design", "change_request", "audit", "batches"].includes(kind)) {
       return j(400, { error: "Invalid kind" });
+    }
+    // Smoke mode (RC-9): the $1 rehearsal of a run kind — no revision loops,
+    // no repo sample, three batches with one reviewer, every seat on the
+    // cheap smoke model. Admin-only: it is a pipeline check, not a product.
+    const smoke = body?.smoke === true;
+    if (smoke) {
+      const { data: isAdmin, error: roleErr } = await admin.rpc("has_role", { _user_id: userId, _role: "admin" });
+      if (roleErr) return j(500, { error: "Role check failed" });
+      if (isAdmin !== true) return j(403, { error: "Smoke runs are admin-only" });
     }
     const { data: project } = await admin
       .from("projects")
@@ -2204,14 +2612,19 @@ async function handleRequest(req: Request): Promise<Response> {
       .eq("key", "constitution")
       .maybeSingle();
 
-    const budget = kind === "test" ? 0.25 : kind === "change_request" ? 3.0 : kind === "batches" ? 3.0 : 10.0;
+    if (smoke) consensusMeta = { ...(consensusMeta ?? {}), smoke: true };
+    const budget = runBudgetUsd(kind, smoke);
     const { data: run, error: rerr } = await admin
       .from("boardroom_runs")
       .insert({
         project_id: projectId,
         user_id: userId,
         kind,
-        status: "queued",
+        // Seeded while 'paused': the tick ignores it, the one-active-per-kind
+        // index still covers it, and it becomes 'queued' only once its first
+        // steps exist. The per-minute cron used to find the freshly inserted
+        // run with zero steps and fail it a second later (run cfa73001).
+        status: "paused",
         round_no: 1,
         loop_no: 0,
         constitution_version: constRow?.version ?? 1,
@@ -2229,15 +2642,22 @@ async function handleRequest(req: Request): Promise<Response> {
     try {
       await createInitialSteps(admin, run);
     } catch (e) {
+      // Never leave a paused, stepless run holding the active slot.
+      await admin
+        .from("boardroom_runs")
+        .update({ status: "failed", error: (e as Error)?.message ?? String(e) })
+        .eq("id", run.id);
       if (e instanceof RepoContractUnavailable || e instanceof BatchContextTooLarge || e instanceof MarkdownCompactionImpossible) {
-        await admin
-          .from("boardroom_runs")
-          .update({ status: "failed", error: e.message })
-          .eq("id", run.id);
         return j(400, { error: e.message });
       }
       throw e;
     }
+    const { error: flipErr } = await admin
+      .from("boardroom_runs")
+      .update({ status: "queued" })
+      .eq("id", run.id)
+      .eq("status", "paused");
+    if (flipErr) return j(500, { error: `Run seeded but could not be queued: ${flipErr.message}` });
     fireSelfTick();
     return j(200, { run_id: run.id, status: "queued" });
   }
@@ -2282,27 +2702,165 @@ async function handleRequest(req: Request): Promise<Response> {
     if (!runId || !stepId) return j(400, { error: "Missing run_id or step_id" });
     const { data: run } = await admin
       .from("boardroom_runs")
-      .select("id, user_id, status")
+      .select("*")
       .eq("id", runId)
       .maybeSingle();
     if (!run || run.user_id !== userId) return j(404, { error: "Run not found" });
     const { data: step } = await admin
       .from("run_steps")
-      .select("id, status")
+      .select("id, status, error, request")
       .eq("id", stepId)
       .eq("run_id", runId)
       .maybeSingle();
     if (!step) return j(404, { error: "Step not found" });
     if (step.status !== "failed") return j(400, { error: "Only failed steps can be retried" });
+    if (run.status === "failed") {
+      // Reopen the run as 'paused' BEFORE the step is requeued: the tick's
+      // orphan sweep cancels queued steps under a terminal parent, so a step
+      // requeued while the run is still 'failed' could be swept in between.
+      // 'paused' counts as active for the one-active-per-kind index and the
+      // sweep, and is ignored by processRun and the stalled-run detector.
+      const { data: claimed, error: claimErr } = await admin
+        .from("boardroom_runs")
+        .update({ status: "paused" })
+        .eq("id", runId)
+        .eq("status", "failed")
+        .select("id");
+      if (claimErr) return j(409, { error: `Could not reopen the run: ${claimErr.message}` });
+      if (!claimed?.length) return j(409, { error: "Run is no longer failed — refresh and try again." });
+    }
+    // Reset attempt markers / reserve pin / correction turn so the retried
+    // step gets its correction pass back instead of failing on first miss.
     await admin
       .from("run_steps")
-      .update({ status: "queued", error: null, completed_at: null })
+      .update({
+        status: "queued",
+        error: null,
+        completed_at: null,
+        started_at: null,
+        request: resetRequestForResume(step.request, step.error),
+      })
       .eq("id", stepId);
     if (run.status === "failed") {
-      await admin.from("boardroom_runs").update({ status: "running", error: null }).eq("id", runId);
+      // Same reconciliation as resume_failed: failRun marked the audits row
+      // failed and rewound a final audit's project, so undo both before the
+      // run works again — otherwise the Audit Center shows a failed audit
+      // under a run that is still producing its findings.
+      await reverseAuditFailure(admin, run);
+      await admin.from("boardroom_runs").update({ status: "running", error: null }).eq("id", runId).eq("status", "paused");
     }
     fireSelfTick();
     return j(200, { ok: true });
+  }
+
+  // RC-2: resume a failed run where it stopped. Every sibling failRun
+  // cancelled and the step(s) that actually failed are requeued with their
+  // attempt markers reset; completed (paid) steps are kept. Steps are
+  // requeued while the run is 'paused' (claimed from 'failed' first, flipped
+  // to running last) — direct updates, because requeue_step_if_parent_active
+  // refuses a failed parent — so a concurrent tick can neither sweep the
+  // requeued steps as orphans of a terminal run nor see a processable run
+  // with nothing to claim and mis-finalize it. Idempotent: a second call
+  // finds the run active and returns it.
+  if (action === "resume_failed") {
+    const runId: string = body?.run_id;
+    if (!runId) return j(400, { error: "Missing run_id" });
+    const { data: run } = await admin
+      .from("boardroom_runs")
+      .select("*")
+      .eq("id", runId)
+      .maybeSingle();
+    if (!run || run.user_id !== userId) return j(404, { error: "Run not found" });
+    if (["queued", "running", "paused", "paused_budget"].includes(run.status)) {
+      return j(200, { ok: true, run_id: run.id, status: run.status, existing: true });
+    }
+    if (run.status !== "failed") return j(400, { error: "Only failed runs can be resumed" });
+    {
+      const { data: activeRuns } = await admin
+        .from("boardroom_runs")
+        .select("id")
+        .eq("project_id", run.project_id)
+        .eq("kind", run.kind)
+        .in("status", ["queued", "running", "paused", "paused_budget"])
+        .limit(1);
+      if (activeRuns && activeRuns.length > 0) {
+        return j(409, { error: `Another ${run.kind} run is already active for this project. Wait for it or cancel it first.` });
+      }
+    }
+    const { validateResumeBudget } = await import("../_shared/resume-budget.ts");
+    const check = validateResumeBudget(body?.extra_budget_usd, Number(run.budget_usd ?? 0));
+    if (!check.ok) return j(400, { error: check.error });
+
+    const steps = await loadAllSteps(admin, run.id);
+    // What to touch is decided by the pure planResumeFailed (hygiene.ts):
+    // a merge that failed / was cancelled / (legacy) failed validation is
+    // dropped so a fresh merge can be queued; a merge that completed and
+    // only the supersession after it failed is kept and NO seat is re-run
+    // (its findings could never reach the finished merge) — the tick simply
+    // re-enters finalizeAudit.
+    const { chair, chairDead, finalizeRetry, requeue } = planResumeFailed(run, steps);
+    if (!requeue.length && !chairDead && !finalizeRetry && !steps.some((x: any) => x.status === "queued")) {
+      return j(400, { error: "Nothing to resume on this run — start a fresh one." });
+    }
+    // Reopen the run as 'paused' BEFORE any step is requeued: the tick's
+    // orphan sweep cancels queued steps under a terminal parent, and the run
+    // stays 'failed' until the flip below. 'paused' is active for the
+    // one-active-per-kind index and the sweep, yet processRun and the
+    // stalled-run detector ignore it, so a concurrent tick still cannot see
+    // an active run with nothing to claim and mis-finalize it.
+    {
+      const { data: claimed, error: claimErr } = await admin
+        .from("boardroom_runs")
+        .update({ status: "paused" })
+        .eq("id", run.id)
+        .eq("status", "failed")
+        .select("id");
+      if (claimErr) return j(409, { error: `Could not reopen the run: ${claimErr.message}` });
+      if (!claimed?.length) return j(409, { error: "Run is no longer failed — refresh and try again." });
+    }
+    let requeued = 0;
+    for (const st of requeue) {
+      const patch: any = { status: "queued", error: null, completed_at: null, started_at: null };
+      if (st.error !== "cancelled_parent_terminal") {
+        patch.request = resetRequestForResume(st.request, st.error);
+      }
+      await admin.from("run_steps").update(patch).eq("id", st.id).eq("status", "failed");
+      requeued++;
+    }
+    if (chairDead) {
+      await admin.from("run_steps").delete().eq("id", chair.id);
+      // With seat retries in flight the fan-in (afterStepComplete) queues
+      // the merge once they are terminal; otherwise queue it right away.
+      if (requeued === 0) {
+        await queueAuditChairMerge(admin, run, steps.filter((x: any) => x.id !== chair.id));
+      }
+    }
+    await reverseAuditFailure(admin, run);
+    const patch: any = { status: "running", error: null };
+    if (check.extra > 0) patch.budget_usd = check.newTotal;
+    await admin.from("boardroom_runs").update(patch).eq("id", run.id).eq("status", "paused");
+    fireSelfTick();
+    return j(200, { ok: true, run_id: run.id, requeued, merge_requeued: chairDead });
+  }
+
+  // Owner cancel: terminalize an active run through failRun so every
+  // queued/running step is cancelled and the audits/projects rows are
+  // reconciled exactly as on any other failure. Also frees beginAudit's
+  // one-active-run-per-kind short-circuit.
+  if (action === "cancel") {
+    const runId: string = body?.run_id;
+    if (!runId) return j(400, { error: "Missing run_id" });
+    const { data: run } = await admin
+      .from("boardroom_runs")
+      .select("*")
+      .eq("id", runId)
+      .maybeSingle();
+    if (!run || run.user_id !== userId) return j(404, { error: "Run not found" });
+    if (!["queued", "running", "paused", "paused_budget"].includes(run.status)) {
+      return j(400, { error: "Only an active run can be cancelled" });
+    }
+    const outcome = await failRun(admin, run, "cancelled_by_owner");
+    return j(200, { ok: true, outcome });
   }
 
   if (action === "regenerate_batches") {
@@ -2401,7 +2959,8 @@ async function handleRequest(req: Request): Promise<Response> {
         project_id: projectId,
         user_id: userId,
         kind: "batches",
-        status: "queued",
+        // Seeded while 'paused', queued once the steps exist (see start_run).
+        status: "paused",
         round_no: 1,
         loop_no: 0,
         constitution_version: constRow?.version ?? 1,
@@ -2423,6 +2982,19 @@ async function handleRequest(req: Request): Promise<Response> {
         ? e.message
         : `Failed to seed regen run (restored old batches): ${(e as Error).message}`;
       return j(400, { error: msg });
+    }
+    const { error: flipErr } = await admin
+      .from("boardroom_runs")
+      .update({ status: "queued" })
+      .eq("id", run.id)
+      .eq("status", "paused");
+    if (flipErr) {
+      await admin
+        .from("boardroom_runs")
+        .update({ status: "failed", error: `Run seeded but could not be queued: ${flipErr.message}` })
+        .eq("id", run.id);
+      await restore();
+      return j(500, { error: `Run seeded but could not be queued (restored old batches): ${flipErr.message}` });
     }
     fireSelfTick();
     return j(200, { run_id: run.id, archived_count: list.length });

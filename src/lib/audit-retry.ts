@@ -9,6 +9,7 @@ export type AuditRow = {
   status: AuditStatus;
   created_at: string;
   run_id?: string | null;
+  head_sha?: string | null;
 };
 
 export function finalAudits<T extends AuditRow>(audits: T[]): T[] {
@@ -57,4 +58,33 @@ export function startCtaLabel(latest: AuditRow | null): string {
   if (!latest) return "Run the A–Z audit";
   if (latest.status === "failed") return "Run final audit again";
   return "Run a new final audit";
+}
+
+/**
+ * "Resume where it stopped" is offered only when the latest final audit
+ * failed and its run still holds completed seat work worth keeping —
+ * otherwise a fresh start costs the same. Owner-only; never while a resume
+ * request is already in flight.
+ */
+export function canResumeFinal(params: {
+  isOwner: boolean;
+  latest: AuditRow | null;
+  completedAuditSteps: number;
+  resuming: boolean;
+}): boolean {
+  if (!params.isOwner || params.resuming) return false;
+  const latest = params.latest;
+  if (!latest || latest.status !== "failed" || !latest.run_id) return false;
+  return params.completedAuditSteps > 0;
+}
+
+/**
+ * A GitHub final audit re-reads only what changed since the last successful
+ * final audit of this project (one that read GitHub, so head_sha is set).
+ * The "Full rescan" control is only worth showing when such a base exists.
+ */
+export function canOfferFullRescan(audits: AuditRow[]): boolean {
+  return finalAudits(audits).some(
+    (a) => (a.status === "clean" || a.status === "findings") && !!a.head_sha,
+  );
 }

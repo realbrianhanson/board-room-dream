@@ -195,6 +195,7 @@ export type Database = {
           completed_at: string | null
           created_at: string
           files_analyzed: number | null
+          files_skipped: number | null
           head_sha: string | null
           id: string
           kind: string
@@ -202,6 +203,7 @@ export type Database = {
           previous_project_status: string | null
           project_id: string
           run_id: string | null
+          skipped_paths: Json | null
           source: string | null
           status: string
           summary: Json | null
@@ -213,6 +215,7 @@ export type Database = {
           completed_at?: string | null
           created_at?: string
           files_analyzed?: number | null
+          files_skipped?: number | null
           head_sha?: string | null
           id?: string
           kind: string
@@ -220,6 +223,7 @@ export type Database = {
           previous_project_status?: string | null
           project_id: string
           run_id?: string | null
+          skipped_paths?: Json | null
           source?: string | null
           status?: string
           summary?: Json | null
@@ -231,6 +235,7 @@ export type Database = {
           completed_at?: string | null
           created_at?: string
           files_analyzed?: number | null
+          files_skipped?: number | null
           head_sha?: string | null
           id?: string
           kind?: string
@@ -238,6 +243,7 @@ export type Database = {
           previous_project_status?: string | null
           project_id?: string
           run_id?: string | null
+          skipped_paths?: Json | null
           source?: string | null
           status?: string
           summary?: Json | null

@@ -22,6 +22,7 @@ import {
   preLockAuthorityError,
   type OwnerAuthority,
 } from "./owner-authority.ts";
+import { assertStepInsertOk } from "./step-insert.ts";
 
 export { loadOwnerAuthority };
 export type { OwnerAuthority };
@@ -283,7 +284,7 @@ export async function enforceAuthorityOrCorrect(
   } catch { /* fall through to attempt-aware minSafe */ }
   const roundNo = nextCorrectionRound(currentMax, nextAttempt);
 
-  await ctx.admin.from("run_steps").insert({
+  const correctionInsert = await ctx.admin.from("run_steps").insert({
     run_id: ctx.run.id,
     user_id: ctx.run.user_id,
     step_key: stepKey,
@@ -300,6 +301,7 @@ export async function enforceAuthorityOrCorrect(
       ],
     },
   });
+  assertStepInsertOk(correctionInsert, "authority correction step insert");
 
   const nextState: AuthorityCorrectionState = {
     phase: ctx.phase,

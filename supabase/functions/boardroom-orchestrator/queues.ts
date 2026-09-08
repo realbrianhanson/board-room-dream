@@ -8,17 +8,20 @@ import {
   loadOwnerAuthority,
   OWNER_AUTHORITY_RULES,
   type OwnerAuthority,
+  ownerAuthorityRulesNeeded,
 } from "../_shared/owner-authority.ts";
 import {
   assertBatchRequestSize,
   BatchContextTooLarge,
   compactMarkdown,
   COMPACT_ARTIFACT_CAP,
+  safeCompactMarkdown,
   isBatchGenerationStep,
   renderCompactRepoContract,
 } from "../_shared/batch-context.ts";
 export { BatchContextTooLarge } from "../_shared/batch-context.ts";
 import { batchPromptPolicy, productStrategyContract } from "../_shared/batch-count-policy.ts";
+import { batchesReviewSeats, isSmokeRun, smokeBatchPromptPolicy, smokeCoverageNote } from "../_shared/smoke-mode.ts";
 import {
   SEATS,
   type Seat,
@@ -28,11 +31,16 @@ import {
   draftsBlock,
   objectionsAndStealsBlock,
   priorRoundFailureBlock,
+  promptJson,
   candidateForLoop,
   lastCandidateLoop,
+  deferredDecisionEntries,
+  resolveConsensusThreshold,
+  synthesisLoopsPhrase,
 } from "./protocol.ts";
 import { deriveImportWorkflow, type ImportWorkflow } from "../_shared/import-workflow.ts";
 import { scopeContractForPrompt } from "../_shared/import-scope-gates.ts";
+import { assertStepInsertOk } from "../_shared/step-insert.ts";
 
 // Load the caller-selected import workflow ONCE per run and cache on the run
 // object. Server MUST re-derive from persisted intakes.answers.goals; scope
@@ -129,12 +137,14 @@ async function ensureAuthority(admin: any, run: any): Promise<OwnerAuthority> {
 async function queueSteps(admin: any, run: any, rowsIn: any | any[]): Promise<any> {
   const authority = await ensureAuthority(admin, run);
   const rows = Array.isArray(rowsIn) ? rowsIn : [rowsIn];
+  // Constitution v3 already carries the doctrine (one copy per call, RC-6).
+  const prependRules = ownerAuthorityRulesNeeded(run);
   for (const row of rows) {
     const msgs = row?.request?.messages;
     if (Array.isArray(msgs)) {
       for (const m of msgs) {
         if (m?.role === "system" && typeof m.content === "string") {
-          m.content = `${OWNER_AUTHORITY_RULES}\n\n${m.content}`;
+          if (prependRules) m.content = `${OWNER_AUTHORITY_RULES}\n\n${m.content}`;
         } else if (m?.role === "user") {
           const injected = injectOwnerAuthority("", m.content, authority);
           m.content = injected.user;
@@ -149,7 +159,9 @@ async function queueSteps(admin: any, run: any, rowsIn: any | any[]): Promise<an
       assertBatchRequestSize(String(row.step_key), row.request);
     }
   }
-  return admin.from("run_steps").insert(rowsIn);
+  // Read the insert result: a rejected insert used to leave the run queued
+  // with zero steps for the cron to fail. 23505 (rows already there) passes.
+  return admin.from("run_steps").insert(rowsIn).then(assertStepInsertOk);
 }
 
 
@@ -387,13 +399,17 @@ export async function queueRound1(admin: any, run: any) {
   const scope = isImport ? await getScopeContract(admin, run) : "";
   let system: string;
   let userContent: string;
+  // A smoke run skips the repo sample (up to 300 KB to four seats) — it is a
+  // pipeline rehearsal, not a real deliberation.
+  const smoke = isSmokeRun(run);
+  const emptySample = { files: [] as any[], fileTree: [] as string[] };
 
   if (run.kind === "design") {
     const plan = workflow && !workflow.requiresPlan ? null : await loadLockedPlan(admin, run.project_id);
     system =
       "Round 1 of the Design Council. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best design direction for this app. You MUST include: concept/mood; palette as specific HSL values; type pairing with specific font names; spacing and shape language; ONE distinctive signature element (a structural design move — non-negotiable, this is the point); and motion rules. Be specific, opinionated, and premium. Avoid generic AI-slop aesthetics.";
     if (isImport) {
-      const sample = await loadRepoSample(admin, project, 12);
+      const sample = smoke ? emptySample : await loadRepoSample(admin, project, 12);
       const treeBlock = sample.fileTree.length ? sample.fileTree.join("\n") : "(no repo files available)";
       const codeBlock = sample.files.length ? formatFiles(sample.files) : "(no repo files available)";
       const planBlock = plan?.content_md?.trim()
@@ -408,7 +424,7 @@ export async function queueRound1(admin: any, run: any) {
   } else if (run.kind === "plan" && isImport) {
     system =
       "Round 1 of the board's improvement deliberation. This app already exists — the owner has brought it to the board. You are drafting INDEPENDENTLY. Produce a PRIORITIZED IMPROVEMENT PLAN: what's broken, what's missing, what to build next, ranked by impact. Be specific, opinionated, and concrete about the code you can see. Do not restart the app from scratch.";
-    const sample = await loadRepoSample(admin, project, 15);
+    const sample = smoke ? emptySample : await loadRepoSample(admin, project, 15);
     const audit = await latestAuditSummary(admin, run.project_id);
     const treeBlock = sample.fileTree.length ? sample.fileTree.join("\n") : "(no repo linked)";
     const auditBlock = audit?.summary
@@ -435,6 +451,7 @@ export async function queueRound1(admin: any, run: any) {
       // Round 1 is the divergence round — hotter sampling so four seats
       // actually produce four different drafts worth debating.
       temperature: 0.85,
+      max_tokens: 8000,
       messages: [
         { role: "system", content: system },
         { role: "user", content: withImages(userContent, imageParts) },
@@ -474,6 +491,7 @@ Requirements: at least ONE objection targeting EACH of the three other seats, at
       status: "queued",
       request: {
         json_output: true,
+        reasoning_effort: "low",
         max_tokens: 3500,
         messages: [
           { role: "system", content: system },
@@ -487,6 +505,10 @@ Requirements: at least ONE objection targeting EACH of the three other seats, at
 }
 
 
+
+// Design Round-3 input caps (chars). Plan / PRD excerpts and per-draft bound.
+export const DESIGN_R3_ARTIFACT_CAP = 8_000;
+export const DESIGN_R3_DRAFT_CAP = 6_000;
 
 // Round 3 is two-phase: the Chair writes the candidate as FREE MARKDOWN (its
 // best register — long documents forced into JSON strings come out flat), then
@@ -524,11 +546,22 @@ Respond with the markdown document ONLY — no JSON, no preamble, no closing rem
   if (String(run.founder_notes ?? "").trim()) {
     parts.push(`FOUNDER'S NOTES TO THE BOARD (the founder is the client — weigh these heavily):\n${String(run.founder_notes).trim()}`);
   }
-  if (isDesign && plan) parts.push(`LOCKED PLAN\n\n${plan.content_md ?? ""}\n\nPRD\n\n${plan.prd_md ?? "(none)"}`);
-  parts.push(draftsBlock(steps), objectionsAndStealsBlock(steps));
-  if (loop > 0) parts.push(priorRoundFailureBlock(steps, loop - 1));
+  // Design Round-3 input diet (RC-4): the full plan + PRD + four drafts +
+  // objections + screenshots pushed the Chair's draft past the proxy abort.
+  // Locked artifacts are heading-balanced excerpts, each draft is bounded,
+  // and the screenshots ride only on loop 0 (the revision loops rework the
+  // contested parts of a brief that already saw them).
+  if (isDesign && plan) {
+    parts.push(
+      `LOCKED PLAN\n\n${safeCompactMarkdown(plan.content_md ?? "", DESIGN_R3_ARTIFACT_CAP)}\n\nPRD\n\n${
+        plan.prd_md == null ? "(none)" : safeCompactMarkdown(plan.prd_md, DESIGN_R3_ARTIFACT_CAP)
+      }`,
+    );
+  }
+  parts.push(draftsBlock(steps, undefined, isDesign ? DESIGN_R3_DRAFT_CAP : undefined), objectionsAndStealsBlock(steps));
+  if (loop > 0) parts.push(priorRoundFailureBlock(steps, loop - 1, await resolveConsensusThreshold(admin, run.user_id)));
   const user = `${parts.join("\n\n")}\n\nWrite the candidate document now.`;
-  const imageParts = isDesign ? await loadScreenshotParts(admin, run.user_id, run.project_id) : [];
+  const imageParts = isDesign && loop === 0 ? await loadScreenshotParts(admin, run.user_id, run.project_id) : [];
   await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,
@@ -537,7 +570,7 @@ Respond with the markdown document ONLY — no JSON, no preamble, no closing rem
     seat: "chair",
     status: "queued",
     request: {
-      reasoning_effort: "high",
+      reasoning_effort: loop === 0 ? "medium" : "low",
       max_tokens: 10000,
       messages: [
         { role: "system", content: system },
@@ -624,6 +657,7 @@ Resolution discipline: an objection is "resolved" ONLY if you can quote the exac
         json_output: true,
         // Voting is a judgment call, not a creative act — keep it cold.
         temperature: 0.2,
+        reasoning_effort: "low",
         max_tokens: 3500,
         messages: [
           { role: "system", content: system },
@@ -640,11 +674,11 @@ Resolution discipline: an objection is "resolved" ONLY if you can quote the exac
 export async function queueFinalRuling(admin: any, run: any, steps: any[]) {
   const intake = await loadIntake(admin, run.project_id);
   const lastCandidate = candidateForLoop(steps, lastCandidateLoop(steps));
-  const lastLoop = run.loop_no; // by now already incremented to 3
+  const lastLoop = run.loop_no; // by now already incremented past the last loop, so it counts the loops run
   const previousLoop = Math.max(0, lastLoop - 1);
-  const failure = priorRoundFailureBlock(steps, previousLoop);
+  const failure = priorRoundFailureBlock(steps, previousLoop, await resolveConsensusThreshold(admin, run.user_id));
   const scope = await getScopeContract(admin, run);
-  const system = withScope(scope, `The board has failed to reach consensus after three synthesis loops. You are the Chair — RULE. Accept some outstanding objections, reject others, and produce the final plan. This is a chair-ruled plan, not a consensus plan.
+  const system = withScope(scope, `The board has failed to reach consensus after ${synthesisLoopsPhrase(lastLoop)}. You are the Chair — RULE. Accept some outstanding objections, reject others, and produce the final plan. This is a chair-ruled plan, not a consensus plan.
 
 Return ONLY valid JSON matching this shape:
 {
@@ -662,7 +696,7 @@ Return ONLY valid JSON matching this shape:
     status: "queued",
     request: {
       json_output: true,
-      reasoning_effort: "high",
+      reasoning_effort: "medium",
       max_tokens: 10000,
       messages: [
         { role: "system", content: system },
@@ -705,7 +739,7 @@ Respond with the markdown document ONLY — no JSON, no preamble.`);
     seat: "chair",
     status: "queued",
     request: {
-      reasoning_effort: "high",
+      reasoning_effort: "medium",
       max_tokens: 10000,
 
       messages: [
@@ -767,6 +801,7 @@ Return ONLY valid JSON matching this shape:
     status: "queued",
     request: {
       json_output: true,
+      reasoning_effort: "low",
       max_tokens: 3500,
       messages: [
 
@@ -785,7 +820,7 @@ Return ONLY valid JSON matching this shape:
 export async function queueChangeRequestVerdict(admin: any, run: any, cr: any, plan: any, steps: any[]) {
   const stances = SEATS.map((s) => {
     const step = steps.find((x) => x.step_key === `cr_exam_${s}` && x.status === "completed");
-    return `--- ${SEAT_LABEL[s]} ---\n${JSON.stringify(step?.response_json ?? { missing: true }, null, 2)}`;
+    return `--- ${SEAT_LABEL[s]} ---\n${JSON.stringify(promptJson(step?.response_json ?? { missing: true }), null, 2)}`;
   }).join("\n\n");
   const system = `Change Request verdict. You are the Chair. Rule on the change based on the four seats' stances.
 
@@ -808,6 +843,7 @@ If rejected, amended_* may be empty strings / empty array.`;
     status: "queued",
     request: {
       json_output: true,
+      reasoning_effort: "low",
       max_tokens: 10000,
       messages: [
 
@@ -856,6 +892,7 @@ Return ONLY valid JSON:
     request: {
       json_output: true,
       temperature: 0.2,
+      reasoning_effort: "low",
       max_tokens: 3500,
 
       messages: [
@@ -890,7 +927,7 @@ Write the documents at FULL length — never compress them because they are insi
     status: "queued",
     request: {
       json_output: true,
-      reasoning_effort: "high",
+      reasoning_effort: "low",
       max_tokens: 10000,
 
       messages: [
@@ -951,7 +988,8 @@ export async function queueBatchesStep(admin: any, run: any) {
   // minimum needed to cover the locked improvement plan). Greenfield stays
   // 6-8 (prefer 6). The validator globally accepts 3-8 so this prompt-side
   // range simply constrains the model within the allowed window.
-  const policy = batchPromptPolicy(isImport);
+  // A smoke run pins the count to the validator's floor (three batches).
+  const policy = isSmokeRun(run) ? smokeBatchPromptPolicy() : batchPromptPolicy(isImport);
   const batchRangeText = policy.rangeText;
   const batchRangePrompt = policy.rangePrompt;
   const batchCountRule = policy.countRule;
@@ -1029,7 +1067,7 @@ Constraints: ${batchRangeText} batches, unique ascending integer batch_no starti
       : "(none listed)";
 
   const deferredRaw = {
-    decision_log: (plan as any)?.decision_log ?? null,
+    decision_log: deferredDecisionEntries((plan as any)?.decision_log ?? null),
     dissent_ledger: (plan as any)?.dissent_ledger ?? null,
   };
   const deferredBlock = requiresPlan && (deferredRaw.decision_log || deferredRaw.dissent_ledger)
@@ -1055,7 +1093,7 @@ Constraints: ${batchRangeText} batches, unique ascending integer batch_no starti
     status: "queued",
     request: {
       json_output: true,
-      reasoning_effort: "high",
+      reasoning_effort: "low",
       max_tokens: 8000,
       _is_import: isImport,
 
@@ -1160,7 +1198,8 @@ ${shape}`),
       ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}`
       : `NO LOCKED DESIGN BRIEF.`;
   const user = `${repoContract}\n\n${planSection}\n\n${prdSection}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nDRAFT BATCHES\n\n${draftBlock}\n\nProduce your JSON now.`;
-  const rows = (["inspector", "contrarian"] as const).map((seat) => ({
+  // Both reviewers normally; a smoke run gets the inspector alone.
+  const rows = batchesReviewSeats(isSmokeRun(run)).map((seat) => ({
     run_id: run.id,
     user_id: run.user_id,
     step_key: `batches_review_${seat}`,
@@ -1211,9 +1250,9 @@ export async function queueBatchesRevise(admin: any, run: any, draftJson: any, r
       ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
       : "(none listed)";
   const issues = reviewSteps
-    .map((s: any) => `--- ${SEAT_LABEL[s.seat as Seat]} ---\n${JSON.stringify(s.response_json ?? { missing: true }, null, 2)}`)
+    .map((s: any) => `--- ${SEAT_LABEL[s.seat as Seat]} ---\n${JSON.stringify(promptJson(s.response_json ?? { missing: true }), null, 2)}`)
     .join("\n\n");
-  const revisePolicy = batchPromptPolicy(isImport);
+  const revisePolicy = isSmokeRun(run) ? smokeBatchPromptPolicy() : batchPromptPolicy(isImport);
   const batchRangeText = revisePolicy.rangeText;
   const batchCountRule = revisePolicy.countRule;
   const baseSystem = `Batches revision — you are the Chair. The Inspector and Contrarian reviewed your drafted build sequence and found issues. FIX every blocking issue and every major issue you agree with — do not merely acknowledge them. Keep every uncontested batch verbatim. The LIVE REPO CONTRACT outranks any guessed name in your original draft or the PRD; correct invented paths to the real ones, or relabel them CREATE/ADD with proper dependency ordering. Preserve the SCOPE CONTRACT above at all times — never re-introduce out-of-scope work even if a reviewer requested it.
@@ -1345,6 +1384,28 @@ import {
   normalizeFindings,
 } from "../_shared/audit-findings.ts";
 
+// Pure. Extra clauses for the Chair's CODE COVERAGE line (RC-6): the files
+// the selection never read (tests, generated, over-cap) and, when the
+// Strategist was queued on no chunk (no UI surface, or an audit-only
+// import), a warning not to imply UX coverage.
+export function auditCoverageExtras(consensus: any, seatSteps: Array<{ step_key?: string }>): string {
+  let out = "";
+  const skipped = Math.max(0, Math.floor(Number(consensus?.files_skipped) || 0));
+  if (skipped > 0) {
+    const list: string[] = Array.isArray(consensus?.skipped_paths) ? consensus.skipped_paths.map((p: unknown) => String(p)) : [];
+    const more = skipped - list.length;
+    out += `; UNREAD: ${skipped} files (${list.join(", ")}${more > 0 ? `, +${more} more` : ""})`;
+  }
+  const incremental = consensus?.incremental;
+  if (incremental && typeof incremental === "object" && typeof incremental.base_sha === "string") {
+    out += `; INCREMENTAL: only files changed since commit ${incremental.base_sha.slice(0, 7)} were read - findings on unchanged files are carried forward from the previous final audit after this merge, so never call the app clean beyond the changed files`;
+  }
+  if (consensus?.smoke !== true && !seatSteps.some((s) => /^audit_strategist/.test(String(s.step_key ?? "")))) {
+    out += "; the Strategist reviewed no chunk (no UI surface in the code read, or an audit-only scope) - do not imply UX or positioning coverage";
+  }
+  return out;
+}
+
 export async function queueAuditChairMerge(admin: any, run: any, steps: any[]) {
   // Collect every completed seat report — single-chunk (audit_<seat>) and
   // map-reduce chunked (audit_<seat>_cN) alike. Strip prose/prompt/raw
@@ -1363,6 +1424,18 @@ export async function queueAuditChairMerge(admin: any, run: any, steps: any[]) {
   }));
   const { block, totalFindings } = buildMergeInput(seatReports);
   const isFinal = run.consensus?.audit_kind === "final_az";
+  // RC-2: seat chunks may fail alone; afterStepComplete records which ones in
+  // run.consensus.missing_steps so the Chair states the gap instead of
+  // implying every chunk was read.
+  const missing: string[] = Array.isArray(run.consensus?.missing_steps)
+    ? run.consensus.missing_steps.map((k: unknown) => String(k))
+    : [];
+  const allSeatSteps = steps.filter((x: any) => /^audit_(inspector|contrarian|strategist)/.test(x.step_key));
+  // A smoke audit read one chunk with one seat; say so (smokeCoverageNote is
+  // empty on a full audit).
+  const coverageGap = (missing.length
+    ? `; ${missing.length} of ${allSeatSteps.length} seat reviews did not complete (${missing.join(", ")}) - state this gap in the summary`
+    : "") + smokeCoverageNote(run.consensus) + auditCoverageExtras(run.consensus, allSeatSteps);
   const system = `You are the Chair. The seats independently reviewed the student's code — possibly split across chunks, so the same underlying issue may be reported more than once. Merge, dedupe across seats AND chunks, assign FINAL severities, and produce ONE audit report.
 
 Severities:
@@ -1401,7 +1474,7 @@ Coverage honesty: the summary must state how much of the app was actually read (
   // prose-stripped seat findings only (see buildMergeInput). The Chair
   // dedupes and assigns final severities against deterministic caps and
   // validators; no plan/PRD/features/design/CR scope can be introduced here.
-  await admin.from("run_steps").insert({
+  const mergeInsert = await admin.from("run_steps").insert({
     run_id: run.id,
     user_id: run.user_id,
     step_key: "audit_chair_merge",
@@ -1416,9 +1489,10 @@ Coverage honesty: the summary must state how much of the app was actually read (
         { role: "system", content: system },
         {
           role: "user",
-          content: `CODE COVERAGE: ${Number(run.consensus?.files_analyzed ?? 0) || "unknown"} files were read across the seat steps.\n\nNORMALIZED SEAT FINDINGS (${totalFindings} across ${seatReports.length} steps — prose stripped)\n\n${block}\n\nMerge, dedupe, downgrade unsupported serious claims, and produce your JSON now.`,
+          content: `CODE COVERAGE: ${Number(run.consensus?.files_analyzed ?? 0) || "unknown"} files were read across the seat steps${coverageGap}.\n\nNORMALIZED SEAT FINDINGS (${totalFindings} across ${seatReports.length} steps — prose stripped)\n\n${block}\n\nMerge, dedupe, downgrade unsupported serious claims, and produce your JSON now.`,
         },
       ],
     },
   });
+  assertStepInsertOk(mergeInsert, "audit_chair_merge insert");
 }

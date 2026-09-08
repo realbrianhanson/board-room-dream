@@ -158,6 +158,7 @@ function RunwayPage() {
   const [batches, setBatches] = useState<Batch[] | null>(null);
   const [run, setRun] = useState<Run | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [resumingFailed, setResumingFailed] = useState(false);
   const [regenerateConfirmOpen, setRegenerateConfirmOpen] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -466,6 +467,26 @@ function RunwayPage() {
       toast.error(err?.message ?? "Failed to resume");
     } finally {
       setGenerating(false);
+    }
+  }
+
+  // Failed batches run: requeue what failRun cancelled plus the failing
+  // step, keep the completed (paid) steps — cheaper than a fresh generation.
+  async function resumeFailedRun(runId: string) {
+    if (resumingFailed) return;
+    setResumingFailed(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("boardroom-orchestrator", {
+        body: { action: "resume_failed", run_id: runId },
+      });
+      if (error) throw error;
+      if ((data as any)?.error) throw new Error((data as any).error);
+      toast.success("Resuming where it stopped…");
+      await loadAll();
+    } catch (err: any) {
+      toast.error(err?.message ?? "Failed to resume");
+    } finally {
+      setResumingFailed(false);
     }
   }
 
@@ -806,14 +827,24 @@ function RunwayPage() {
           <p className="flex items-center gap-2 font-mono text-xs text-destructive"><AlertTriangle className="h-4 w-4" /> The Chair couldn't finish.</p>
           <p className="mt-2 text-sm text-foreground/85">{run.error ?? "Unknown error"}</p>
           {isOwner && (
-            <button
-              onClick={generate}
-              disabled={generating}
-              className="mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
-            >
-              Start fresh generation
-            </button>
-      )}
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => resumeFailedRun(run.id)}
+                disabled={resumingFailed || generating}
+                data-testid="runway-resume-failed"
+                className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+              >
+                {resumingFailed ? "Resuming…" : "Resume where it stopped"}
+              </button>
+              <button
+                onClick={generate}
+                disabled={generating || resumingFailed}
+                className="inline-flex items-center gap-2 rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground transition-all hover:border-primary/40 disabled:opacity-60"
+              >
+                Start fresh generation
+              </button>
+            </div>
+          )}
 
       {/* State C-defensive: run reported `completed` but persisted zero
           batches (schema drift, superseded, or an incomplete recovery).
@@ -1011,12 +1042,15 @@ function RunwayPage() {
           ghRepo={ghRepo}
           starting={starting}
           onClose={() => setAuditModal(null)}
-          onSubmit={(source, pasted) => {
+          onSubmit={(source, pasted, fullRescan) => {
+            // GitHub audits read only what changed since the last audited
+            // commit and refuse an unchanged HEAD; this is the way past that.
+            const rescan = source === "github" && fullRescan ? { full_rescan: true } : {};
             if (auditModal.kind === "final_az") {
-              startAuditCall("start_final_audit", { project_id: projectId, source, pasted_code: pasted });
+              startAuditCall("start_final_audit", { project_id: projectId, source, pasted_code: pasted, ...rescan });
             } else {
               const action = auditModal.mode === "reaudit" ? "start_reaudit" : "start_batch_audit";
-              startAuditCall(action, { batch_id: auditModal.batch.id, source, pasted_code: pasted });
+              startAuditCall(action, { batch_id: auditModal.batch.id, source, pasted_code: pasted, ...rescan });
             }
           }}
         />
@@ -1723,10 +1757,11 @@ function AuditModal({
   ghRepo: string | null;
   starting: boolean;
   onClose: () => void;
-  onSubmit: (source: "github" | "paste", pasted: string | null) => void;
+  onSubmit: (source: "github" | "paste", pasted: string | null, fullRescan: boolean) => void;
 }) {
   const [source, setSource] = useState<"github" | "paste">(ghRepo ? "github" : "paste");
   const [pasted, setPasted] = useState("");
+  const [fullRescan, setFullRescan] = useState(false);
   const title =
     modal.kind === "final_az"
       ? "Run the A–Z audit"
@@ -1783,13 +1818,29 @@ function AuditModal({
           <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={MAX_PASTE_BYTES} />
         )}
 
+        {source === "github" && ghRepo && (
+          <label className="mt-4 flex items-start gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={fullRescan}
+              onChange={(e) => setFullRescan(e.target.checked)}
+              data-testid="audit-full-rescan"
+              className="mt-0.5 h-3.5 w-3.5 accent-primary"
+            />
+            <span>
+              Full rescan — re-read every file. By default only files changed since the last audited commit are
+              read, and an unchanged HEAD is refused.
+            </span>
+          </label>
+        )}
+
         <div className="mt-5 flex justify-end gap-2">
           <button onClick={onClose} className="rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground">
             Cancel
           </button>
           <button
             disabled={starting || (source === "paste" && !pasted.trim()) || (source === "github" && !ghRepo)}
-            onClick={() => onSubmit(source, source === "paste" ? pasted : null)}
+            onClick={() => onSubmit(source, source === "paste" ? pasted : null, fullRescan)}
             className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-50"
           >
             <Gavel className="h-4 w-4" /> {starting ? "Convening…" : "Convene the board"}

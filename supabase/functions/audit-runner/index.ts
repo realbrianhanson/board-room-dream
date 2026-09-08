@@ -3,7 +3,8 @@
 // then kicks the orchestrator. Chair merge + finalization happen in the orchestrator.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { assembleFromGithub, ghToken, redactSecrets } from "../_shared/github-payload.ts";
-import { loadFieldManual } from "../_shared/lovable-field-manual.ts";
+import { safeCompactMarkdown } from "../_shared/batch-context.ts";
+import type { IncrementalAuditMeta } from "../_shared/audit-incremental.ts";
 import { checkFinalAuditEligibility } from "../_shared/audit-eligibility.ts";
 import { renderImportContract } from "../_shared/import-contract.ts";
 import {
@@ -14,6 +15,14 @@ import {
 } from "../_shared/audit-contract.ts";
 import { deriveImportWorkflow, type ImportWorkflow } from "../_shared/import-workflow.ts";
 import { scopeContractForPrompt } from "../_shared/import-scope-gates.ts";
+import { assertStepInsertOk } from "../_shared/step-insert.ts";
+import {
+  auditBudgetUsd,
+  auditChunksForRun,
+  auditMapSeats,
+  type AuditMapSeat,
+  smokeAuditChunks,
+} from "../_shared/smoke-mode.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -30,7 +39,7 @@ const ORCH_URL = `${SUPABASE_URL}/functions/v1/boardroom-orchestrator`;
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every audit-runner change.
-export const BUILD_VERSION = "2026-07-29.import-workflow-scope.r1";
+export const BUILD_VERSION = "2026-09-08.p0-fixes.r2";
 
 function j(status: number, body: any) {
   return new Response(JSON.stringify(body), {
@@ -369,72 +378,206 @@ export function assertChunkInvariants(
   }
 }
 
-function chunkFiles(files: { path: string; content: string; bytes: number }[]): string[] {
+// Rendered chunks plus the unique repo paths each one contains (a fragmented
+// file is listed in every chunk that holds a piece of it).
+export function chunkFiles(
+  files: { path: string; content: string; bytes: number }[],
+): { rendered: string[]; paths: string[][] } {
   const groups = chunkFilesFor(files);
   assertChunkInvariants(groups);
   const annotated = annotateFragments(groups);
   const rendered = annotated.map((g) => renderAuditChunkGroup(g));
-  return rendered.length ? rendered : [renderAuditChunkGroup([])];
+  const paths = annotated.map((g) => [...new Set(g.map((f) => f.path))]);
+  return rendered.length ? { rendered, paths } : { rendered: [renderAuditChunkGroup([])], paths: [[]] };
 }
 
+// ============================== Map prompt diet (RC-6) ==============================
+// Every map call used to re-send the raw plan + PRD + design brief, the whole
+// file tree, the field manual and a duplicated fragment rule — ~40% of a
+// $7 audit was the same text 72 times over. Each seat now receives only the
+// artifacts its charter reads, compacted, and the tree collapses to a
+// directory summary plus the paths in its own chunk.
+export const AUDIT_PRD_CAP = 10_000;
+export const AUDIT_PLAN_CAP = 6_000;
+export const AUDIT_DESIGN_CAP = 6_000;
+export const AUDIT_CONTRARIAN_PRD_CAP = 3_000;
+export const DIRECTORY_SUMMARY_MAX_LINES = 60;
+export const CHUNK_PATH_LIST_MAX = 30;
+// Unread paths kept on the audits row / quoted to the Chair merge.
+export const SKIPPED_PATHS_PERSIST_MAX = 400;
+export const SKIPPED_PATHS_PROMPT_MAX = 25;
 
+export type AuditContractBase = {
+  planContentMd: string | null;
+  prdMd: string | null;
+  designBrief: string | null;
+  extraContext: string;
+  mode: ResolvedContract["mode"];
+};
 
-async function insertAuditSteps(
-  admin: any,
-  run: any,
-  chunks: string[],
-  batchPrompt: string | null,
-  finalContract: ResolvedContract | null,
-  batchPlan: { content_md?: string | null; prd_md?: string | null } | null,
-  batchDesignBrief: string | null,
-  isFinal: boolean,
-  batchOutcome: string | null,
-  fileTree: string[],
-  scopeContract: string | null,
-) {
+// Per-seat contract section. Inspector: PRD + plan. Contrarian: a short PRD
+// excerpt (its charter is the SECURITY_CHECKLIST). Strategist: design brief +
+// plan. Identical PRD/plan text (import intakes) is compacted once so the
+// renderer's dedupe still fires. Sections a seat deliberately does not get
+// are labelled as omitted rather than "(none)" so no seat is told an
+// artifact does not exist.
+export function seatContractSection(seat: AuditMapSeat, base: AuditContractBase): string {
+  const prdRaw = (base.prdMd ?? "").trim();
+  const planRaw = (base.planContentMd ?? "").trim();
+  const designRaw = (base.designBrief ?? "").trim();
+  const same = !!prdRaw && prdRaw === planRaw;
+  let prd: string | null = null;
+  let plan: string | null = null;
+  let design: string | null = null;
+  const omitted: string[] = [];
+  if (seat === "inspector") {
+    prd = safeCompactMarkdown(prdRaw, AUDIT_PRD_CAP);
+    plan = same ? prd : safeCompactMarkdown(planRaw, AUDIT_PLAN_CAP);
+    if (designRaw) omitted.push("DESIGN BRIEF");
+  } else if (seat === "contrarian") {
+    prd = safeCompactMarkdown(prdRaw, AUDIT_CONTRARIAN_PRD_CAP);
+    if (planRaw) omitted.push("PLAN");
+    if (designRaw) omitted.push("DESIGN BRIEF");
+  } else {
+    plan = safeCompactMarkdown(planRaw, AUDIT_PLAN_CAP);
+    design = safeCompactMarkdown(designRaw, AUDIT_DESIGN_CAP);
+    if (prdRaw && !same) omitted.push("PRD");
+    if (prdRaw && same) plan = prd = safeCompactMarkdown(prdRaw, AUDIT_PLAN_CAP);
+  }
+  let rendered = renderContractSection({
+    planContentMd: plan,
+    prdMd: prd,
+    designBrief: design,
+    extraContext: base.extraContext,
+    mode: base.mode,
+  });
+  for (const label of omitted) {
+    rendered = rendered.replace(`${label}\n(none)`, `${label}\n(omitted for this seat)`);
+  }
+  return rendered;
+}
+
+// Unique first-two-segment directories with file counts, at most maxLines.
+export function directorySummary(fileTree: readonly string[], maxLines = DIRECTORY_SUMMARY_MAX_LINES): string {
+  const counts = new Map<string, number>();
+  for (const p of fileTree) {
+    const parts = p.split("/");
+    const key = parts.length >= 3 ? `${parts[0]}/${parts[1]}/` : parts.length === 2 ? `${parts[0]}/` : "./";
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const lines = [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([dir, n]) => `${dir} (${n} file${n === 1 ? "" : "s"})`);
+  if (lines.length <= maxLines) return lines.join("\n");
+  return [...lines.slice(0, maxLines), `… +${lines.length - maxLines} more directories`].join("\n");
+}
+
+export function chunkOrientation(idx: number, total: number, fileTree: readonly string[], chunkPaths: readonly string[]): string {
+  const listed = chunkPaths.slice(0, CHUNK_PATH_LIST_MAX);
+  const more = chunkPaths.length - listed.length;
+  const pathList = listed.length
+    ? listed.join("\n") + (more > 0 ? `\n… +${more} more files (see the FILE headers below)` : "")
+    : "(none)";
+  return `\n\nCHUNK ${idx + 1} OF ${total} — the app is split across parallel review steps. Directory summary of the whole repo (for orientation only):\n${directorySummary(fileTree)}\n\nFiles in THIS chunk:\n${pathList}\n\nFlag only issues you can verify in THIS chunk's code; do not report files you cannot see as missing.`;
+}
+
+// Strategist seat assignment. Its charter is UX / copy / flows, so it reads
+// only chunks with a UI surface (or pasted code, whose paths are opaque) and
+// never runs at all on an audit-only import.
+export const STRATEGIST_UI_PATH = /^src\/(routes|pages|components|app|screens|views)\//;
+export const STRATEGIST_UI_FILE = /\.(tsx|jsx|vue|svelte|css|scss|html|md)$/;
+export const STRATEGIST_UI_ROOT = /^(index\.html|tailwind\.config\.[a-z]+)$/;
+
+export function chunkHasUiSurface(paths: readonly string[]): boolean {
+  return paths.some((p) => STRATEGIST_UI_PATH.test(p) || STRATEGIST_UI_FILE.test(p) || STRATEGIST_UI_ROOT.test(p));
+}
+
+export function strategistInScope(workflow: ImportWorkflow | null | undefined): boolean {
+  if (!workflow) return true;
+  return workflow.requiresPlan || workflow.requiresDesign;
+}
+
+export function mapSeatsForChunk(args: {
+  smoke: boolean;
+  source: "github" | "paste";
+  chunkPaths: readonly string[];
+  strategist: boolean;
+}): readonly AuditMapSeat[] {
+  const seats = auditMapSeats(args.smoke);
+  if (!seats.includes("strategist")) return seats;
+  const ui = args.source === "paste" || chunkHasUiSurface(args.chunkPaths);
+  return args.strategist && ui ? seats : seats.filter((s) => s !== "strategist");
+}
+
+export type AuditMapInput = {
+  runId: string;
+  userId: string;
+  chunks: string[];
+  chunkPaths: string[][];
+  batchPrompt: string | null;
+  finalContract: ResolvedContract | null;
+  batchPlan: { content_md?: string | null; prd_md?: string | null } | null;
+  batchDesignBrief: string | null;
+  isFinal: boolean;
+  batchOutcome: string | null;
+  fileTree: string[];
+  scopeContract: string | null;
+  smoke: boolean;
+  source: "github" | "paste";
+  strategist: boolean;
+};
+
+// Pure. Builds every map-step row: run-constant blocks first (contract,
+// outcome, per-seat artifacts) so provider prefix caching can hit, the
+// chunk-specific orientation and CODE last.
+export function buildAuditMapRows(input: AuditMapInput): Array<Record<string, unknown>> {
+  const { isFinal, finalContract, chunks } = input;
   const contractBody = isFinal
     ? finalContract?.mode === "import_current_milestone"
       ? `FINAL A-Z AUDIT (CURRENT MILESTONE) — this is an imported app. Audit today's shipped code against the intake contract and any implemented improvement batches ONLY. Do NOT grade unbuilt future work; there is no locked improvement plan or design brief in scope for this run.`
       : `FINAL A-Z AUDIT — verify the whole app against the plan + PRD.`
-    : `BATCH CONTRACT (what this batch was supposed to do):\n\n${batchPrompt}`;
-  const contract = scopeContract ? `${scopeContract}\n\n${contractBody}` : contractBody;
-  const outcomeBlock = batchOutcome?.trim()
-    ? `\n\nOWNER-REPORTED OUTCOME (what Lovable actually said or did — errors, drift, surprises; investigate every claim):\n${batchOutcome.trim()}`
+    : `BATCH CONTRACT (what this batch was supposed to do):\n\n${input.batchPrompt}`;
+  const contract = input.scopeContract ? `${input.scopeContract}\n\n${contractBody}` : contractBody;
+  const outcomeBlock = input.batchOutcome?.trim()
+    ? `\n\nOWNER-REPORTED OUTCOME (what Lovable actually said or did — errors, drift, surprises; investigate every claim):\n${input.batchOutcome.trim()}`
     : "";
-  const manual = await loadFieldManual(admin);
   const multi = chunks.length > 1;
 
-  // Contract section is fixed per-run; batch audits use the current locked
+  // Contract is fixed per-run; batch audits use the current locked
   // plan/design (unchanged); final audits use the resolved contract mode.
-  const contractSection = isFinal && finalContract
-    ? renderContractSection(finalContract)
-    : renderContractSection({
-      planContentMd: batchPlan?.content_md ?? null,
-      prdMd: batchPlan?.prd_md ?? null,
-      designBrief: batchDesignBrief ?? null,
-      extraContext: "",
-      mode: "full_blueprint",
-    });
+  const base: AuditContractBase = isFinal && finalContract ? finalContract : {
+    planContentMd: input.batchPlan?.content_md ?? null,
+    prdMd: input.batchPlan?.prd_md ?? null,
+    designBrief: input.batchDesignBrief ?? null,
+    extraContext: "",
+    mode: "full_blueprint",
+  };
+  const seatSections = new Map<AuditMapSeat, string>();
+  const sectionFor = (seat: AuditMapSeat) => {
+    let v = seatSections.get(seat);
+    if (v === undefined) {
+      v = seatContractSection(seat, base);
+      seatSections.set(seat, v);
+    }
+    return v;
+  };
 
-  const rows: any[] = [];
+  const rows: Array<Record<string, unknown>> = [];
   chunks.forEach((code, idx) => {
-    const chunkNote = multi
-      ? `\n\nCHUNK ${idx + 1} OF ${chunks.length} — the app is split across parallel review steps. The full file tree (for orientation only):\n${fileTree.join("\n")}\n\nFlag only issues you can verify in THIS chunk's code; do not report files you cannot see as missing.\n\nFRAGMENT BOUNDARY RULE (hard): individual files in the CODE section may be split across chunks and shown as "=== FILE: <path> (fragment N of M) (<bytes> bytes) ===". A non-first fragment MAY start mid-token/mid-statement/mid-comment and a non-final fragment MAY end mid-token — that is packaging, not source truncation. Never report a file as truncated, malformed, or syntactically broken solely because a fragment starts or ends mid-token. Cite the original repo-relative path in file_path, never the fragment label.`
-      : "";
-    const user = `${contract}${outcomeBlock}${chunkNote}
+    const chunkPaths = input.chunkPaths[idx] ?? [];
+    const chunkNote = multi ? chunkOrientation(idx, chunks.length, input.fileTree, chunkPaths) : "";
+    const seats = mapSeatsForChunk({ smoke: input.smoke, source: input.source, chunkPaths, strategist: input.strategist });
+    for (const seat of seats) {
+      const user = `${contract}${outcomeBlock}
 
-${manual}
-
-${contractSection}
+${sectionFor(seat)}${chunkNote}
 
 CODE
 ${code}
 
 Produce your JSON now.`;
-    for (const seat of ["inspector", "contrarian", "strategist"] as const) {
       rows.push({
-        run_id: run.id,
-        user_id: run.user_id,
+        run_id: input.runId,
+        user_id: input.userId,
         step_key: multi ? `audit_${seat}_c${idx + 1}` : `audit_${seat}`,
         round: 1,
         seat,
@@ -443,7 +586,13 @@ Produce your JSON now.`;
       });
     }
   });
-  await admin.from("run_steps").insert(rows);
+  return rows;
+}
+
+async function insertAuditSteps(admin: any, input: AuditMapInput) {
+  const rows = buildAuditMapRows(input);
+  // Up to ~70 rows, several MB: read the result instead of assuming it landed.
+  assertStepInsertOk(await admin.from("run_steps").insert(rows), "audit map steps insert");
 }
 
 // Extracted for direct testability: proves every map/extraction request
@@ -498,6 +647,35 @@ async function priorHeadSha(admin: any, projectId: string): Promise<string | nul
   return data?.head_sha ?? null;
 }
 
+// Base for an incremental final audit: the newest successful final_az audit
+// of this project that read GitHub (head_sha set) and was NOT a smoke
+// rehearsal — a smoke audit read one chunk with one seat, so re-auditing
+// only what changed since it would skip almost the whole app.
+export async function priorSuccessfulFinalAudit(
+  admin: any,
+  projectId: string,
+): Promise<{ id: string; head_sha: string } | null> {
+  const { data } = await admin
+    .from("audits")
+    .select("id, head_sha, run_id")
+    .eq("project_id", projectId)
+    .eq("kind", "final_az")
+    .in("status", ["clean", "findings"])
+    .not("head_sha", "is", null)
+    .order("created_at", { ascending: false })
+    .limit(5);
+  const rows: Array<{ id: string; head_sha: string; run_id: string | null }> = data ?? [];
+  if (!rows.length) return null;
+  const runIds = rows.map((r) => r.run_id).filter((x): x is string => !!x);
+  const smokeRuns = new Set<string>();
+  if (runIds.length) {
+    const { data: runs } = await admin.from("boardroom_runs").select("id, consensus").in("id", runIds);
+    for (const r of runs ?? []) if (r?.consensus?.smoke === true) smokeRuns.add(String(r.id));
+  }
+  const pick = rows.find((r) => !(r.run_id && smokeRuns.has(r.run_id)));
+  return pick ? { id: pick.id, head_sha: pick.head_sha } : null;
+}
+
 async function beginAudit(params: {
   admin: any;
   userId: string;
@@ -509,8 +687,17 @@ async function beginAudit(params: {
   pastedCode: string | null;
   budget: number;
   workflow: ImportWorkflow | null;
+  /** Smoke audit (RC-9): one chunk, inspector only, $1 budget; the Chair merge still runs. */
+  smoke?: boolean;
+  /** Final audits re-read only what changed since the last successful one; this forces the whole tree. */
+  fullRescan?: boolean;
 }) {
-  const { admin, userId, project, batchId, kind, loopNo, source, pastedCode, budget, workflow } = params;
+  const { admin, userId, project, batchId, kind, loopNo, source, pastedCode, workflow } = params;
+  const smoke = params.smoke === true;
+  // A smoke run rehearses the pipeline on an unchanged HEAD, so it always
+  // reads the whole tree (and is never a base for an incremental audit).
+  const fullRescan = params.fullRescan === true || smoke;
+  const budget = smoke ? auditBudgetUsd(kind, true) : params.budget;
   const isFinal = kind === "final_az";
   const scopeContract = isFinal && project.is_import && workflow ? scopeContractForPrompt(workflow) : null;
 
@@ -596,28 +783,59 @@ async function beginAudit(params: {
   }
 
   let chunks: string[] = [];
+  let chunkPaths: string[][] = [];
   let fileTree: string[] = [];
   let filesAnalyzed = 0;
   let headSha: string | null = null;
   let baseSha: string | null = null;
+  let skippedPaths: string[] = [];
+  // Incremental final audit (RC-6): only the files changed since the prior
+  // successful final audit are mapped; finalizeAudit carries that audit's
+  // findings on untouched files forward.
+  let incremental: IncrementalAuditMeta | null = null;
 
   if (source === "github") {
     if (!project.github_repo) return { error: "No GitHub repo linked" as const };
     const token = await ghToken(admin, userId);
     if (!token) return { error: "GitHub not connected" as const };
-    baseSha = isFinal ? null : await priorHeadSha(admin, project.id);
+    let priorFinal: { id: string; head_sha: string } | null = null;
+    if (isFinal) {
+      priorFinal = fullRescan ? null : await priorSuccessfulFinalAudit(admin, project.id);
+      baseSha = priorFinal?.head_sha ?? null;
+    } else {
+      // The unchanged-HEAD error tells the founder to push or run a full
+      // rescan, so the flag must work for batch audits too.
+      baseSha = fullRescan ? null : await priorHeadSha(admin, project.id);
+    }
     try {
       const res = await assembleFromGithub(
         token,
         project.github_repo,
         isFinal
-          ? { baseSha, maxFiles: 200, maxTotalBytes: MAX_TOTAL_BYTES, preferKeyFiles: true }
-          : { baseSha },
+          ? { baseSha, maxFiles: 200, maxTotalBytes: MAX_TOTAL_BYTES, preferKeyFiles: true, foldMigrations: true }
+          : { baseSha, foldMigrations: true },
       );
-      chunks = chunkFiles(res.files);
+      const packed = chunkFiles(res.files);
+      chunks = packed.rendered;
+      chunkPaths = packed.paths;
       fileTree = res.fileTree;
-      filesAnalyzed = res.files.length;
+      // A smoke audit maps the first chunk only, so the audits row and the
+      // Chair's CODE COVERAGE line must count the files in that chunk, not
+      // the whole repo.
+      filesAnalyzed = smoke ? (packed.paths[0]?.length ?? 0) : res.files.length;
       headSha = res.headSha;
+      skippedPaths = res.skippedPaths;
+      if (isFinal && res.incremental && priorFinal && res.baseSha) {
+        incremental = {
+          prior_audit_id: priorFinal.id,
+          base_sha: res.baseSha,
+          changed_paths: res.changedPaths,
+          removed_paths: res.removedPaths,
+        };
+      }
+      // The compare failed (base commit gone?) so the whole tree was read;
+      // the audits row must not claim a base it did not diff against.
+      if (!res.incremental) baseSha = null;
     } catch (e) {
       return { error: (e as Error).message };
     }
@@ -629,7 +847,9 @@ async function beginAudit(params: {
     // MAX_PASTE_BYTES (200 KiB), well inside the 1.5 MiB total source ceiling.
     const trimmed = fitPasted(pastedCode);
     const encoded = new TextEncoder().encode(trimmed);
-    chunks = chunkFiles([{ path: "pasted-code", content: trimmed, bytes: encoded.length }]);
+    const packed = chunkFiles([{ path: "pasted-code", content: trimmed, bytes: encoded.length }]);
+    chunks = packed.rendered;
+    chunkPaths = packed.paths;
     filesAnalyzed = 1;
   }
 
@@ -658,6 +878,8 @@ async function beginAudit(params: {
       base_sha: baseSha,
       head_sha: headSha,
       files_analyzed: filesAnalyzed,
+      files_skipped: skippedPaths.length,
+      skipped_paths: skippedPaths.slice(0, SKIPPED_PATHS_PERSIST_MAX),
       status: "running",
       previous_project_status: previousProjectStatus,
     })
@@ -669,7 +891,14 @@ async function beginAudit(params: {
     audit_id: audit.id,
     audit_kind: kind,
     files_analyzed: filesAnalyzed,
+    files_skipped: skippedPaths.length,
+    skipped_paths: skippedPaths.slice(0, SKIPPED_PATHS_PROMPT_MAX),
   };
+  if (incremental) consensus.incremental = incremental;
+  if (smoke) {
+    consensus.smoke = true;
+    consensus.smoke_chunks = smokeAuditChunks(chunks.length);
+  }
   if (isFinal && auditContractMode) {
     consensus.audit_contract_mode = auditContractMode;
     consensus.included_batch_ids = includedBatchIds;
@@ -684,7 +913,10 @@ async function beginAudit(params: {
       project_id: project.id,
       user_id: userId,
       kind: "audit",
-      status: "queued",
+      // Seeded while 'paused' (ignored by the orchestrator tick, still covered
+      // by the one-active-per-kind index) and queued only once every map step
+      // exists — the per-minute cron used to fail a run it saw with no steps.
+      status: "paused",
       round_no: 1,
       loop_no: 0,
       budget_usd: budget,
@@ -702,19 +934,45 @@ async function beginAudit(params: {
   if (batchId) await admin.from("batches").update({ status: "auditing" }).eq("id", batchId);
   if (isFinal) await admin.from("projects").update({ status: "auditing" }).eq("id", project.id);
 
-  await insertAuditSteps(
-    admin,
-    run,
-    chunks,
-    batchPrompt,
-    finalContract,
-    batchPlan,
-    batchDesignBrief,
-    isFinal,
-    batchOutcome,
-    fileTree,
-    scopeContract,
-  );
+  // Seeding failed: fail the audits row and the run with the message (the
+  // run has no steps or siblings yet, so the orchestrator's failRun adds
+  // nothing) and hand a final audit's project back to the status it held
+  // before we flipped it to 'auditing'.
+  const failSeed = async (msg: string) => {
+    await admin.from("audits").update({ status: "failed", completed_at: new Date().toISOString() }).eq("id", audit.id);
+    await admin.from("boardroom_runs").update({ status: "failed", error: msg }).eq("id", run.id);
+    if (isFinal && previousProjectStatus) {
+      await admin.from("projects").update({ status: previousProjectStatus }).eq("id", project.id).eq("status", "auditing");
+    }
+    return { error: msg };
+  };
+  try {
+    await insertAuditSteps(admin, {
+      runId: run.id,
+      userId: run.user_id,
+      chunks: auditChunksForRun(chunks, smoke),
+      chunkPaths: auditChunksForRun(chunkPaths, smoke),
+      batchPrompt,
+      finalContract,
+      batchPlan,
+      batchDesignBrief,
+      isFinal,
+      batchOutcome,
+      fileTree,
+      scopeContract,
+      smoke,
+      source,
+      strategist: strategistInScope(workflow),
+    });
+  } catch (e) {
+    return await failSeed((e as Error)?.message ?? String(e));
+  }
+  const { error: flipErr } = await admin
+    .from("boardroom_runs")
+    .update({ status: "queued" })
+    .eq("id", run.id)
+    .eq("status", "paused");
+  if (flipErr) return await failSeed(`Audit seeded but could not be queued: ${flipErr.message}`);
   fireOrchestrator();
   return {
     audit_id: audit.id,
@@ -750,6 +1008,15 @@ Deno.serve(async (req) => {
   const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  // Smoke audit (RC-9): one chunk, inspector only, still merged, $1 budget.
+  // Admin-only — it is a pipeline check, not an audit of the product.
+  const smoke = body?.smoke === true;
+  if (smoke) {
+    const { data: isAdmin, error: roleErr } = await admin.rpc("has_role", { _user_id: userId, _role: "admin" });
+    if (roleErr) return j(500, { error: "Role check failed" });
+    if (isAdmin !== true) return j(403, { error: "Smoke audits are admin-only" });
+  }
 
   async function ownProject(project_id: string) {
     const { data } = await admin
@@ -799,6 +1066,8 @@ Deno.serve(async (req) => {
         admin, userId, project, batchId,
         kind: "batch", loopNo, source, pastedCode, budget: 5.0,
         workflow: null,
+        smoke,
+        fullRescan: body?.full_rescan === true,
       });
       if ("error" in res) return j(400, { error: res.error });
       return j(200, res);
@@ -880,6 +1149,8 @@ Deno.serve(async (req) => {
         admin, userId, project, batchId: null,
         kind: "final_az", loopNo: 1, source, pastedCode, budget: 12.0,
         workflow,
+        smoke,
+        fullRescan: body?.full_rescan === true,
       });
       if ("error" in res) return j(400, { error: res.error });
       return j(200, res);

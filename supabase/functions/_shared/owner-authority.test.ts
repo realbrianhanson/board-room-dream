@@ -611,3 +611,18 @@ Deno.test("OA-V3-R5: insertModelAuthoredBatchOrAlert boundary — leaked fix-bat
   assert(/proposal_requires_owner_approval/.test(err!));
   assert(/monetization_scope/.test(err!) || /payment_provider_or_checkout/.test(err!));
 });
+
+// RC-6: one owner-authority copy per call. The proxy prepends the
+// constitution; from v3 it carries the doctrine, so queueSteps stops adding
+// OWNER_AUTHORITY_RULES on top — except for change-request runs, whose
+// CR-identity clause only exists in the rules.
+Deno.test("ownerAuthorityRulesNeeded: skipped on constitution >= 3, kept for older runs and change requests", async () => {
+  const { ownerAuthorityRulesNeeded } = await import("./owner-authority.ts");
+  assertEquals(ownerAuthorityRulesNeeded({ constitution_version: 3, kind: "plan" }), false);
+  assertEquals(ownerAuthorityRulesNeeded({ constitution_version: 4, kind: "batches" }), false);
+  assertEquals(ownerAuthorityRulesNeeded({ constitution_version: 2, kind: "plan" }), true);
+  assertEquals(ownerAuthorityRulesNeeded({ constitution_version: null, kind: "plan" }), true);
+  assertEquals(ownerAuthorityRulesNeeded({ kind: "plan" }), true);
+  assertEquals(ownerAuthorityRulesNeeded(null), true);
+  assertEquals(ownerAuthorityRulesNeeded({ constitution_version: 3, kind: "change_request" }), true);
+});

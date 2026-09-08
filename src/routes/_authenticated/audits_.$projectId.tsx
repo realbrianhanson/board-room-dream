@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { ArrowRight, Check, ScrollText, ShieldCheck, RotateCcw } from "lucide-react";
+import { ArrowRight, Check, Play, ScrollText, ShieldCheck, RotateCcw } from "lucide-react";
 import { CodeSourcePicker } from "@/components/code-source-picker";
 import { GitHubRepoCard } from "@/components/github-repo-card";
 import { ProjectJourneyStrip } from "@/components/project-journey";
@@ -14,6 +14,8 @@ import {
 import { useProjectJourney } from "@/hooks/use-project-journey";
 import { extractFunctionsErrorMessage } from "@/lib/functions-error";
 import {
+  canOfferFullRescan,
+  canResumeFinal,
   canStartFinal,
   latestFinal as pickLatestFinal,
   previousFinals as pickPreviousFinals,
@@ -87,9 +89,16 @@ function AuditCenterPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  // Completed audit_* steps per failed final run — the paid work that
+  // "Resume where it stopped" keeps.
+  const [completedAuditSteps, setCompletedAuditSteps] = useState<Record<string, number>>({});
   const [showPaste, setShowPaste] = useState(false);
   const [pasted, setPasted] = useState("");
   const [showRetry, setShowRetry] = useState(false);
+  // GitHub final audits re-read only what changed since the last successful
+  // one by default; this forces the whole tree.
+  const [fullRescan, setFullRescan] = useState(false);
   const [strategyValidity, setStrategyValidity] = useState<StrategyPanelValidity | null>(null);
   const strategyPanelRef = useRef<StrategyPanelHandle | null>(null);
   // Persisted goals from the latest intake for this project. `null` means
@@ -198,6 +207,25 @@ function AuditCenterPage() {
       }
       setRunErrors(map);
     }
+    // Scoped to failed finals so the query stays a handful of rows.
+    const failedFinalRunIds = auditRows
+      .filter((a) => a.kind === "final_az" && a.status === "failed" && !!a.run_id)
+      .map((a) => a.run_id as string);
+    if (failedFinalRunIds.length === 0) {
+      setCompletedAuditSteps({});
+    } else {
+      const { data: doneSteps } = await supabase
+        .from("run_steps")
+        .select("run_id")
+        .in("run_id", failedFinalRunIds)
+        .eq("status", "completed")
+        .like("step_key", "audit_%");
+      const counts: Record<string, number> = {};
+      for (const s of (doneSteps ?? []) as Array<{ run_id: string }>) {
+        counts[s.run_id] = (counts[s.run_id] ?? 0) + 1;
+      }
+      setCompletedAuditSteps(counts);
+    }
     setLoading(false);
   }, [projectId]);
 
@@ -223,6 +251,7 @@ function AuditCenterPage() {
     try {
       const payload: Record<string, unknown> = { action: "start_final_audit", project_id: projectId, source };
       if (source === "paste") payload.pasted_code = pasted;
+      if (source === "github" && fullRescan) payload.full_rescan = true;
       const { data, error } = await supabase.functions.invoke("audit-runner", { body: payload });
       if (error) {
         const msg = await extractFunctionsErrorMessage(error);
@@ -247,6 +276,34 @@ function AuditCenterPage() {
   const previousFinalAudits = useMemo(() => pickPreviousFinals(audits), [audits]);
   const startAllowed = canStartFinal({ isOwner, audits, starting });
   const retryLabel = startCtaLabel(finalAudit);
+  const fullRescanOffered = !!ghRepo && canOfferFullRescan(audits);
+  const resumeAllowed = canResumeFinal({
+    isOwner,
+    latest: finalAudit,
+    completedAuditSteps: finalAudit?.run_id ? (completedAuditSteps[finalAudit.run_id] ?? 0) : 0,
+    resuming,
+  });
+
+  async function resumeFinalAudit() {
+    if (!finalAudit?.run_id || resuming) return;
+    setResuming(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("boardroom-orchestrator", {
+        body: { action: "resume_failed", run_id: finalAudit.run_id },
+      });
+      if (error) {
+        const msg = await extractFunctionsErrorMessage(error);
+        throw new Error(msg);
+      }
+      if ((data as any)?.error) throw new Error((data as any).error);
+      toast.success("Resuming the audit where it stopped.");
+      load();
+    } catch (err: any) {
+      toast.error(err?.message ?? "Failed to resume audit");
+    } finally {
+      setResuming(false);
+    }
+  }
   const findingsByAudit = useMemo(() => {
     const m = new Map<string, Finding[]>();
     for (const f of findings) {
@@ -636,13 +693,25 @@ function AuditCenterPage() {
             {isOwner && finalAudit.status !== "running" && (
               <div className="mt-5 border-t border-border/60 pt-4">
                 {!showRetry ? (
-                  <button
-                    onClick={() => setShowRetry(true)}
-                    data-testid="final-retry-cta"
-                    className="inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-4 py-2 text-sm text-foreground hover:border-primary/60"
-                  >
-                    <RotateCcw className="h-3.5 w-3.5" /> {retryLabel}
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {resumeAllowed && (
+                      <button
+                        onClick={resumeFinalAudit}
+                        disabled={resuming}
+                        data-testid="final-resume-cta"
+                        className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+                      >
+                        <Play className="h-3.5 w-3.5" /> {resuming ? "Resuming…" : "Resume where it stopped"}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setShowRetry(true)}
+                      data-testid="final-retry-cta"
+                      className="inline-flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-4 py-2 text-sm text-foreground hover:border-primary/60"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" /> {retryLabel}
+                    </button>
+                  </div>
                 ) : (
                   <div className="space-y-3">
                     <div className="flex flex-wrap items-center gap-2">
@@ -667,6 +736,21 @@ function AuditCenterPage() {
                         Cancel
                       </button>
                     </div>
+                    {fullRescanOffered && (
+                      <label className="flex items-start gap-2 text-xs text-muted-foreground">
+                        <input
+                          type="checkbox"
+                          checked={fullRescan}
+                          onChange={(e) => setFullRescan(e.target.checked)}
+                          data-testid="final-full-rescan"
+                          className="mt-0.5 h-3.5 w-3.5 accent-primary"
+                        />
+                        <span>
+                          Full rescan — re-read every file. By default only files changed since the last successful
+                          final audit are read and its findings on untouched files carry forward.
+                        </span>
+                      </label>
+                    )}
                     {!ghRepo && (
                       <GitHubRepoCard
                         projectId={projectId}

@@ -172,6 +172,29 @@ Deno.test("findings verdict entry: resolves older findings + archives + deletes 
   assertEquals(admin._state.audit_findings.every((f) => f.status === "resolved"), true);
 });
 
+Deno.test("keepBatchIds: a fix batch still referenced by carried-forward findings is resolved-from but never deleted", async () => {
+  const admin = makeAdmin({
+    audits: [
+      { id: "aNew", project_id: "p1", user_id: "u1", kind: "final_az" },
+      { id: "aOld", project_id: "p1", user_id: "u1", kind: "final_az" },
+    ],
+    findings: [
+      { id: "f1", audit_id: "aOld", status: "fix_drafted", severity: "P0", fix_batch_id: "bKeep" },
+      { id: "f2", audit_id: "aOld", status: "fix_drafted", severity: "P1", fix_batch_id: "bGone" },
+    ],
+    batches: [
+      { id: "bKeep", project_id: "p1", user_id: "u1", is_fix: true, status: "pending", sent_at: null, built_at: null, batch_no: 1 },
+      { id: "bGone", project_id: "p1", user_id: "u1", is_fix: true, status: "pending", sent_at: null, built_at: null, batch_no: 2 },
+    ],
+    archives: [],
+  });
+  const res = await supersedeOlderFinalAudits(admin as any, { ...CTX, keepBatchIds: new Set(["bKeep"]) });
+  assertEquals(res.resolved_finding_count, 2, "older rows are still resolved; the carried copies live under the new audit");
+  assertEquals(res.skipped_batch_ids, ["bKeep"]);
+  assertEquals(res.deleted_batch_ids, ["bGone"]);
+  assertEquals(admin._state.batches.map((b) => b.id), ["bKeep"]);
+});
+
 Deno.test("clean verdict entry: still runs supersession", async () => {
   // finalizeAudit calls the helper the same way regardless of verdict.
   const admin = makeAdmin({

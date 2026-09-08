@@ -7,10 +7,16 @@ import {
   compactMarkdown,
   COMPACT_ARTIFACT_CAP,
   COMPACT_REPO_TOTAL_BYTES,
+  CONTINUATION_INSTRUCTION,
+  CONTINUATION_RESTART_INSTRUCTION,
+  continuationPrefix,
+  HEAD_SLICE_NOTE,
   isBatchGenerationStep,
+  joinContinuation,
   MarkdownCompactionImpossible,
   MAX_BATCH_REQUEST_CHARS,
   renderCompactRepoContract,
+  safeCompactMarkdown,
   utf8Bytes,
 } from "./batch-context.ts";
 
@@ -292,6 +298,65 @@ Deno.test("buildValidationRetryRequest — near-cap base + oversized echo drops 
   assert(!msgs.some((m: any) => m.role === "assistant"), "assistant echo must be dropped");
 });
 
+Deno.test("buildValidationRetryRequest — TRUNCATED batches_chair / batches_revise_chair never echo the draft (RC-1)", () => {
+  const baseMessages = [
+    { role: "system", content: "OWNER AUTHORITY marker" },
+    { role: "user", content: "Draft the batches now." },
+  ];
+  for (const stepKey of ["batches_chair", "batches_revise_chair"]) {
+    const out = buildValidationRetryRequest({
+      stepKey,
+      baseRequest: { model: "chair", max_tokens: 8000, reasoning_effort: "low", messages: baseMessages },
+      baseMessages,
+      assistantContent: '{"batches":[{"batch_no":1,"title":"Foundation","channel":"lovable","prompt_md":"cut mid',
+      validationError: "Response was not parseable JSON.",
+      truncated: true,
+      correction: "TRUNCATION CORRECTION",
+    });
+    assertEquals(out.mode, "without_echo", `${stepKey} truncated retry must drop the echo`);
+    const msgs = (out.request as any).messages;
+    assertEquals(msgs.length, baseMessages.length + 1);
+    assert(!msgs.some((m: any) => m.role === "assistant"), "assistant echo must be dropped");
+    assertStringIncludes(msgs[msgs.length - 1].content, "TRUNCATION CORRECTION");
+    assertStringIncludes(msgs[msgs.length - 1].content, "do NOT reconstruct it verbatim");
+    // The builder never touches the budget — the orchestrator's retry bump owns that.
+    assertEquals((out.request as any).max_tokens, 8000);
+    assertEquals((out.request as any).reasoning_effort, "low");
+  }
+});
+
+Deno.test("buildValidationRetryRequest — NON-truncated batches_chair still echoes (invalid-but-complete JSON needs the echo)", () => {
+  const baseMessages = [{ role: "system", content: "OWNER AUTHORITY marker" }];
+  const out = buildValidationRetryRequest({
+    stepKey: "batches_chair",
+    baseRequest: { model: "chair", messages: baseMessages },
+    baseMessages,
+    assistantContent: '{"batches":[]}',
+    validationError: "batches must contain 3-8 items.",
+    truncated: false,
+    correction: "c",
+  });
+  assertEquals(out.mode, "with_echo");
+});
+
+Deno.test("buildValidationRetryRequest — truncated batches_chair over the cap even without echo throws BatchContextTooLarge", () => {
+  const oversized = "z".repeat(MAX_BATCH_REQUEST_CHARS + 5_000);
+  const baseMessages = [{ role: "system", content: oversized }];
+  assertThrows(
+    () =>
+      buildValidationRetryRequest({
+        stepKey: "batches_chair",
+        baseRequest: { model: "chair", messages: baseMessages },
+        baseMessages,
+        assistantContent: "x",
+        validationError: "e",
+        truncated: true,
+        correction: "c",
+      }),
+    BatchContextTooLarge,
+  );
+});
+
 Deno.test("buildValidationRetryRequest — impossible base (already over cap) throws BatchContextTooLarge", () => {
   const oversized = "z".repeat(MAX_BATCH_REQUEST_CHARS + 5_000);
   const baseMessages = [{ role: "system", content: oversized }];
@@ -448,4 +513,183 @@ Deno.test("oversized artifact injection fails closed via assertBatchRequestSize 
   // silently drop the owner/features/draft context that already fits.
   msgs[1].content = msgs[1].content + "\n\n" + "P".repeat(30_000);
   assertThrows(() => assertBatchRequestSize("batches_chair", request), BatchContextTooLarge);
+});
+
+// ============================== RC-4: markdown continuation ==============================
+
+const CONT_BASE = [
+  { role: "system", content: "Round 3 — Chair synthesis. Write the design brief." },
+  { role: "user", content: "INTAKE ... Write the candidate document now." },
+];
+
+Deno.test("buildValidationRetryRequest — continuation replays the text so far and asks for the remainder at low effort", () => {
+  const sofar = "## Direction\n\nBold, editorial.\n\n## Tokens (CSS variables, HSL)\n\n--primary: 222 47% 1";
+  const out = buildValidationRetryRequest({
+    stepKey: "r3_draft_chair_loop0",
+    baseRequest: { reasoning_effort: "medium", max_tokens: 10000, temperature: 0.4, messages: CONT_BASE },
+    baseMessages: CONT_BASE,
+    assistantContent: sofar,
+    validationError: "truncated markdown",
+    truncated: true,
+    continuation: true,
+    correction: "(unused for markdown)",
+  });
+  assertEquals(out.mode, "continuation");
+  const msgs = out.request.messages as any[];
+  assertEquals(msgs.length, CONT_BASE.length + 2);
+  assertEquals(msgs[msgs.length - 2], { role: "assistant", content: sofar });
+  assertEquals(msgs[msgs.length - 1], { role: "user", content: CONTINUATION_INSTRUCTION });
+  assertEquals(out.request.reasoning_effort, "low");
+  assertEquals(out.request.max_tokens, 10000, "the visible cap is left to the caller");
+  assertEquals(out.request.temperature, 0.4);
+  assertEquals(CONTINUATION_INSTRUCTION, "Continue exactly from the last complete sentence. Do not repeat anything.");
+  // The correction copy is never sent on a continuation.
+  assert(!JSON.stringify(msgs).includes("(unused for markdown)"));
+});
+
+Deno.test("buildValidationRetryRequest — continuation with NO visible text restarts without an empty assistant turn", () => {
+  const out = buildValidationRetryRequest({
+    stepKey: "r1_draft_chair",
+    baseRequest: { reasoning_effort: "medium", max_tokens: 8000, messages: CONT_BASE },
+    baseMessages: CONT_BASE,
+    assistantContent: "  \n",
+    validationError: "truncated markdown",
+    truncated: true,
+    continuation: true,
+    correction: "x",
+  });
+  assertEquals(out.mode, "without_echo");
+  const msgs = out.request.messages as any[];
+  assertEquals(msgs.length, CONT_BASE.length + 1);
+  assertEquals(msgs[msgs.length - 1], { role: "user", content: CONTINUATION_RESTART_INSTRUCTION });
+  assertEquals(msgs.some((m) => m.role === "assistant"), false);
+  assertEquals(out.request.reasoning_effort, "low");
+  // Joining on completion is the identity for this shape.
+  assertEquals(continuationPrefix({ ...out.request, _validation_retry_mode: out.mode }), "");
+});
+
+Deno.test("buildValidationRetryRequest — the continuation flag is opt-in; a truncated JSON step still takes the correction path", () => {
+  const out = buildValidationRetryRequest({
+    stepKey: "r4_vote_inspector_loop0",
+    baseRequest: { json_output: true, max_tokens: 3500, messages: CONT_BASE },
+    baseMessages: CONT_BASE,
+    assistantContent: "{\"scores\": {",
+    validationError: "not parseable",
+    truncated: true,
+    correction: "Return the vote JSON only.",
+  });
+  assertEquals(out.mode, "with_echo");
+  const last = (out.request.messages as any[]).at(-1);
+  assertEquals(last.content, "Return the vote JSON only.");
+  assertEquals("reasoning_effort" in out.request, false);
+});
+
+Deno.test("buildValidationRetryRequest — a JSON correction never echoes an EMPTY assistant turn (reasoning ate the whole budget)", () => {
+  // isRefusal no longer swallows empty+length, so an all-reasoning answer
+  // reaches the correction pass on its first attempt; an empty assistant
+  // message is a provider 400, which would waste the widened retry.
+  for (const [content, truncated] of [["", true], ["  \n\t", true], ["", false]] as Array<[string, boolean]>) {
+    const out = buildValidationRetryRequest({
+      stepKey: "r4_vote_inspector_loop0",
+      baseRequest: { json_output: true, max_tokens: 3500, messages: CONT_BASE },
+      baseMessages: CONT_BASE,
+      assistantContent: content,
+      validationError: "Response was not parseable JSON.",
+      truncated,
+      correction: "Return the vote JSON only.",
+    });
+    assertEquals(out.mode, "without_echo", `content=${JSON.stringify(content)} truncated=${truncated}`);
+    const msgs = out.request.messages as any[];
+    assertEquals(msgs.length, CONT_BASE.length + 1);
+    assertEquals(msgs.some((m) => m.role === "assistant"), false);
+    assertEquals(msgs.at(-1).role, "user");
+    assertStringIncludes(msgs.at(-1).content, truncated ? "Return the vote JSON only." : "Response was not parseable JSON.");
+    assertStringIncludes(msgs.at(-1).content, "Retry note");
+  }
+  // Batch-generation steps keep the hard cap on this path too.
+  const huge = [{ role: "system", content: "s" }, { role: "user", content: "u".repeat(MAX_BATCH_REQUEST_CHARS) }];
+  assertThrows(
+    () => buildValidationRetryRequest({
+      stepKey: "batches_chair",
+      baseRequest: { json_output: true, messages: huge },
+      baseMessages: huge,
+      assistantContent: "",
+      validationError: "x",
+      truncated: true,
+      correction: "c",
+    }),
+    BatchContextTooLarge,
+  );
+});
+
+Deno.test("continuationPrefix — reads the replayed assistant turn only for continuation-mode requests", () => {
+  const msgs = [...CONT_BASE, { role: "assistant", content: "half" }, { role: "user", content: CONTINUATION_INSTRUCTION }];
+  assertEquals(continuationPrefix({ _validation_retry_mode: "continuation", messages: msgs }), "half");
+  assertEquals(continuationPrefix({ _validation_retry_mode: "with_echo", messages: msgs }), "");
+  assertEquals(continuationPrefix({ messages: msgs }), "");
+  assertEquals(continuationPrefix({ _validation_retry_mode: "continuation", messages: CONT_BASE }), "");
+  assertEquals(continuationPrefix({ _validation_retry_mode: "continuation", messages: [{ role: "assistant", content: [{ type: "text", text: "x" }] }, { role: "user", content: "c" }] }), "");
+  assertEquals(continuationPrefix(null), "");
+});
+
+Deno.test("joinContinuation — mid-word cut concatenates with no separator", () => {
+  assertEquals(joinContinuation("The signature elem", "ent is a hairline rule."), "The signature element is a hairline rule.");
+  assertEquals(joinContinuation("## Motion\n\nUse 200ms", "\n\n## Component rules\n\nButtons: pill."), "## Motion\n\nUse 200ms\n\n## Component rules\n\nButtons: pill.");
+});
+
+Deno.test("joinContinuation — a restated partial last line is not duplicated", () => {
+  const head = "## Type\n\nBody copy uses Inter at 16px with a 1.5 line";
+  const tail = "Body copy uses Inter at 16px with a 1.5 line height.\n\n## Spacing & shape";
+  assertEquals(joinContinuation(head, tail), "## Type\n\nBody copy uses Inter at 16px with a 1.5 line height.\n\n## Spacing & shape");
+  // Short trailing fragments are never treated as overlap (too easy to match by accident).
+  assertEquals(joinContinuation("Use\nthe", "the rest"), "Use\nthethe rest");
+});
+
+Deno.test("joinContinuation — a restated partial trailing SENTENCE (suffix of the last line) is not duplicated", () => {
+  // "Continue exactly from the last complete sentence" invites the model to
+  // re-emit the sentence that was cut, which is a suffix of the last line.
+  const head = "## Tokens\n\nPrimary is a deep navy. The signature element is a hairline rule that";
+  const tail = "The signature element is a hairline rule that runs under every H2.\n\n## Motion";
+  assertEquals(
+    joinContinuation(head, tail),
+    "## Tokens\n\nPrimary is a deep navy. The signature element is a hairline rule that runs under every H2.\n\n## Motion",
+  );
+  // Leading whitespace before the restated fragment is ignored for matching.
+  assertEquals(
+    joinContinuation("Body copy uses Inter at 16px with a 1.5 line", "\n\n16px with a 1.5 line height."),
+    "Body copy uses Inter at 16px with a 1.5 line height.",
+  );
+  // The longest overlap wins: a suffix that spans the previous line break.
+  assertEquals(
+    joinContinuation("## A\n\nFirst sentence here.\nSecond one that", "First sentence here.\nSecond one that ends.\n"),
+    "## A\n\nFirst sentence here.\nSecond one that ends.\n",
+  );
+  // A genuine mid-word continuation with an accidental short match stays a plain concat.
+  assertEquals(joinContinuation("the rule of the", "the road"), "the rule of thethe road");
+});
+
+Deno.test("joinContinuation — empty halves", () => {
+  assertEquals(joinContinuation("", "whole"), "whole");
+  assertEquals(joinContinuation("whole", ""), "whole");
+  assertEquals(joinContinuation("", ""), "");
+});
+
+// ============================== RC-4: safe compaction for the design R3 diet ==============================
+
+Deno.test("safeCompactMarkdown — delegates to compactMarkdown when headings fit", () => {
+  const { md, headings } = makeMarkdownFixture(22_000, ["# Plan", "## Concept", "## MVP features", "## Data stored", "## Cuts"]);
+  const out = safeCompactMarkdown(md, 8_000);
+  assert(out.length <= 8_000);
+  for (const h of headings) assertStringIncludes(out, h);
+  assertEquals(safeCompactMarkdown("short", 8_000), "short");
+  assertEquals(safeCompactMarkdown(null, 8_000), "");
+});
+
+Deno.test("safeCompactMarkdown — heading-heavy documents fall back to a bounded head slice with a note instead of throwing", () => {
+  const md = Array.from({ length: 400 }, (_, i) => `## Section ${i} with a deliberately long heading line to blow the cap`).join("\n");
+  assertThrows(() => compactMarkdown(md, 2_000), MarkdownCompactionImpossible);
+  const out = safeCompactMarkdown(md, 2_000);
+  assert(out.length <= 2_000);
+  assert(out.endsWith(HEAD_SLICE_NOTE));
+  assertStringIncludes(out, "## Section 0");
 });
