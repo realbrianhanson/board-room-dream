@@ -1,5 +1,5 @@
 // Smoke mode (RC-9): the $1 rehearsal every later fix is validated with.
-// Pins the budget, the single chunk, the single seat, the loop cap, the
+// Pins the budget, the single chunk, the single seat, the smoke loop cap, the
 // three-batch policy, the one-reviewer review, the consensus marker carry-over
 // and the smoke-seat resolution order.
 // Run: cd supabase/functions && deno test boardroom-orchestrator/smoke-mode.test.ts
@@ -12,7 +12,6 @@ import {
   FULL_LOOP_CAP,
   isSmokeRun,
   keepSmoke,
-  loopCap,
   resolveSmokeSource,
   runBudgetUsd,
   SMOKE_BUDGET_USD,
@@ -23,7 +22,7 @@ import {
 } from "../_shared/smoke-mode.ts";
 import { batchPromptPolicy } from "../_shared/batch-count-policy.ts";
 import { applySmokeSource, type SeatRow } from "../_shared/openrouter-proxy.ts";
-import { validateStepJson } from "./protocol.ts";
+import { synthesisLoopCap, validateStepJson } from "./protocol.ts";
 
 // -------- budget --------
 
@@ -95,15 +94,14 @@ Deno.test("audit-runner / queues.ts — smoke_chunks is stored at seed time and 
 
 // -------- plan / design: loop cap --------
 
-Deno.test("loopCap — three revision loops normally, none in smoke mode", () => {
+Deno.test("loop cap — a smoke run never loops, even when the admin setting allows three", () => {
   assertEquals(FULL_LOOP_CAP, 3);
   assertEquals(SMOKE_LOOP_CAP, 1);
-  assertEquals(loopCap(false), 3);
-  assertEquals(loopCap(true), 1);
-  // afterStepComplete re-queues Round 3 while nextLoop < loopCap.
+  assertEquals(synthesisLoopCap({ consensus: { smoke: true } }, { loops: FULL_LOOP_CAP }), SMOKE_LOOP_CAP);
+  // afterStepComplete re-queues Round 3 while nextLoop < cap.
   const nextLoopAfterFirstVote = 1;
-  assert(nextLoopAfterFirstVote < loopCap(false), "full run loops again");
-  assert(!(nextLoopAfterFirstVote < loopCap(true)), "smoke run goes to the ruling");
+  assert(nextLoopAfterFirstVote < synthesisLoopCap({ consensus: null }, { loops: FULL_LOOP_CAP }), "a raised full run loops again");
+  assert(!(nextLoopAfterFirstVote < synthesisLoopCap({ consensus: { smoke: true } }, { loops: FULL_LOOP_CAP })), "smoke run goes to the ruling");
 });
 
 // -------- batches: three batches, one reviewer --------

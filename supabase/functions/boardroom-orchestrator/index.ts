@@ -21,6 +21,9 @@ import {
   lastCandidateLoop,
   checkConsensus,
   resolveConsensusThreshold,
+  resolveSynthesisLoopCap,
+  scorecardDecisionEntry,
+  voteScorecard,
   validateStepJson,
   normalizeStepJson,
   degradedStepJson,
@@ -46,7 +49,7 @@ import {
   RepoContractUnavailable,
 } from "./queues.ts";
 import { BatchContextTooLarge, MarkdownCompactionImpossible, buildValidationRetryRequest, continuationPrefix, joinContinuation } from "../_shared/batch-context.ts";
-import { isSmokeRun, keepSmoke, loopCap, runBudgetUsd } from "../_shared/smoke-mode.ts";
+import { isSmokeRun, keepSmoke, runBudgetUsd } from "../_shared/smoke-mode.ts";
 import { tryCloseJsonTail, tryRecoverTrailingRedundantCloser } from "../_shared/audit-findings.ts";
 import { extractJsonCandidate, repairTruncatedStepJson } from "../_shared/json-extract.ts";
 import {
@@ -756,8 +759,8 @@ async function lockPlanAndQueueBlueprint(
   // override — but a candidate that violates owner-authority is now sent
   // through a bounded Chair authority-correction step (up to
   // AUTHORITY_CORRECTION_MAX attempts) before the run is terminated. This is
-  // orthogonal to the 3-loop consensus protocol: dissent and loop_no are
-  // preserved verbatim on the run.
+  // orthogonal to the synthesis-loop consensus protocol: dissent and loop_no
+  // are preserved verbatim on the run.
   let authority: Awaited<ReturnType<typeof loadOwnerAuthority>>;
   try {
     authority = await loadOwnerAuthority(admin, {
@@ -821,7 +824,12 @@ async function lockPlanAndQueueBlueprint(
     return m ? Number(m[1]) : -1;
   }));
   const latestVotes = voteSteps.filter((v: any) => v.step_key.endsWith(`_loop${latestLoop}`));
-  const { scores } = checkConsensus(latestVotes, run.kind);
+  const threshold = await resolveConsensusThreshold(admin, run.user_id);
+  const { scores } = checkConsensus(latestVotes, run.kind, threshold);
+  // The vote as a scorecard (derived from the stored vote steps, no model
+  // call): on the run for the UI, in the decision log for the record.
+  const scorecard = voteScorecard(latestVotes, run.kind, threshold, mode === "consensus");
+  decisionLog.push(scorecardDecisionEntry(scorecard));
 
   const { data: inserted } = await admin
     .from("plan_versions")
@@ -847,7 +855,7 @@ async function lockPlanAndQueueBlueprint(
       .from("boardroom_runs")
       .update({
         status: finalStatus,
-        consensus: keepSmoke(run, { scores, plan_version_id: inserted?.id ?? null }),
+        consensus: keepSmoke(run, { scores, scorecard, plan_version_id: inserted?.id ?? null }),
         dissent_ledger: dissentLedger,
         updated_at: new Date().toISOString(),
       })
@@ -865,6 +873,7 @@ async function lockPlanAndQueueBlueprint(
       consensus: keepSmoke(run, {
         pending_final_status: mode,
         scores,
+        scorecard,
         plan_version_id: inserted?.id ?? null,
       }),
       dissent_ledger: dissentLedger,
@@ -958,7 +967,7 @@ async function finalizeBlueprint(admin: any, run: any, steps: any[]) {
     .from("boardroom_runs")
     .update({
       status: finalStatus,
-      consensus: keepSmoke(run, meta.scores ?? {}),
+      consensus: keepSmoke(run, { ...(meta.scores ?? {}), ...(meta.scorecard ? { scorecard: meta.scorecard } : {}) }),
       updated_at: new Date().toISOString(),
     })
     .eq("id", run.id);
@@ -2042,8 +2051,10 @@ async function advanceRun(admin: any, runIn: any) {
       return;
     }
     const nextLoop = loop + 1;
-    // Three revision loops normally; a smoke run goes straight to the ruling.
-    if (nextLoop < loopCap(isSmokeRun(run))) {
+    // One synthesis loop by default (vote once, then the Chair rules); the
+    // admin setting max_synthesis_loops can allow up to three. A smoke run
+    // always goes straight to the ruling.
+    if (nextLoop < await resolveSynthesisLoopCap(admin, run)) {
       await queueRound3(admin, run, steps, nextLoop);
       await admin
         .from("boardroom_runs")

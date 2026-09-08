@@ -34,6 +34,7 @@ import {
   candidateForLoop,
   lastCandidateLoop,
   resolveConsensusThreshold,
+  synthesisLoopsPhrase,
 } from "./protocol.ts";
 import { deriveImportWorkflow, type ImportWorkflow } from "../_shared/import-workflow.ts";
 import { scopeContractForPrompt } from "../_shared/import-scope-gates.ts";
@@ -669,11 +670,11 @@ Resolution discipline: an objection is "resolved" ONLY if you can quote the exac
 export async function queueFinalRuling(admin: any, run: any, steps: any[]) {
   const intake = await loadIntake(admin, run.project_id);
   const lastCandidate = candidateForLoop(steps, lastCandidateLoop(steps));
-  const lastLoop = run.loop_no; // by now already incremented to 3
+  const lastLoop = run.loop_no; // by now already incremented past the last loop, so it counts the loops run
   const previousLoop = Math.max(0, lastLoop - 1);
   const failure = priorRoundFailureBlock(steps, previousLoop, await resolveConsensusThreshold(admin, run.user_id));
   const scope = await getScopeContract(admin, run);
-  const system = withScope(scope, `The board has failed to reach consensus after three synthesis loops. You are the Chair — RULE. Accept some outstanding objections, reject others, and produce the final plan. This is a chair-ruled plan, not a consensus plan.
+  const system = withScope(scope, `The board has failed to reach consensus after ${synthesisLoopsPhrase(lastLoop)}. You are the Chair — RULE. Accept some outstanding objections, reject others, and produce the final plan. This is a chair-ruled plan, not a consensus plan.
 
 Return ONLY valid JSON matching this shape:
 {

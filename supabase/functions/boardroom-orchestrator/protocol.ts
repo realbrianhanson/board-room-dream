@@ -1,9 +1,11 @@
 // deno-lint-ignore-file no-explicit-any
 // The board's protocol: seats, rubrics, step validation, consensus rules,
 // and the pure helpers that read candidate documents out of step history.
-// No step queuing here; the only I/O is the consensus-threshold lookup.
+// No step queuing here; the only I/O is the consensus-threshold and
+// synthesis-loop-cap lookups.
 
 import { CAPS, evaluateChairMergeCandidate } from "../_shared/audit-findings.ts";
+import { FULL_LOOP_CAP, isSmokeRun, SMOKE_LOOP_CAP } from "../_shared/smoke-mode.ts";
 
 export const SEATS = ["chair", "strategist", "contrarian", "inspector"] as const;
 
@@ -519,4 +521,99 @@ export function checkConsensus(voteSteps: any[], kind: string = "plan", threshol
     if (Array.isArray(j.blocking_objections) && j.blocking_objections.length > 0) pass = false;
   }
   return { pass, scores: scoreSets };
+}
+
+
+// ============================== Synthesis loops / scorecard ==============================
+
+// How many Chair synthesis loops a plan/design run gets before the Chair
+// rules. Production evidence: no run ever reached consensus after loop 0,
+// and loops 1-2 added ~40% of a run's cost without changing the outcome, so
+// the default is ONE loop (vote once, then rule). An admin can raise it via
+// app_settings key "max_synthesis_loops" = {"loops": N}, clamped to
+// 1..FULL_LOOP_CAP; a smoke run is always one loop.
+export const DEFAULT_SYNTHESIS_LOOPS = 1;
+export const MAX_SYNTHESIS_LOOPS = FULL_LOOP_CAP;
+
+export function synthesisLoopCap(run: { consensus?: unknown } | null | undefined, setting: unknown): number {
+  if (isSmokeRun(run)) return SMOKE_LOOP_CAP;
+  const n = Number((setting as { loops?: unknown } | null | undefined)?.loops);
+  if (!Number.isFinite(n)) return DEFAULT_SYNTHESIS_LOOPS;
+  return Math.max(1, Math.min(MAX_SYNTHESIS_LOOPS, Math.floor(n)));
+}
+
+// Same short module-scope cache the proxy uses for the constitution: warm
+// isolates skip the read, an admin edit lands within the TTL.
+const LOOP_CAP_TTL_MS = 30_000;
+let _loopCapSetting: { value: unknown; at: number } | null = null;
+
+export async function resolveSynthesisLoopCap(admin: any, run: any): Promise<number> {
+  const now = Date.now();
+  if (!_loopCapSetting || now - _loopCapSetting.at >= LOOP_CAP_TTL_MS) {
+    let value: unknown = null;
+    try {
+      const { data } = await admin
+        .from("app_settings")
+        .select("value")
+        .eq("key", "max_synthesis_loops")
+        .maybeSingle();
+      value = data?.value ?? null;
+    } catch { /* default */ }
+    _loopCapSetting = { value, at: now };
+  }
+  return synthesisLoopCap(run, _loopCapSetting.value);
+}
+
+/** "the synthesis loop" for one loop, "two synthesis loops" for two, ... */
+export function synthesisLoopsPhrase(loops: number): string {
+  const n = Math.max(1, Math.floor(Number(loops) || 0));
+  if (n === 1) return "the synthesis loop";
+  const word = n === 2 ? "two" : n === 3 ? "three" : String(n);
+  return `${word} synthesis loops`;
+}
+
+// The vote as a scorecard: one row per voting seat (mean and minimum rubric
+// score, count of blocking objections), derived from the vote steps that
+// already exist. Persisted on the run and on the plan version so the
+// outcome of the vote survives without re-reading the transcript. A seat
+// whose vote is missing (or unparseable, scores:null) reads as mean/min null.
+export const VOTING_SEATS = ["strategist", "contrarian", "inspector"] as const;
+export type VotingSeat = typeof VOTING_SEATS[number];
+export type SeatScorecard = { mean: number | null; min: number | null; blocking: number };
+export type Scorecard = {
+  threshold: number;
+  passed: boolean;
+  seats: Record<VotingSeat, SeatScorecard>;
+};
+
+export function voteScorecard(voteSteps: any[], kind: string, threshold: number, passed: boolean): Scorecard {
+  const rubric = rubricForKind(kind);
+  const seats = {} as Record<VotingSeat, SeatScorecard>;
+  for (const seat of VOTING_SEATS) {
+    const v = voteSteps.find((x: any) => x?.seat === seat);
+    const j = v?.response_json ?? {};
+    const nums = rubric.map((k) => Number(j?.scores?.[k])).filter((n) => Number.isFinite(n));
+    const mean = nums.length ? Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 10) / 10 : null;
+    const min = nums.length ? Math.min(...nums) : null;
+    const blocking = Array.isArray(j?.blocking_objections) ? j.blocking_objections.length : 0;
+    seats[seat] = { mean, min, blocking };
+  }
+  return { threshold, passed, seats };
+}
+
+/** The decision_log entry that carries the scorecard on plan_versions. */
+export function scorecardDecisionEntry(scorecard: Scorecard): Record<string, unknown> {
+  const line = VOTING_SEATS
+    .map((s) => {
+      const c = scorecard.seats[s];
+      const mean = c.mean == null ? "no score" : `${c.mean} (min ${c.min})`;
+      return `${s} ${mean}, ${c.blocking} blocking`;
+    })
+    .join("; ");
+  return {
+    from_seat: "board",
+    decision: "scorecard",
+    reason: `${scorecard.passed ? "Consensus" : "Chair ruled"} at threshold ${scorecard.threshold}: ${line}.`,
+    scorecard,
+  };
 }

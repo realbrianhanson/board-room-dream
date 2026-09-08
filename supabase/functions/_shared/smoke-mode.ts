@@ -12,7 +12,11 @@ import { batchPromptPolicy, type BatchPromptPolicy } from "./batch-count-policy.
 
 export const SMOKE_BUDGET_USD = 1.0;
 
-/** Revision loops before the Chair rules: three normally, none in smoke mode. */
+/**
+ * Ceiling on Chair synthesis loops before the Chair rules (the admin setting
+ * is clamped to it) and the fixed cap for a smoke run. The per-run decision
+ * lives in protocol.ts synthesisLoopCap.
+ */
 export const FULL_LOOP_CAP = 3;
 export const SMOKE_LOOP_CAP = 1;
 
@@ -90,11 +94,6 @@ export function auditMapSeats(smoke: boolean): readonly AuditMapSeat[] {
 /** A smoke batches run gets one reviewer (the inspector) instead of two. */
 export function batchesReviewSeats(smoke: boolean): readonly BatchesReviewSeat[] {
   return smoke ? ["inspector"] : ALL_BATCHES_REVIEW_SEATS;
-}
-
-/** `nextLoop < loopCap(smoke)` decides whether Round 3 is re-queued. */
-export function loopCap(smoke: boolean): number {
-  return smoke ? SMOKE_LOOP_CAP : FULL_LOOP_CAP;
 }
 
 // Smoke batches reuse the import policy's floor (three batches, the smallest
