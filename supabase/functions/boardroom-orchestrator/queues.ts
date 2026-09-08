@@ -28,6 +28,7 @@ import {
   draftsBlock,
   objectionsAndStealsBlock,
   priorRoundFailureBlock,
+  promptJson,
   candidateForLoop,
   lastCandidateLoop,
 } from "./protocol.ts";
@@ -789,7 +790,7 @@ Return ONLY valid JSON matching this shape:
 export async function queueChangeRequestVerdict(admin: any, run: any, cr: any, plan: any, steps: any[]) {
   const stances = SEATS.map((s) => {
     const step = steps.find((x) => x.step_key === `cr_exam_${s}` && x.status === "completed");
-    return `--- ${SEAT_LABEL[s]} ---\n${JSON.stringify(step?.response_json ?? { missing: true }, null, 2)}`;
+    return `--- ${SEAT_LABEL[s]} ---\n${JSON.stringify(promptJson(step?.response_json ?? { missing: true }), null, 2)}`;
   }).join("\n\n");
   const system = `Change Request verdict. You are the Chair. Rule on the change based on the four seats' stances.
 
@@ -1217,7 +1218,7 @@ export async function queueBatchesRevise(admin: any, run: any, draftJson: any, r
       ? plan!.features.map((f: any) => `- [${f.priority}] ${f.name}: ${f.description}`).join("\n")
       : "(none listed)";
   const issues = reviewSteps
-    .map((s: any) => `--- ${SEAT_LABEL[s.seat as Seat]} ---\n${JSON.stringify(s.response_json ?? { missing: true }, null, 2)}`)
+    .map((s: any) => `--- ${SEAT_LABEL[s.seat as Seat]} ---\n${JSON.stringify(promptJson(s.response_json ?? { missing: true }), null, 2)}`)
     .join("\n\n");
   const revisePolicy = batchPromptPolicy(isImport);
   const batchRangeText = revisePolicy.rangeText;

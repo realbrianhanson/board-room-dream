@@ -74,12 +74,25 @@ export function draftsBlock(steps: any[], forSeat?: Seat) {
 }
 
 
+// A step's stored response_json as it may be re-sent to the NEXT model.
+// The orchestrator persists a diagnostic `_meta` (finish_reason, token
+// counts, wire cap, fallback) on every step row; that is for the UI and for
+// humans reading the row, never prompt material — stringifying it into a
+// later prompt leaks internal budgets and invites the model to echo the key
+// back. Pure; non-objects and arrays pass through untouched.
+export function promptJson(json: any): any {
+  if (!json || typeof json !== "object" || Array.isArray(json)) return json;
+  const { _meta: _omit, ...rest } = json;
+  return rest;
+}
+
+
 export function objectionsAndStealsBlock(steps: any[]) {
   const parts: string[] = [];
   for (const s of SEATS) {
     const step = steps.find((x) => x.step_key === `r2_exam_${s}` && x.status === "completed");
     if (!step?.response_json) continue;
-    const j = step.response_json;
+    const j = promptJson(step.response_json);
     parts.push(`--- ${SEAT_LABEL[s]} (${s}) — OBJECTIONS AND STEALS ---
 ${JSON.stringify(j, null, 2)}`);
   }

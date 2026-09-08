@@ -1,7 +1,7 @@
 // Deterministic routing assertions for correctionForStep + review validator.
 // Run: cd supabase/functions && deno test boardroom-orchestrator/correction.test.ts
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { correctionForStep, validateStepJson } from "./protocol.ts";
+import { correctionForStep, objectionsAndStealsBlock, promptJson, validateStepJson } from "./protocol.ts";
 
 Deno.test("correctionForStep — batch generation routes to batches copy (contract-consistent range, no exactly-six mandate)", () => {
   for (const k of ["batches_chair", "batches_revise_chair"]) {
@@ -180,3 +180,32 @@ Deno.test("validateStepJson — audit_chair_merge catches over-9,000 serialized 
 });
 
 
+
+// RC-1 follow-up: every completed step now carries a diagnostic `_meta`
+// (finish_reason, tokens_out, reasoning_tokens, wire_max_tokens, fallback)
+// in response_json. It must never be re-sent to the next model.
+Deno.test("promptJson — strips _meta before a step's JSON is re-sent as prompt material", () => {
+  const stored = { objections: [{ target_seat: "chair", severity: "major", text: "x" }], steals: [], _meta: { finish_reason: "stop", tokens_out: 900, reasoning_tokens: 600, wire_max_tokens: 6000 } };
+  const out = promptJson(stored);
+  assertEquals(out, { objections: stored.objections, steals: [] });
+  assert(!("_meta" in out));
+  // The stored object is not mutated — the row keeps its diagnostics.
+  assert("_meta" in stored);
+  // Non-objects, arrays and null pass through untouched.
+  assertEquals(promptJson(null), null);
+  assertEquals(promptJson([1, 2]), [1, 2]);
+  assertEquals(promptJson({ missing: true }), { missing: true });
+});
+
+Deno.test("objectionsAndStealsBlock — the Round 3 prompt never contains the step's _meta budget numbers", () => {
+  const steps = [
+    { step_key: "r2_exam_strategist", status: "completed", response_json: { objections: [{ target_seat: "chair", severity: "minor", text: "o" }], steals: [], _meta: { finish_reason: "stop", tokens_out: 1234, reasoning_tokens: 800, wire_max_tokens: 6000 } } },
+    { step_key: "r2_exam_inspector", status: "completed", response_json: { objections: [], steals: [], _meta: { fallback: { fallback_model_used: "m", primary_model: "p", reason: "refusal" } } } },
+  ];
+  const block = objectionsAndStealsBlock(steps);
+  assertStringIncludes(block, "OBJECTIONS AND STEALS");
+  assertStringIncludes(block, '"target_seat": "chair"');
+  assert(!block.includes("_meta"), `prompt leaked _meta: ${block}`);
+  assert(!block.includes("wire_max_tokens"));
+  assert(!block.includes("fallback_model_used"));
+});
