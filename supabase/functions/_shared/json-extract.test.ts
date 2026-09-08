@@ -69,6 +69,24 @@ Deno.test("extractJsonCandidate — refuses truncated, bare-scalar and empty inp
   assertEquals(extractJsonCandidate("").ok, false);
 });
 
+Deno.test("extractJsonCandidate — a truncated document is never rescued by one of its inner elements", () => {
+  // Audit map cut one token short of the outer "]}" — the tail-closer's
+  // own case (run e2c5faf3). The extractor must refuse so that tier runs
+  // and so `candidate` stays null for the near-cap truncation heuristics.
+  const mapCut =
+    '{"findings":[{"severity":"P0","file_path":"src/a.ts","title":"t","description":"d","evidence":"QUOTE: x | WHY: y","confidence":"high","line_start":1,"line_end":2}]';
+  assertEquals(extractJsonCandidate(mapCut).ok, false);
+  // A vote cut before its final "}" must not come back as the scores object.
+  const voteCut = '{"scores":{"painful_problem":8,"wow_factor":8},"blocking_objections":[],"objection_resolutions":[]';
+  assertEquals(extractJsonCandidate(voteCut).ok, false);
+  // A batch plan cut mid-string must not come back as its first batch.
+  const batchesCut = '{"batches":[{"batch_no":1,"title":"a","channel":"human","prompt_md":"x"},{"batch_no":2,"title":"b","chan';
+  assertEquals(extractJsonCandidate(batchesCut).ok, false);
+  // A balanced-but-unparseable outer span is skipped past, not descended into.
+  const badOuter = '{"scores":{"x":8},}';
+  assertEquals(extractJsonCandidate(badOuter).ok, false);
+});
+
 Deno.test("stripJsonFences — strips each side independently", () => {
   assertEquals(stripJsonFences('```json\n{"a":1}\n```'), '{"a":1}');
   assertEquals(stripJsonFences('```json\n{"a":1'), '{"a":1');

@@ -1314,8 +1314,8 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
   // Normalize → dedupe → downgrade unsupported P0/P1, then re-validate
   // caps. validateStepJson("audit_chair_merge", …) already ran the same
   // pipeline before the step was marked completed (AUDIT-FINALIZATION-R2),
-  // so a violation here means someone bypassed the step path or a schema
-  // drifted — we still fail closed rather than persist an oversized report.
+  // so a residual error here means someone bypassed the step path or a
+  // schema drifted — see the validation_warning handling below.
   const { evaluateChairMergeCandidate } = await import("../_shared/audit-findings.ts");
   // OWNER-AUTHORITY monetization gate: load the project's most recent
   // intake answers to detect whether price_anchor / upgrade_trigger were

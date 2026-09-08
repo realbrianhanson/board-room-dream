@@ -99,16 +99,23 @@ export function extractJsonCandidate(text: string): ExtractResult {
 
   // Embedded: the first "{" / "[" that opens a balanced, parseable value.
   // A brace inside a prose preamble does not balance into valid JSON, so
-  // the scan moves on to the next opener (bounded).
+  // the scan skips PAST that span to the next opener (bounded). An opener
+  // that never closes means the document is cut (or mismatched): stop
+  // there rather than descend into it — a complete inner element of a
+  // truncated list (one finding, the scores object of a vote) is not the
+  // answer, and returning it would both hide the truncation from the
+  // caller's heuristics and pre-empt the tail-closer / repair tiers that
+  // own that case.
   let attempts = 0;
   for (let i = 0; i < unfenced.length && attempts < MAX_EMBEDDED_STARTS; i++) {
     const c = unfenced[i];
     if (c !== "{" && c !== "[") continue;
     attempts++;
     const end = findBalancedEnd(unfenced, i);
-    if (end < 0) continue;
+    if (end < 0) break;
     const value = parseContainer(unfenced.slice(i, end + 1));
     if (value !== undefined) return { ok: true, value, mode: "embedded" };
+    i = end;
   }
   return { ok: false, reason: "no balanced JSON object or array found" };
 }
