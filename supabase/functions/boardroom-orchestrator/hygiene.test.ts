@@ -7,6 +7,7 @@ import {
   auditSeatCoverage,
   failRun,
   isStepLocalFailure,
+  planResumeFailed,
   requeueLegacyNullStartOrphans,
   requeueStepIfParentActive,
   resetRequestForResume,
@@ -614,4 +615,55 @@ Deno.test("reverseAuditFailure: batch audits and advanced projects are left alon
   assertEquals(state.projects[1].status, "done", "a project that moved on is not rewound");
   await reverseAuditFailure(admin, state.runs[2] as any);
   assertEquals(state.audits[1].status, "running", "non-audit run is a no-op");
+});
+
+// ============================== RC-2: resume plan ==============================
+
+
+Deno.test("planResumeFailed: a completed merge whose finalize failed requeues nothing (no re-bought seats)", () => {
+  const steps = [
+    { id: "s1", step_key: "audit_inspector_c1", status: "completed" },
+    { id: "s2", step_key: "audit_inspector_c2", status: "failed", error: "truncated_after_correction" },
+    { id: "s3", step_key: "audit_contrarian_c2", status: "completed" },
+    { id: "m", step_key: "audit_chair_merge", status: "completed" },
+  ];
+  const plan = planResumeFailed({ kind: "audit", error: "final-audit supersession failed: x" }, steps);
+  assertEquals(plan.chair?.id, "m");
+  assertEquals(plan.chairDead, false);
+  assertEquals(plan.finalizeRetry, true);
+  assertEquals(plan.requeue, []);
+});
+
+Deno.test("planResumeFailed: a dead merge is dropped and every failed seat is requeued", () => {
+  const steps = [
+    { id: "s1", step_key: "audit_inspector_c1", status: "completed" },
+    { id: "s2", step_key: "audit_inspector_c2", status: "failed", error: "invalid_json_after_correction" },
+    { id: "m", step_key: "audit_chair_merge", status: "failed", error: "stuck_model_call" },
+  ];
+  const plan = planResumeFailed({ kind: "audit", error: "Step audit_chair_merge kept timing out" }, steps);
+  assertEquals(plan.chairDead, true);
+  assertEquals(plan.finalizeRetry, false);
+  assertEquals(plan.requeue.map((s: any) => s.id), ["s2"], "the chair row is deleted, never requeued");
+  // Legacy: merge completed but the validator rejected it.
+  const legacy = planResumeFailed(
+    { kind: "audit", error: "audit_chair_merge failed validation: findings[0].evidence over 200" },
+    [{ id: "m", step_key: "audit_chair_merge", status: "completed" }],
+  );
+  assertEquals(legacy.chairDead, true);
+  assertEquals(legacy.finalizeRetry, false);
+  assertEquals(legacy.requeue, []);
+});
+
+Deno.test("planResumeFailed: non-audit runs requeue the failed step and its cancelled siblings", () => {
+  const steps = [
+    { id: "a", step_key: "r1_draft_inspector", status: "completed" },
+    { id: "b", step_key: "r1_draft_contrarian", status: "failed", error: "timeout_failover_exhausted" },
+    { id: "c", step_key: "r1_draft_strategist", status: "failed", error: "cancelled_parent_terminal" },
+    { id: "d", step_key: "r2_exam_inspector", status: "queued" },
+  ];
+  const plan = planResumeFailed({ kind: "plan", error: "Step r1_draft_contrarian timed out" }, steps);
+  assertEquals(plan.chair, null);
+  assertEquals(plan.chairDead, false);
+  assertEquals(plan.finalizeRetry, false);
+  assertEquals(plan.requeue.map((s: any) => s.id), ["b", "c"]);
 });

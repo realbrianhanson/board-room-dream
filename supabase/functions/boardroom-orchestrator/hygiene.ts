@@ -385,3 +385,41 @@ export async function reverseAuditFailure(
     } catch { /* best-effort reconciliation */ }
   }
 }
+
+// ============================== Resume plan ==============================
+
+export type ResumePlan = {
+  // The audit_chair_merge row, when the run is an audit and has one.
+  chair: any | null;
+  // The merge row has no usable output (failed / cancelled, or a legacy run
+  // whose completed merge the validator rejected): delete it and queue a
+  // fresh merge once the seats are terminal.
+  chairDead: boolean;
+  // The merge completed and only finalizeAudit failed after it: keep every
+  // row as is and let the tick re-enter finalizeAudit.
+  finalizeRetry: boolean;
+  // Failed rows to flip back to queued (never the dead chair row).
+  requeue: any[];
+};
+
+// Pure. Decides what resume_failed touches. Seat chunks that failed alone
+// are requeued only while their findings can still reach a merge; once the
+// merge has completed with usable output, re-running a seat would be paid
+// work nothing consumes, so a finalize retry requeues nothing.
+export function planResumeFailed(
+  run: { kind?: string; error?: string | null },
+  steps: any[],
+): ResumePlan {
+  const chair = run?.kind === "audit"
+    ? (steps.find((x: any) => x?.step_key === "audit_chair_merge") ?? null)
+    : null;
+  const chairDead = !!chair && (
+    chair.status === "failed" ||
+    String(run?.error ?? "").startsWith("audit_chair_merge failed validation")
+  );
+  const finalizeRetry = !!chair && chair.status === "completed" && !chairDead;
+  const requeue = finalizeRetry
+    ? []
+    : steps.filter((st: any) => st?.status === "failed" && st.id !== chair?.id);
+  return { chair, chairDead, finalizeRetry, requeue };
+}

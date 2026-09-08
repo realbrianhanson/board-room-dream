@@ -117,6 +117,7 @@ import {
   auditSeatCoverage,
   failRun,
   isStepLocalFailure,
+  planResumeFailed,
   requeueLegacyNullStartOrphans,
   requeueStepIfParentActive,
   resetRequestForResume,
@@ -2474,19 +2475,15 @@ async function handleRequest(req: Request): Promise<Response> {
     if (!check.ok) return j(400, { error: check.error });
 
     const steps = await loadAllSteps(admin, run.id);
-    const chair = run.kind === "audit" ? steps.find((x: any) => x.step_key === "audit_chair_merge") : null;
-    // A merge that failed, was cancelled, or (legacy runs) completed but was
-    // rejected by the validator has no usable output: drop the row (UNIQUE
-    // run_id/step_key) so a fresh merge can be queued. A merge that
-    // completed and only the supersession after it failed is kept — the
-    // tick re-enters finalizeAudit without buying the merge again.
-    const chairDead = !!chair && (
-      chair.status === "failed" ||
-      String(run.error ?? "").startsWith("audit_chair_merge failed validation")
-    );
+    // What to touch is decided by the pure planResumeFailed (hygiene.ts):
+    // a merge that failed / was cancelled / (legacy) failed validation is
+    // dropped so a fresh merge can be queued; a merge that completed and
+    // only the supersession after it failed is kept and NO seat is re-run
+    // (its findings could never reach the finished merge) — the tick simply
+    // re-enters finalizeAudit.
+    const { chair, chairDead, finalizeRetry, requeue } = planResumeFailed(run, steps);
     let requeued = 0;
-    for (const st of steps) {
-      if (st.status !== "failed" || st.id === chair?.id) continue;
+    for (const st of requeue) {
       const patch: any = { status: "queued", error: null, completed_at: null, started_at: null };
       if (st.error !== "cancelled_parent_terminal") {
         patch.request = resetRequestForResume(st.request, st.error);
@@ -2494,7 +2491,6 @@ async function handleRequest(req: Request): Promise<Response> {
       await admin.from("run_steps").update(patch).eq("id", st.id).eq("status", "failed");
       requeued++;
     }
-    const finalizeRetry = !!chair && chair.status === "completed" && !chairDead;
     if (chairDead) {
       await admin.from("run_steps").delete().eq("id", chair.id);
       // With seat retries in flight the fan-in (afterStepComplete) queues
