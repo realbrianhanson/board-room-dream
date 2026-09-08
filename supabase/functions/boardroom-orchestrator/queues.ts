@@ -691,7 +691,7 @@ Return ONLY valid JSON matching this shape:
     status: "queued",
     request: {
       json_output: true,
-      reasoning_effort: "high",
+      reasoning_effort: "medium",
       max_tokens: 10000,
       messages: [
         { role: "system", content: system },
