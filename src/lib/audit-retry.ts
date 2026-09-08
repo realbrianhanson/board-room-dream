@@ -58,3 +58,21 @@ export function startCtaLabel(latest: AuditRow | null): string {
   if (latest.status === "failed") return "Run final audit again";
   return "Run a new final audit";
 }
+
+/**
+ * "Resume where it stopped" is offered only when the latest final audit
+ * failed and its run still holds completed seat work worth keeping —
+ * otherwise a fresh start costs the same. Owner-only; never while a resume
+ * request is already in flight.
+ */
+export function canResumeFinal(params: {
+  isOwner: boolean;
+  latest: AuditRow | null;
+  completedAuditSteps: number;
+  resuming: boolean;
+}): boolean {
+  if (!params.isOwner || params.resuming) return false;
+  const latest = params.latest;
+  if (!latest || latest.status !== "failed" || !latest.run_id) return false;
+  return params.completedAuditSteps > 0;
+}

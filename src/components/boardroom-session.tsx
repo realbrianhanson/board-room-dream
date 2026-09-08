@@ -118,6 +118,7 @@ export function BoardroomSession(props: BoardroomSessionProps) {
   const [runError, setRunError] = useState<string | null>(null);
   const [runStale, setRunStale] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const consensusPulseRef = useRef<HTMLDivElement | null>(null);
 
   const loadSteps = useCallback(async (runId: string) => {
@@ -333,6 +334,25 @@ export function BoardroomSession(props: BoardroomSessionProps) {
     const { error } = await supabase.functions.invoke("boardroom-orchestrator", { body: { action: "resume", run_id: run.id } });
     if (error) toast.error(error.message); else toast.success("Session resumed.");
   }
+  // Failed run: requeue the cancelled siblings and the step that failed,
+  // keeping every completed (paid) step — instead of convening from zero.
+  async function resumeFailedRun() {
+    if (!run || resuming) return;
+    setResuming(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("boardroom-orchestrator", {
+        body: { action: "resume_failed", run_id: run.id },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      toast.success("Resuming where it stopped.");
+      await loadRun();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setResuming(false);
+    }
+  }
   async function retryStep(stepId: string) {
     if (!run) return;
     const { error } = await supabase.functions.invoke("boardroom-orchestrator", { body: { action: "retry_step", run_id: run.id, step_id: stepId } });
@@ -483,12 +503,24 @@ export function BoardroomSession(props: BoardroomSessionProps) {
       )}
 
       {terminal && !readOnly && isOwner && (
-        <div className="mt-6 flex justify-end">
+        <div className="mt-6 flex flex-wrap justify-end gap-3">
+          {run?.status === "failed" && (
+            <button
+              onClick={resumeFailedRun}
+              disabled={resuming || convening}
+              data-testid="session-resume-failed"
+              className="rounded-md bg-primary px-4 py-2 font-mono text-[11px] uppercase tracking-widest text-primary-foreground hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {resuming ? "Resuming…" : "Resume where it stopped"}
+            </button>
+          )}
           <button
             onClick={convene}
-            disabled={convening || hasKey === false || !!gateReason}
+            disabled={convening || resuming || hasKey === false || !!gateReason}
             title={gateReason ?? (hasKey === false ? "Seat the board first — add your OpenRouter key in Settings." : undefined)}
-            className="rounded-md border border-primary/50 bg-primary/10 px-4 py-2 font-mono text-[11px] uppercase tracking-widest text-primary hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
+            className={run?.status === "failed"
+              ? "rounded-md border border-border bg-surface-2 px-4 py-2 font-mono text-[11px] uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              : "rounded-md border border-primary/50 bg-primary/10 px-4 py-2 font-mono text-[11px] uppercase tracking-widest text-primary hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-50"}
           >
             {convening
               ? "Reconvening…"

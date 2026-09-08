@@ -5,6 +5,7 @@ import {
   previousFinals,
   hasActiveFinal,
   canStartFinal,
+  canResumeFinal,
   startCtaLabel,
   type AuditRow,
 } from "./audit-retry";
@@ -80,5 +81,21 @@ describe("audit-retry selectors", () => {
     expect(hasActiveFinal([mk({ status: "failed" }), mk({ status: "clean" })])).toBe(false);
     expect(hasActiveFinal([])).toBe(false);
     expect(canStartFinal({ isOwner: true, audits: [], starting: false })).toBe(true);
+  });
+
+  it("canResumeFinal: only a failed final with a run and completed seat work, owner-only", () => {
+    const failed = mk({ status: "failed", run_id: "run-1" });
+    expect(canResumeFinal({ isOwner: true, latest: failed, completedAuditSteps: 12, resuming: false })).toBe(true);
+    // Nothing paid for yet: a fresh start costs the same, so no resume.
+    expect(canResumeFinal({ isOwner: true, latest: failed, completedAuditSteps: 0, resuming: false })).toBe(false);
+    // Request already in flight.
+    expect(canResumeFinal({ isOwner: true, latest: failed, completedAuditSteps: 12, resuming: true })).toBe(false);
+    // Read-only viewers never resume.
+    expect(canResumeFinal({ isOwner: false, latest: failed, completedAuditSteps: 12, resuming: false })).toBe(false);
+    // Only failed audits resume; a run-less audit row cannot be resumed.
+    expect(canResumeFinal({ isOwner: true, latest: mk({ status: "running", run_id: "run-1" }), completedAuditSteps: 12, resuming: false })).toBe(false);
+    expect(canResumeFinal({ isOwner: true, latest: mk({ status: "findings", run_id: "run-1" }), completedAuditSteps: 12, resuming: false })).toBe(false);
+    expect(canResumeFinal({ isOwner: true, latest: mk({ status: "failed", run_id: null }), completedAuditSteps: 12, resuming: false })).toBe(false);
+    expect(canResumeFinal({ isOwner: true, latest: null, completedAuditSteps: 12, resuming: false })).toBe(false);
   });
 });

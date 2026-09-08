@@ -3,9 +3,14 @@
 // wins semantics and legacy-orphan routing without booting the real client.
 import { assertEquals } from "https://deno.land/std@0.203.0/assert/mod.ts";
 import {
+  AUDIT_COVERAGE_FLOOR,
+  auditSeatCoverage,
   failRun,
+  isStepLocalFailure,
   requeueLegacyNullStartOrphans,
   requeueStepIfParentActive,
+  resetRequestForResume,
+  reverseAuditFailure,
   TERMINAL_RUN_STATUSES,
   VALIDATION_RETRY_MAX_TOKENS_CHAIR,
   VALIDATION_RETRY_MAX_TOKENS_OTHER,
@@ -417,4 +422,196 @@ Deno.test("validationRetryBudget: uncapped base request stays uncapped (no 0/NaN
   assertEquals("max_tokens" in b, false);
   const spread = { ...{ max_tokens: undefined, messages: [] }, ...b };
   assertEquals(spread.reasoning_effort, "low");
+});
+
+// ============================== RC-2: chunk-local failure ==============================
+
+Deno.test("isStepLocalFailure: only audit seat map steps fail alone", () => {
+  const audit = { kind: "audit" };
+  assertEquals(isStepLocalFailure(audit, { step_key: "audit_inspector_c15" }), true);
+  assertEquals(isStepLocalFailure(audit, { step_key: "audit_contrarian_c3" }), true);
+  assertEquals(isStepLocalFailure(audit, { step_key: "audit_strategist" }), true);
+  // Structurally required steps stay run-fatal.
+  assertEquals(isStepLocalFailure(audit, { step_key: "audit_chair_merge" }), false);
+  assertEquals(isStepLocalFailure(audit, { step_key: "audit_reserve_c1" }), false);
+  // Same key under any other run kind is not chunk-local.
+  assertEquals(isStepLocalFailure({ kind: "plan" }, { step_key: "audit_inspector_c1" }), false);
+  assertEquals(isStepLocalFailure({ kind: "batches" }, { step_key: "batches_chair" }), false);
+  assertEquals(isStepLocalFailure(null, { step_key: "audit_inspector_c1" }), false);
+  assertEquals(isStepLocalFailure(audit, {}), false);
+});
+
+function seatRows(chunks: number, failed: string[] = []) {
+  const rows: Array<{ step_key: string; status: string }> = [];
+  for (let c = 1; c <= chunks; c++) {
+    for (const seat of ["inspector", "contrarian", "strategist"]) {
+      const key = `audit_${seat}_c${c}`;
+      rows.push({ step_key: key, status: failed.includes(key) ? "failed" : "completed" });
+    }
+  }
+  return rows;
+}
+
+Deno.test("auditSeatCoverage: every seat completed -> merge with no gap", () => {
+  const cov = auditSeatCoverage(seatRows(24));
+  assertEquals(cov.ok, true);
+  assertEquals(cov.completed, 72);
+  assertEquals(cov.total, 72);
+  assertEquals(cov.missing, []);
+});
+
+Deno.test("auditSeatCoverage: one dead chunk seat out of 72 still merges, listed as missing", () => {
+  const cov = auditSeatCoverage(seatRows(24, ["audit_inspector_c15"]));
+  assertEquals(cov.ok, true);
+  assertEquals(cov.missing, ["audit_inspector_c15"]);
+  assertEquals(cov.completed, 71);
+});
+
+Deno.test("auditSeatCoverage: a chunk nobody finished fails the run", () => {
+  const cov = auditSeatCoverage(seatRows(24, ["audit_inspector_c7", "audit_contrarian_c7", "audit_strategist_c7"]));
+  assertEquals(cov.ok, false);
+  assertEquals(cov.reason?.includes("c7"), true);
+});
+
+Deno.test("auditSeatCoverage: below the 80% floor fails the run even with every chunk touched", () => {
+  // 10 chunks x 3 seats = 30; fail 7 spread across chunks -> 23/30 = 76.7%.
+  const failed = ["audit_inspector_c1", "audit_contrarian_c2", "audit_strategist_c3", "audit_inspector_c4", "audit_contrarian_c5", "audit_strategist_c6", "audit_inspector_c7"];
+  const cov = auditSeatCoverage(seatRows(10, failed));
+  assertEquals(cov.ok, false);
+  assertEquals(cov.completed, 23);
+  assertEquals(cov.reason?.includes("23 of 30"), true);
+  // Exactly at the floor (24/30) passes.
+  assertEquals(auditSeatCoverage(seatRows(10, failed.slice(0, 6))).ok, true);
+  assertEquals(AUDIT_COVERAGE_FLOOR, 0.8);
+});
+
+Deno.test("auditSeatCoverage: single-chunk audits (no suffix) form one group; empty input never merges", () => {
+  const single = [
+    { step_key: "audit_inspector", status: "completed" },
+    { step_key: "audit_contrarian", status: "completed" },
+    { step_key: "audit_strategist", status: "completed" },
+  ];
+  assertEquals(auditSeatCoverage(single).ok, true);
+  assertEquals(auditSeatCoverage([]).ok, false);
+});
+
+// ============================== RC-2: resume / retry request reset ==============================
+
+Deno.test("resetRequestForResume: attempt markers reset, reserve pin dropped, correction turn stripped", () => {
+  const base = [
+    { role: "system", content: "s" },
+    { role: "user", content: "u" },
+  ];
+  const stored = {
+    json_output: true,
+    max_tokens: 4000,
+    _validation_attempts: 1,
+    _attempts: 3,
+    _timeout_attempts: 1,
+    _transport_attempts: 1,
+    force_fallback: true,
+    _validation_retry_mode: "with_echo",
+    messages: [...base, { role: "assistant", content: "{\"find" }, { role: "user", content: "fix it" }],
+  };
+  const out = resetRequestForResume(stored, "truncated_after_correction");
+  assertEquals(out._validation_attempts, 0);
+  assertEquals(out._attempts, 0);
+  assertEquals(out._timeout_attempts, 0);
+  assertEquals(out._transport_attempts, 0);
+  assertEquals("force_fallback" in out, false);
+  assertEquals("_validation_retry_mode" in out, false);
+  assertEquals(out.messages, base);
+  assertEquals(out.max_tokens, 4000, "budget and prompt keys survive");
+  // Input is not mutated.
+  assertEquals(stored._validation_attempts, 1);
+  assertEquals(stored.messages.length, 4);
+});
+
+Deno.test("resetRequestForResume: without_echo drops one turn; no mode leaves messages alone", () => {
+  const base = [{ role: "system", content: "s" }, { role: "user", content: "u" }];
+  const noEcho = resetRequestForResume(
+    { _validation_retry_mode: "without_echo", messages: [...base, { role: "user", content: "correction" }] },
+    "invalid_json_after_correction",
+  );
+  assertEquals(noEcho.messages, base);
+  const plain = resetRequestForResume({ messages: base, _validation_attempts: 1 }, "some error");
+  assertEquals(plain.messages, base);
+  // A mode whose tail does not look like the correction turn is left intact.
+  const odd = resetRequestForResume({ _validation_retry_mode: "with_echo", messages: base }, "x");
+  assertEquals(odd.messages, base);
+  assertEquals(resetRequestForResume(null, null)._validation_attempts, 0);
+});
+
+Deno.test("resetRequestForResume: reserve pin survives only when the primary proved stuck", () => {
+  for (const err of ["timeout_failover_exhausted", "stuck_model_call"]) {
+    assertEquals(resetRequestForResume({ force_fallback: true }, err).force_fallback, true, err);
+  }
+  for (const err of ["transport_retry_exhausted", "cancelled_parent_terminal", "SeatUnavailable", null]) {
+    assertEquals("force_fallback" in resetRequestForResume({ force_fallback: true }, err), false, String(err));
+  }
+});
+
+// ============================== RC-2: reverse failRun's audit side effects ==============================
+
+Deno.test("reverseAuditFailure: final audit -> audits back to running, project re-enters 'auditing'", async () => {
+  const state = {
+    runs: [{
+      id: "r1", status: "failed", error: "boom", kind: "audit", project_id: "p1",
+      consensus: { audit_id: "a1", audit_kind: "final_az", previous_project_status: "imported" },
+    }],
+    steps: [],
+    audits: [{ id: "a1", status: "failed", completed_at: "t" }],
+    projects: [{ id: "p1", status: "imported", is_import: true }],
+    plans: [],
+    rpcCalls: [],
+  };
+  const admin = makeFakeAdmin(state);
+  await reverseAuditFailure(admin, state.runs[0] as any);
+  assertEquals(state.audits[0].status, "running");
+  assertEquals(state.audits[0].completed_at, null);
+  assertEquals(state.projects[0].status, "auditing");
+});
+
+Deno.test("reverseAuditFailure: round-trips failRun exactly", async () => {
+  const state = {
+    runs: [{
+      id: "r1", status: "running", error: null, kind: "audit", project_id: "p1",
+      consensus: { audit_id: "a1", audit_kind: "final_az" },
+    }],
+    steps: [],
+    audits: [{ id: "a1", status: "running", completed_at: null, previous_project_status: "locked" }],
+    projects: [{ id: "p1", status: "auditing", is_import: false }],
+    plans: [{ id: "pl1", project_id: "p1", kind: "plan", is_build_safe: true }],
+    rpcCalls: [],
+  };
+  const admin = makeFakeAdmin(state);
+  await failRun(admin, state.runs[0] as any, "audit coverage below floor: x");
+  assertEquals(state.projects[0].status, "locked");
+  assertEquals(state.audits[0].status, "failed");
+  await reverseAuditFailure(admin, state.runs[0] as any);
+  assertEquals(state.projects[0].status, "auditing");
+  assertEquals(state.audits[0].status, "running");
+});
+
+Deno.test("reverseAuditFailure: batch audits and advanced projects are left alone", async () => {
+  const state = {
+    runs: [
+      { id: "r1", status: "failed", error: "e", kind: "audit", project_id: "p1", consensus: { audit_id: "a1", audit_kind: "batch" } },
+      { id: "r2", status: "failed", error: "e", kind: "audit", project_id: "p2", consensus: { audit_id: "a2", audit_kind: "final_az", previous_project_status: "imported" } },
+      { id: "r3", status: "failed", error: "e", kind: "plan", project_id: "p1" },
+    ],
+    steps: [],
+    audits: [{ id: "a1", status: "failed" }, { id: "a2", status: "failed" }],
+    projects: [{ id: "p1", status: "locked", is_import: false }, { id: "p2", status: "done", is_import: true }],
+    plans: [],
+    rpcCalls: [],
+  };
+  const admin = makeFakeAdmin(state);
+  await reverseAuditFailure(admin, state.runs[0] as any);
+  assertEquals(state.audits[0].status, "running");
+  assertEquals(state.projects[0].status, "locked", "batch audit never touches the project");
+  await reverseAuditFailure(admin, state.runs[1] as any);
+  assertEquals(state.projects[1].status, "done", "a project that moved on is not rewound");
+  await reverseAuditFailure(admin, state.runs[2] as any);
+  assertEquals(state.audits[1].status, "running", "non-audit run is a no-op");
 });

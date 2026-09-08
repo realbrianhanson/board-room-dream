@@ -99,36 +99,7 @@ export async function failRun(
     // advanced concurrently.
     if (run?.project_id) {
       try {
-        let prev: string | null =
-          (run?.consensus as any)?.previous_project_status ?? null;
-        if (!prev) {
-          const { data: auditRow } = await admin
-            .from("audits")
-            .select("previous_project_status")
-            .eq("id", auditId)
-            .maybeSingle();
-          prev = auditRow?.previous_project_status ?? null;
-        }
-        let nextStatus = prev;
-        if (!nextStatus) {
-          const { data: safePlan } = await admin
-            .from("plan_versions")
-            .select("id")
-            .eq("project_id", run.project_id)
-            .eq("kind", "plan")
-            .eq("is_build_safe", true)
-            .limit(1)
-            .maybeSingle();
-          const { data: project } = await admin
-            .from("projects")
-            .select("is_import")
-            .eq("id", run.project_id)
-            .maybeSingle();
-          nextStatus = nextStatusAfterZeroBatchFailure({
-            hasSafePlan: !!safePlan,
-            isImport: !!project?.is_import,
-          });
-        }
+        const nextStatus = await priorProjectStatusForAudit(admin, run, auditId);
         await admin
           .from("projects")
           .update({ status: nextStatus })
@@ -257,4 +228,160 @@ export function validationRetryBudget(
     : VALIDATION_RETRY_MAX_TOKENS_OTHER;
   const bumped = Math.min(prior * 2, ceiling) || undefined;
   return bumped ? { max_tokens: bumped, reasoning_effort: "low" } : { reasoning_effort: "low" };
+}
+
+// ============================== Audit failure locality ==============================
+
+// The status a failed final audit hands the project back to: what
+// audit-runner recorded when it flipped the project to 'auditing'
+// (run.consensus first, then the audits row), else the same zero-batch
+// selector the batches path uses. Shared by failRun (rewind on failure) and
+// reverseAuditFailure (re-enter 'auditing' on resume) so the two agree.
+export async function priorProjectStatusForAudit(
+  admin: any,
+  run: { project_id?: string; consensus?: any },
+  auditId: string,
+): Promise<string> {
+  let prev: string | null = run?.consensus?.previous_project_status ?? null;
+  if (!prev) {
+    const { data: auditRow } = await admin
+      .from("audits")
+      .select("previous_project_status")
+      .eq("id", auditId)
+      .maybeSingle();
+    prev = auditRow?.previous_project_status ?? null;
+  }
+  if (prev) return prev;
+  const { data: safePlan } = await admin
+    .from("plan_versions")
+    .select("id")
+    .eq("project_id", run.project_id)
+    .eq("kind", "plan")
+    .eq("is_build_safe", true)
+    .limit(1)
+    .maybeSingle();
+  const { data: project } = await admin
+    .from("projects")
+    .select("is_import")
+    .eq("id", run.project_id)
+    .maybeSingle();
+  return nextStatusAfterZeroBatchFailure({
+    hasSafePlan: !!safePlan,
+    isImport: !!project?.is_import,
+  });
+}
+
+// An audit map chunk is one of up to ~70 independent seat reviews; losing one
+// costs a coverage note, not the run. Everything else (chair merge, every
+// board round, batches) is structurally required and stays run-fatal.
+export function isStepLocalFailure(run: any, step: any): boolean {
+  return run?.kind === "audit" &&
+    /^audit_(inspector|contrarian|strategist)(_c\d+)?$/.test(String(step?.step_key ?? ""));
+}
+
+// Minimum share of seat reviews that must have completed before the Chair
+// merges. Below this — or with any chunk that no seat finished — a merge
+// would produce a false "clean" verdict over code nobody read.
+export const AUDIT_COVERAGE_FLOOR = 0.8;
+
+export type AuditSeatCoverage = {
+  ok: boolean;
+  completed: number;
+  total: number;
+  missing: string[];
+  reason: string | null;
+};
+
+// Pure. Groups seat steps by their `_cN` chunk suffix (single-chunk audits
+// have no suffix and form one group) and decides whether the merge may run.
+export function auditSeatCoverage(seatSteps: Array<{ step_key?: string; status?: string }>): AuditSeatCoverage {
+  const total = seatSteps.length;
+  const completed = seatSteps.filter((s) => s.status === "completed").length;
+  const missing = seatSteps.filter((s) => s.status !== "completed").map((s) => String(s.step_key ?? ""));
+  if (total === 0) return { ok: false, completed, total, missing, reason: "no seat steps" };
+  const chunks = new Map<string, { completed: number; total: number }>();
+  for (const s of seatSteps) {
+    const m = /_c(\d+)$/.exec(String(s.step_key ?? ""));
+    const id = m ? `c${m[1]}` : "single";
+    const c = chunks.get(id) ?? { completed: 0, total: 0 };
+    c.total++;
+    if (s.status === "completed") c.completed++;
+    chunks.set(id, c);
+  }
+  const dead = [...chunks.entries()].filter(([, c]) => c.completed === 0).map(([id]) => id);
+  if (dead.length) {
+    return { ok: false, completed, total, missing, reason: `no seat completed chunk ${dead.join(", ")}` };
+  }
+  if (completed / total < AUDIT_COVERAGE_FLOOR) {
+    return {
+      ok: false,
+      completed,
+      total,
+      missing,
+      reason: `${completed} of ${total} seat reviews completed (floor ${Math.round(AUDIT_COVERAGE_FLOOR * 100)}%)`,
+    };
+  }
+  return { ok: true, completed, total, missing, reason: null };
+}
+
+// ============================== Resume / retry request reset ==============================
+
+// Errors after which the reserve model must stay pinned on a resumed step:
+// the primary already proved it cannot answer in time.
+const KEEP_FALLBACK_ERRORS = new Set(["timeout_failover_exhausted", "stuck_model_call"]);
+
+// Pure. A retried/resumed step used to keep its stored request verbatim, so
+// `_validation_attempts: 1` gave it zero correction passes, `force_fallback`
+// kept it on the reserve, and the appended correction turn (with the
+// truncated echo) was re-sent. Reset every attempt marker, drop the reserve
+// pin unless the error proves the primary is stuck, and strip the
+// correction turn so the step starts exactly as it was first queued.
+export function resetRequestForResume(request: any, error: string | null | undefined): any {
+  const req: any = { ...(request ?? {}) };
+  req._validation_attempts = 0;
+  req._attempts = 0;
+  req._timeout_attempts = 0;
+  req._transport_attempts = 0;
+  if (!KEEP_FALLBACK_ERRORS.has(String(error ?? ""))) delete req.force_fallback;
+  const mode = req._validation_retry_mode;
+  delete req._validation_retry_mode;
+  if (Array.isArray(req.messages)) {
+    const msgs = req.messages as Array<{ role?: string }>;
+    const n = msgs.length;
+    if (mode === "without_echo" && n >= 2 && msgs[n - 1]?.role === "user") {
+      req.messages = msgs.slice(0, n - 1);
+    } else if (
+      mode === "with_echo" && n >= 3 &&
+      msgs[n - 1]?.role === "user" && msgs[n - 2]?.role === "assistant"
+    ) {
+      req.messages = msgs.slice(0, n - 2);
+    }
+  }
+  return req;
+}
+
+// Undo failRun's audit-side effects when a failed audit run is resumed: the
+// audits row goes back to 'running' and, for a final audit, the project
+// re-enters 'auditing' — but only from the exact status failRun rewound it
+// to, so a project that moved on in the meantime is left alone.
+export async function reverseAuditFailure(
+  admin: any,
+  run: { id: string; kind?: string; project_id?: string; consensus?: any },
+): Promise<void> {
+  const auditId: string | undefined = run?.consensus?.audit_id ?? undefined;
+  if (run?.kind !== "audit" || !auditId) return;
+  await admin
+    .from("audits")
+    .update({ status: "running", completed_at: null })
+    .eq("id", auditId);
+  if (run?.consensus?.audit_kind === "final_az" && run?.project_id) {
+    try {
+      const prev = await priorProjectStatusForAudit(admin, run, auditId);
+      await admin
+        .from("projects")
+        .update({ status: "auditing" })
+        .eq("id", run.project_id)
+        .eq("status", prev);
+    } catch { /* best-effort reconciliation */ }
+  }
 }

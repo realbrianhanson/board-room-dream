@@ -114,9 +114,13 @@ async function verifyUser(token: string): Promise<string | null> {
 const BUILD_VERSION = "2026-07-29.import-workflow-gate.r1";
 
 import {
+  auditSeatCoverage,
   failRun,
+  isStepLocalFailure,
   requeueLegacyNullStartOrphans,
   requeueStepIfParentActive,
+  resetRequestForResume,
+  reverseAuditFailure,
   TERMINAL_RUN_STATUSES,
   validationRetryBudget,
 } from "./hygiene.ts";
@@ -381,6 +385,8 @@ async function executeStep(admin: any, run: any, step: any) {
             .update({ status: "failed", error: "timeout_failover_exhausted", completed_at: new Date().toISOString() })
             .eq("id", step.id)
             .eq("status", "running");
+          // An audit map chunk fails alone; the merge reports the gap (RC-2).
+          if (isStepLocalFailure(run, step)) { fireSelfTick(); return; }
           await failRun(admin, run, tmsg);
           return;
         }
@@ -416,6 +422,7 @@ async function executeStep(admin: any, run: any, step: any) {
           })
           .eq("id", step.id)
           .eq("status", "running");
+        if (isStepLocalFailure(run, step)) { fireSelfTick(); return; }
         await failRun(admin, run, decision.message);
         return;
       }
@@ -434,6 +441,7 @@ async function executeStep(admin: any, run: any, step: any) {
         .update({ status: "failed", error: msg, completed_at: new Date().toISOString() })
         .eq("id", step.id)
         .eq("status", "running");
+      if (isStepLocalFailure(run, step)) { fireSelfTick(); return; }
       await failRun(admin, run, msg);
       return;
     }
@@ -593,6 +601,7 @@ async function executeStep(admin: any, run: any, step: any) {
             })
             .eq("id", step.id)
             .eq("status", "running");
+          if (isStepLocalFailure(run, step)) { fireSelfTick(); return; }
           await failRun(admin, run, vmsg);
           return;
         }
@@ -1792,8 +1801,22 @@ async function afterStepComplete(admin: any, runIn: any) {
     }
     if (chair) return; // waiting on chair
     const seatSteps = steps.filter((x: any) => /^audit_(inspector|contrarian|strategist)/.test(x.step_key));
-    const parallelDone = seatSteps.length > 0 && seatSteps.every((x: any) => x.status === "completed");
+    // A seat chunk may fail alone (isStepLocalFailure), so the fan-in waits
+    // for every seat step to reach a terminal state, then merges as long as
+    // coverage clears the floor; the Chair is told which reviews are missing.
+    const terminal = (x: any) => x.status === "completed" || x.status === "failed";
+    const parallelDone = seatSteps.length > 0 && seatSteps.every(terminal);
     if (parallelDone) {
+      const coverage = auditSeatCoverage(seatSteps);
+      if (!coverage.ok) {
+        await failRun(admin, run, `audit coverage below floor: ${coverage.reason}`);
+        return;
+      }
+      const prior: string[] = Array.isArray(run.consensus?.missing_steps) ? run.consensus.missing_steps : [];
+      if (coverage.missing.length || prior.length) {
+        run.consensus = { ...(run.consensus ?? {}), missing_steps: coverage.missing };
+        await admin.from("boardroom_runs").update({ consensus: run.consensus }).eq("id", run.id);
+      }
       await queueAuditChairMerge(admin, run, steps);
       fireSelfTick();
     }
@@ -2062,6 +2085,7 @@ async function pipelineTick(admin: any) {
         .eq("id", st.id)
         .eq("status", "running");
       if (parentRun) {
+        if (isStepLocalFailure(parentRun, st)) { fireSelfTick(); continue; }
         await failRun(admin, parentRun, `Step ${st.step_key} kept timing out — even the fallback model could not answer in time.`);
       }
       continue;
@@ -2388,21 +2412,126 @@ async function handleRequest(req: Request): Promise<Response> {
     if (!run || run.user_id !== userId) return j(404, { error: "Run not found" });
     const { data: step } = await admin
       .from("run_steps")
-      .select("id, status")
+      .select("id, status, error, request")
       .eq("id", stepId)
       .eq("run_id", runId)
       .maybeSingle();
     if (!step) return j(404, { error: "Step not found" });
     if (step.status !== "failed") return j(400, { error: "Only failed steps can be retried" });
+    // Reset attempt markers / reserve pin / correction turn so the retried
+    // step gets its correction pass back instead of failing on first miss.
     await admin
       .from("run_steps")
-      .update({ status: "queued", error: null, completed_at: null })
+      .update({
+        status: "queued",
+        error: null,
+        completed_at: null,
+        started_at: null,
+        request: resetRequestForResume(step.request, step.error),
+      })
       .eq("id", stepId);
     if (run.status === "failed") {
       await admin.from("boardroom_runs").update({ status: "running", error: null }).eq("id", runId);
     }
     fireSelfTick();
     return j(200, { ok: true });
+  }
+
+  // RC-2: resume a failed run where it stopped. Every sibling failRun
+  // cancelled and the step(s) that actually failed are requeued with their
+  // attempt markers reset; completed (paid) steps are kept. Steps are
+  // requeued BEFORE the run flips back to running — direct updates, because
+  // requeue_step_if_parent_active refuses a failed parent — so a concurrent
+  // tick can never see an active run with nothing to claim and mis-finalize
+  // it. Idempotent: a second call finds the run active and returns it.
+  if (action === "resume_failed") {
+    const runId: string = body?.run_id;
+    if (!runId) return j(400, { error: "Missing run_id" });
+    const { data: run } = await admin
+      .from("boardroom_runs")
+      .select("*")
+      .eq("id", runId)
+      .maybeSingle();
+    if (!run || run.user_id !== userId) return j(404, { error: "Run not found" });
+    if (["queued", "running", "paused", "paused_budget"].includes(run.status)) {
+      return j(200, { ok: true, run_id: run.id, status: run.status, existing: true });
+    }
+    if (run.status !== "failed") return j(400, { error: "Only failed runs can be resumed" });
+    {
+      const { data: activeRuns } = await admin
+        .from("boardroom_runs")
+        .select("id")
+        .eq("project_id", run.project_id)
+        .eq("kind", run.kind)
+        .in("status", ["queued", "running", "paused", "paused_budget"])
+        .limit(1);
+      if (activeRuns && activeRuns.length > 0) {
+        return j(409, { error: `Another ${run.kind} run is already active for this project. Wait for it or cancel it first.` });
+      }
+    }
+    const { validateResumeBudget } = await import("../_shared/resume-budget.ts");
+    const check = validateResumeBudget(body?.extra_budget_usd, Number(run.budget_usd ?? 0));
+    if (!check.ok) return j(400, { error: check.error });
+
+    const steps = await loadAllSteps(admin, run.id);
+    const chair = run.kind === "audit" ? steps.find((x: any) => x.step_key === "audit_chair_merge") : null;
+    // A merge that failed, was cancelled, or (legacy runs) completed but was
+    // rejected by the validator has no usable output: drop the row (UNIQUE
+    // run_id/step_key) so a fresh merge can be queued. A merge that
+    // completed and only the supersession after it failed is kept — the
+    // tick re-enters finalizeAudit without buying the merge again.
+    const chairDead = !!chair && (
+      chair.status === "failed" ||
+      String(run.error ?? "").startsWith("audit_chair_merge failed validation")
+    );
+    let requeued = 0;
+    for (const st of steps) {
+      if (st.status !== "failed" || st.id === chair?.id) continue;
+      const patch: any = { status: "queued", error: null, completed_at: null, started_at: null };
+      if (st.error !== "cancelled_parent_terminal") {
+        patch.request = resetRequestForResume(st.request, st.error);
+      }
+      await admin.from("run_steps").update(patch).eq("id", st.id).eq("status", "failed");
+      requeued++;
+    }
+    const finalizeRetry = !!chair && chair.status === "completed" && !chairDead;
+    if (chairDead) {
+      await admin.from("run_steps").delete().eq("id", chair.id);
+      // With seat retries in flight the fan-in (afterStepComplete) queues
+      // the merge once they are terminal; otherwise queue it right away.
+      if (requeued === 0) {
+        await queueAuditChairMerge(admin, run, steps.filter((x: any) => x.id !== chair.id));
+      }
+    }
+    if (requeued === 0 && !chairDead && !finalizeRetry && !steps.some((x: any) => x.status === "queued")) {
+      return j(400, { error: "Nothing to resume on this run — start a fresh one." });
+    }
+    await reverseAuditFailure(admin, run);
+    const patch: any = { status: "running", error: null };
+    if (check.extra > 0) patch.budget_usd = check.newTotal;
+    await admin.from("boardroom_runs").update(patch).eq("id", run.id).eq("status", "failed");
+    fireSelfTick();
+    return j(200, { ok: true, run_id: run.id, requeued, merge_requeued: chairDead });
+  }
+
+  // Owner cancel: terminalize an active run through failRun so every
+  // queued/running step is cancelled and the audits/projects rows are
+  // reconciled exactly as on any other failure. Also frees beginAudit's
+  // one-active-run-per-kind short-circuit.
+  if (action === "cancel") {
+    const runId: string = body?.run_id;
+    if (!runId) return j(400, { error: "Missing run_id" });
+    const { data: run } = await admin
+      .from("boardroom_runs")
+      .select("*")
+      .eq("id", runId)
+      .maybeSingle();
+    if (!run || run.user_id !== userId) return j(404, { error: "Run not found" });
+    if (!["queued", "running", "paused", "paused_budget"].includes(run.status)) {
+      return j(400, { error: "Only an active run can be cancelled" });
+    }
+    const outcome = await failRun(admin, run, "cancelled_by_owner");
+    return j(200, { ok: true, outcome });
   }
 
   if (action === "regenerate_batches") {

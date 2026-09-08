@@ -1371,6 +1371,16 @@ export async function queueAuditChairMerge(admin: any, run: any, steps: any[]) {
   }));
   const { block, totalFindings } = buildMergeInput(seatReports);
   const isFinal = run.consensus?.audit_kind === "final_az";
+  // RC-2: seat chunks may fail alone; afterStepComplete records which ones in
+  // run.consensus.missing_steps so the Chair states the gap instead of
+  // implying every chunk was read.
+  const missing: string[] = Array.isArray(run.consensus?.missing_steps)
+    ? run.consensus.missing_steps.map((k: unknown) => String(k))
+    : [];
+  const allSeatSteps = steps.filter((x: any) => /^audit_(inspector|contrarian|strategist)/.test(x.step_key));
+  const coverageGap = missing.length
+    ? `; ${missing.length} of ${allSeatSteps.length} seat reviews did not complete (${missing.join(", ")}) - state this gap in the summary`
+    : "";
   const system = `You are the Chair. The seats independently reviewed the student's code — possibly split across chunks, so the same underlying issue may be reported more than once. Merge, dedupe across seats AND chunks, assign FINAL severities, and produce ONE audit report.
 
 Severities:
@@ -1424,7 +1434,7 @@ Coverage honesty: the summary must state how much of the app was actually read (
         { role: "system", content: system },
         {
           role: "user",
-          content: `CODE COVERAGE: ${Number(run.consensus?.files_analyzed ?? 0) || "unknown"} files were read across the seat steps.\n\nNORMALIZED SEAT FINDINGS (${totalFindings} across ${seatReports.length} steps — prose stripped)\n\n${block}\n\nMerge, dedupe, downgrade unsupported serious claims, and produce your JSON now.`,
+          content: `CODE COVERAGE: ${Number(run.consensus?.files_analyzed ?? 0) || "unknown"} files were read across the seat steps${coverageGap}.\n\nNORMALIZED SEAT FINDINGS (${totalFindings} across ${seatReports.length} steps — prose stripped)\n\n${block}\n\nMerge, dedupe, downgrade unsupported serious claims, and produce your JSON now.`,
         },
       ],
     },
