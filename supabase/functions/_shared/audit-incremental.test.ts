@@ -51,6 +51,16 @@ Deno.test("selectCarryForward: untouched-file findings travel; changed, deleted,
   assertEquals(out.map((x) => x.id), ["keep", "drafted"]);
 });
 
+Deno.test("selectCarryForward: a changed migration retires every schema finding; paths are matched after ./ trimming", () => {
+  const rawMigration = f({ id: "raw-mig", file_path: "supabase/migrations/20260101_a.sql" });
+  const dotted = f({ id: "dotted", file_path: "./src/routes/index.tsx" });
+  const keep = f({ id: "keep" });
+  assertEquals(selectCarryForward([rawMigration, dotted, keep], meta).map((x) => x.id), ["keep"]);
+  // No migration changed: a raw-migration finding on an untouched file travels.
+  const noSchema = { ...meta, changed_paths: ["src/routes/index.tsx"] };
+  assertEquals(selectCarryForward([rawMigration, dotted, keep], noSchema).map((x) => x.id), ["raw-mig", "keep"]);
+});
+
 Deno.test("carryForwardRow copies under the new audit; the fix batch link survives only when the batch still exists", () => {
   const live = new Set(["batch-1"]);
   const kept = carryForwardRow(f({ status: "fix_drafted", fix_batch_id: "batch-1", line_start: 3, line_end: 4 }), "audit-new", "user-1", live);

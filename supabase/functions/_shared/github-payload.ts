@@ -122,8 +122,12 @@ function basicKeep(path: string): boolean {
 }
 
 export class NoChangesSinceBase extends Error {
-  constructor(public readonly baseSha: string) {
-    super(`No changes since the last audited commit ${baseSha.slice(0, 7)} - push first, or run a full rescan`);
+  constructor(public readonly baseSha: string, detail?: string) {
+    super(
+      `No ${detail ? "auditable " : ""}changes since the last audited commit ${baseSha.slice(0, 7)}${
+        detail ? ` (${detail})` : ""
+      } - push first, or run a full rescan`,
+    );
     this.name = "NoChangesSinceBase";
   }
 }
@@ -194,6 +198,12 @@ export function planFileSelection(input: {
     migrationPaths = treeOk.map((t) => t.path).filter((p) => MIGRATION_SQL.test(p)).sort();
     if (incremental) changedPaths = [...changedPaths, MIGRATION_INVENTORY_PATH];
   }
+  // Every changed file was excluded or oversize: mapping an empty CODE
+  // section would still buy seat + merge calls and could publish a "clean"
+  // verdict over nothing, so refuse exactly like an unchanged HEAD.
+  if (incremental && toFetch.length === 0 && !migrationInScope) {
+    throw new NoChangesSinceBase(input.baseSha ?? "", `only excluded or oversize files changed: ${skippedPaths.slice(0, 5).join(", ")}`);
+  }
 
   const ordered = input.preferKeyFiles
     ? toFetch
@@ -227,7 +237,7 @@ export function renderMigrationInventoryFile(
   totalPaths: number,
 ): string {
   const inv = parseMigrationsToInventory(migrations);
-  const header = `EFFECTIVE SCHEMA INVENTORY derived from ${migrations.length} of ${totalPaths} supabase/migrations/*.sql files at HEAD, applied in lexicographic order (raw SQL not shown; cite this file for schema-level findings and quote the inventory line).`;
+  const header = `EFFECTIVE SCHEMA INVENTORY derived from ${migrations.length} of ${totalPaths} supabase/migrations/*.sql files at HEAD, applied in lexicographic order (raw SQL not shown). This inventory IS the current effective schema: cite this file for schema-level findings, put the inventory line in QUOTE: and repeat it in the CURRENT: marker the validator requires for every supabase/migrations/* path.`;
   return `${header}\n\n${renderTargetInventory(inv)}`;
 }
 

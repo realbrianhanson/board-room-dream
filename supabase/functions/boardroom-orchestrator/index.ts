@@ -1468,6 +1468,9 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
         projectId: audit.project_id,
         userId: audit.user_id,
         runId: run.id,
+        // A carried finding's fix batch is not obsolete: it is the only fix
+        // prompt for a P0/P1 this run did not re-read.
+        keepBatchIds: new Set(carried.map((f) => f.fix_batch_id).filter((x): x is string => !!x)),
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

@@ -39,6 +39,9 @@ export type SupersessionContext = {
   projectId: string;
   userId: string;
   runId?: string | null;
+  /** Fix batches an incremental audit's carried-forward findings still
+   * reference: their findings are not superseded, so the batch is kept. */
+  keepBatchIds?: ReadonlySet<string>;
 };
 
 // Pure — decide whether a batch row is safely obsolete for supersession.
@@ -166,6 +169,10 @@ export async function supersedeOlderFinalAudits(
     if (!batch) {
       // Already deleted in a prior retry — idempotent skip.
       result.deleted_batch_ids.push(batchId);
+      continue;
+    }
+    if (ctx.keepBatchIds?.has(batchId)) {
+      result.skipped_batch_ids.push(batchId);
       continue;
     }
     const eligible = isBatchSupersedable(batch as BatchRow, {

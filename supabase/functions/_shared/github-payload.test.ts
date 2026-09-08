@@ -213,6 +213,44 @@ Deno.test("planFileSelection: zero non-removed changes is an explicit error, nev
   );
 });
 
+Deno.test("planFileSelection: changes made only of excluded or oversize files are an explicit error too", () => {
+  const err = assertThrows(
+    () =>
+      planFileSelection({
+        tree: TREE,
+        compare: {
+          ok: true,
+          files: [
+            { filename: "README.md", status: "modified" },
+            { filename: "src/lib/big.test.ts", status: "added" },
+            { filename: "src/lib/big.ts", status: "modified" },
+          ],
+        },
+        baseSha: "abc1234def",
+        maxFileBytes: 100 * 1024,
+        preferKeyFiles: true,
+        exclude: AUDIT_EXCLUDE,
+        foldMigrations: true,
+      }),
+    NoChangesSinceBase,
+  );
+  assert(err.message.includes("auditable"), err.message);
+  assert(err.message.includes("README.md"), err.message);
+  assert(err.message.includes("full rescan"), err.message);
+  // A changed migration alone is auditable: the inventory is re-derived.
+  const inv = planFileSelection({
+    tree: TREE,
+    compare: { ok: true, files: [{ filename: "README.md", status: "modified" }, { filename: "supabase/migrations/20260102_b.sql", status: "modified" }] },
+    baseSha: "abc1234def",
+    maxFileBytes: 100 * 1024,
+    preferKeyFiles: true,
+    exclude: AUDIT_EXCLUDE,
+    foldMigrations: true,
+  });
+  assertEquals(inv.toFetch, []);
+  assertEquals(inv.migrationPaths.length, 2);
+});
+
 Deno.test("planFileSelection: a failed compare or a diff at GitHub's file cap falls back to the whole tree", () => {
   const failed = planFileSelection({
     tree: TREE,

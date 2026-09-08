@@ -48,13 +48,26 @@ export type PriorFinding = {
   status: string;
 };
 
+// Synthetic path the selection ships in place of raw migration SQL (kept in
+// sync with github-payload.ts MIGRATION_INVENTORY_PATH; a string here so this
+// module stays free of that import graph).
+export const MIGRATION_INVENTORY_PATH = "supabase/migrations/EFFECTIVE_SCHEMA.inventory";
+
+function normalizePath(p: string | null | undefined): string {
+  return String(p ?? "").trim().replace(/^\.?\/+/, "");
+}
+
 export function selectCarryForward<T extends PriorFinding>(prior: readonly T[], meta: IncrementalAuditMeta): T[] {
-  const touched = new Set<string>([...meta.changed_paths, ...meta.removed_paths]);
+  const touched = new Set<string>([...meta.changed_paths, ...meta.removed_paths].map(normalizePath));
+  // A changed migration re-derives the whole effective schema, so every
+  // schema finding (raw migration path or the inventory) is re-judged.
+  const schemaTouched = touched.has(MIGRATION_INVENTORY_PATH);
   return prior.filter((f) => {
     if (!CARRY_FORWARD_STATUSES.includes(f.status)) return false;
-    const path = (f.file_path ?? "").trim();
+    const path = normalizePath(f.file_path);
     // No path = no way to prove the file was untouched; do not carry it.
     if (!path) return false;
+    if (schemaTouched && path.startsWith("supabase/migrations/")) return false;
     return !touched.has(path);
   });
 }

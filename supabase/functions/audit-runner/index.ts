@@ -803,7 +803,9 @@ async function beginAudit(params: {
       priorFinal = fullRescan ? null : await priorSuccessfulFinalAudit(admin, project.id);
       baseSha = priorFinal?.head_sha ?? null;
     } else {
-      baseSha = await priorHeadSha(admin, project.id);
+      // The unchanged-HEAD error tells the founder to push or run a full
+      // rescan, so the flag must work for batch audits too.
+      baseSha = fullRescan ? null : await priorHeadSha(admin, project.id);
     }
     try {
       const res = await assembleFromGithub(
@@ -1065,6 +1067,7 @@ Deno.serve(async (req) => {
         kind: "batch", loopNo, source, pastedCode, budget: 5.0,
         workflow: null,
         smoke,
+        fullRescan: body?.full_rescan === true,
       });
       if ("error" in res) return j(400, { error: res.error });
       return j(200, res);
