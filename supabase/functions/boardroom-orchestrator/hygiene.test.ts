@@ -5,7 +5,11 @@ import { assertEquals } from "https://deno.land/std@0.203.0/assert/mod.ts";
 import {
   AUDIT_COVERAGE_FLOOR,
   auditSeatCoverage,
+  decideInfraRequeue,
   failRun,
+  INFRA_REQUEUE_MAX,
+  isTransientInfraError,
+  seatCapPause,
   hasActiveSteps,
   isAbandonedSeed,
   runStepsPhase,
@@ -839,4 +843,56 @@ Deno.test("auditSeatCoverage: a two-seat chunk (no strategist) counts as fully c
   const oneDown = auditSeatCoverage(rows.map((r) => r.step_key === "audit_contrarian_c1" ? { ...r, status: "failed" } : r));
   assertEquals(oneDown.ok, true);
   assertEquals(oneDown.missing, ["audit_contrarian_c1"]);
+});
+
+// ============================== Seat cap pause (RC-10) ==============================
+
+Deno.test("seatCapPause: step back to queued, run paused_budget naming seat / cap / spent, seat-scoped alert", () => {
+  const pause = seatCapPause({ seat: "strategist", cap: 10, spent: 10.2345 }, { kind: "plan" });
+  assertEquals(pause.step, { status: "queued", error: "seat_cap" });
+  assertEquals(pause.run.status, "paused_budget");
+  assertEquals(pause.run.error.includes("strategist"), true);
+  assertEquals(pause.run.error.includes("$10.00"), true);
+  assertEquals(pause.run.error.includes("$10.23"), true);
+  assertEquals(pause.run.error.includes("Settings"), true);
+  assertEquals(pause.alert, { scope: "seat", seat: "strategist", cap_usd: 10, spent_usd: 10.2345, run_kind: "plan" });
+  // Never throws on a sparse error / missing run.
+  const sparse = seatCapPause({ seat: "chair", cap: Number.NaN, spent: Number.NaN }, null);
+  assertEquals(sparse.alert, { scope: "seat", seat: "chair", cap_usd: 0, spent_usd: 0, run_kind: null });
+});
+
+// ============================== Transient infra errors ==============================
+
+Deno.test("isTransientInfraError: only the two RPC failure prefixes qualify", () => {
+  assertEquals(isTransientInfraError("claim_run_step_with_capacity failed: deadlock detected"), true);
+  assertEquals(isTransientInfraError("record_model_call_atomic failed: canceling statement due to statement timeout"), true);
+  assertEquals(isTransientInfraError("Model x not in allowlist"), false);
+  assertEquals(isTransientInfraError("something record_model_call_atomic failed"), false);
+  assertEquals(isTransientInfraError(null), false);
+});
+
+Deno.test("decideInfraRequeue: fresh requeue on the same request up to INFRA_REQUEUE_MAX, then terminal", () => {
+  assertEquals(INFRA_REQUEUE_MAX, 2);
+  const base = { messages: [{ role: "user", content: "x" }], max_tokens: 900, force_fallback: true };
+  const first = decideInfraRequeue({ request: base });
+  assertEquals(first.action, "requeue");
+  assertEquals(first.attempts, 1);
+  if (first.action === "requeue") {
+    // Same model (force_fallback untouched), same budget, counter carried.
+    assertEquals(first.request, { ...base, _infra_attempts: 1 });
+  }
+  const second = decideInfraRequeue({ request: { ...base, _infra_attempts: 1 } });
+  assertEquals(second.action, "requeue");
+  assertEquals(second.attempts, 2);
+  const third = decideInfraRequeue({ request: { ...base, _infra_attempts: 2 } });
+  assertEquals(third.action, "terminal");
+  assertEquals(third.attempts, 3);
+  // No request at all still counts from zero.
+  assertEquals(decideInfraRequeue({}).action, "requeue");
+});
+
+Deno.test("resetRequestForResume: clears the infra attempt counter with the other markers", () => {
+  const out = resetRequestForResume({ _infra_attempts: 2, _transport_attempts: 1 }, "some error");
+  assertEquals(out._infra_attempts, 0);
+  assertEquals(out._transport_attempts, 0);
 });

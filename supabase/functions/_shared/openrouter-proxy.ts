@@ -147,9 +147,10 @@ export function applySmokeSource(seatRow: SeatRow, rows: readonly SeatRow[]): { 
 // returned ~300 chars). Callers keep `max_tokens` as the VISIBLE budget; the
 // wire cap adds a per-model allowance for the thinking. Keyed on the RESOLVED
 // model id (primary or fallback) because the same step can run on either.
-// google/x-ai/moonshotai models think by default even with no effort set.
+// google/x-ai/moonshotai/qwen models think by default even with no effort
+// set, and their trace is counted inside max_tokens.
 export function reasoningAllowance(modelId: string, effort?: "low" | "medium" | "high"): number {
-  const thinking = /^(google|x-ai|moonshotai)\//.test(String(modelId ?? ""));
+  const thinking = /^(google|x-ai|moonshotai|qwen)\//.test(String(modelId ?? ""));
   if (!effort) return thinking ? 2500 : 0;
   const table = thinking
     ? { low: 2500, medium: 5000, high: 8000 }

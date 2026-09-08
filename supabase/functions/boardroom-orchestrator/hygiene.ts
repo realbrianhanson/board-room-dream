@@ -377,6 +377,7 @@ export function resetRequestForResume(request: any, error: string | null | undef
   req._attempts = 0;
   req._timeout_attempts = 0;
   req._transport_attempts = 0;
+  req._infra_attempts = 0;
   if (!KEEP_FALLBACK_ERRORS.has(String(error ?? ""))) delete req.force_fallback;
   const mode = req._validation_retry_mode;
   delete req._validation_retry_mode;
@@ -459,6 +460,70 @@ export function planResumeFailed(
     ? []
     : steps.filter((st: any) => st?.status === "failed" && st.id !== chair?.id);
   return { chair, chairDead, finalizeRetry, requeue };
+}
+
+// ============================== Seat cap pause (RC-10) ==============================
+
+// Pure. A seat that hits model_registry.max_cost_per_run used to fail the
+// whole run (every other seat's paid work lost). It now pauses exactly like
+// the run budget: the step goes back to queued, the run to paused_budget,
+// and a spend_cap alert names the seat. The proxy re-checks the seat cap
+// before any call, so a resume with the cap unchanged pauses again without
+// spending; an admin raises the seat's cap in Settings first.
+export type SeatCapPause = {
+  step: { status: "queued"; error: "seat_cap" };
+  run: { status: "paused_budget"; error: string };
+  alert: { scope: "seat"; seat: string; cap_usd: number; spent_usd: number; run_kind: string | null };
+};
+
+export function seatCapPause(
+  e: { seat: string; cap: number; spent: number },
+  run: { kind?: string | null } | null | undefined,
+): SeatCapPause {
+  const seat = String(e.seat ?? "unknown");
+  const cap = Number(e.cap) || 0;
+  const spent = Number(e.spent) || 0;
+  return {
+    step: { status: "queued", error: "seat_cap" },
+    run: {
+      status: "paused_budget",
+      error:
+        `Seat cap hit — the ${seat} spent $${spent.toFixed(2)} of its $${cap.toFixed(2)} per-run cap. ` +
+        `Raise the ${seat} cap in Settings, then resume this run.`,
+    },
+    alert: { scope: "seat", seat, cap_usd: cap, spent_usd: spent, run_kind: run?.kind ?? null },
+  };
+}
+
+// ============================== Transient infrastructure errors ==============================
+
+// Database RPC failures around a model call are not a verdict on the step:
+// the claim RPC failing leaves the step queued for the next tick, and a
+// ledger RPC failing after the model answered means the answer was lost,
+// not that the seat cannot answer. Both used to fail the run outright.
+const TRANSIENT_INFRA_PREFIXES = ["claim_run_step_with_capacity failed", "record_model_call_atomic failed"];
+
+export function isTransientInfraError(message: unknown): boolean {
+  const m = String(message ?? "");
+  return TRANSIENT_INFRA_PREFIXES.some((p) => m.startsWith(p));
+}
+
+// Fresh retries a step gets on the same model after a transient infra error
+// before it is failed like any other error. Bounded so a persistently broken
+// RPC cannot re-buy the same call forever.
+export const INFRA_REQUEUE_MAX = 2;
+
+export type InfraDecision =
+  | { action: "requeue"; attempts: number; request: any }
+  | { action: "terminal"; attempts: number };
+
+// Pure. Mirrors decideTransportRequeue: same model, attempt counter carried
+// on the request so it survives the requeue.
+export function decideInfraRequeue(step: { request?: any }): InfraDecision {
+  const prior = Number(step?.request?._infra_attempts ?? 0) || 0;
+  const attempts = prior + 1;
+  if (prior >= INFRA_REQUEUE_MAX) return { action: "terminal", attempts };
+  return { action: "requeue", attempts, request: { ...(step?.request ?? {}), _infra_attempts: attempts } };
 }
 
 // ============================== Tick hygiene (RC-5) ==============================

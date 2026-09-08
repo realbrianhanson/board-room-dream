@@ -1042,12 +1042,15 @@ function RunwayPage() {
           ghRepo={ghRepo}
           starting={starting}
           onClose={() => setAuditModal(null)}
-          onSubmit={(source, pasted) => {
+          onSubmit={(source, pasted, fullRescan) => {
+            // GitHub audits read only what changed since the last audited
+            // commit and refuse an unchanged HEAD; this is the way past that.
+            const rescan = source === "github" && fullRescan ? { full_rescan: true } : {};
             if (auditModal.kind === "final_az") {
-              startAuditCall("start_final_audit", { project_id: projectId, source, pasted_code: pasted });
+              startAuditCall("start_final_audit", { project_id: projectId, source, pasted_code: pasted, ...rescan });
             } else {
               const action = auditModal.mode === "reaudit" ? "start_reaudit" : "start_batch_audit";
-              startAuditCall(action, { batch_id: auditModal.batch.id, source, pasted_code: pasted });
+              startAuditCall(action, { batch_id: auditModal.batch.id, source, pasted_code: pasted, ...rescan });
             }
           }}
         />
@@ -1754,10 +1757,11 @@ function AuditModal({
   ghRepo: string | null;
   starting: boolean;
   onClose: () => void;
-  onSubmit: (source: "github" | "paste", pasted: string | null) => void;
+  onSubmit: (source: "github" | "paste", pasted: string | null, fullRescan: boolean) => void;
 }) {
   const [source, setSource] = useState<"github" | "paste">(ghRepo ? "github" : "paste");
   const [pasted, setPasted] = useState("");
+  const [fullRescan, setFullRescan] = useState(false);
   const title =
     modal.kind === "final_az"
       ? "Run the A–Z audit"
@@ -1814,13 +1818,29 @@ function AuditModal({
           <CodeSourcePicker value={pasted} onChange={setPasted} maxBytes={MAX_PASTE_BYTES} />
         )}
 
+        {source === "github" && ghRepo && (
+          <label className="mt-4 flex items-start gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={fullRescan}
+              onChange={(e) => setFullRescan(e.target.checked)}
+              data-testid="audit-full-rescan"
+              className="mt-0.5 h-3.5 w-3.5 accent-primary"
+            />
+            <span>
+              Full rescan — re-read every file. By default only files changed since the last audited commit are
+              read, and an unchanged HEAD is refused.
+            </span>
+          </label>
+        )}
+
         <div className="mt-5 flex justify-end gap-2">
           <button onClick={onClose} className="rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground">
             Cancel
           </button>
           <button
             disabled={starting || (source === "paste" && !pasted.trim()) || (source === "github" && !ghRepo)}
-            onClick={() => onSubmit(source, source === "paste" ? pasted : null)}
+            onClick={() => onSubmit(source, source === "paste" ? pasted : null, fullRescan)}
             className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-50"
           >
             <Gavel className="h-4 w-4" /> {starting ? "Convening…" : "Convene the board"}

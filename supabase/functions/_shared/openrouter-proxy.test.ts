@@ -143,6 +143,7 @@ Deno.test("reasoningAllowance — thinking-by-default families get room even wit
   assertEquals(reasoningAllowance("google/gemini-3.1-pro"), 2500);
   assertEquals(reasoningAllowance("x-ai/grok-4.5"), 2500);
   assertEquals(reasoningAllowance("moonshotai/kimi-k3"), 2500);
+  assertEquals(reasoningAllowance("qwen/qwen3.8-max-0902"), 2500);
 });
 
 Deno.test("reasoningAllowance — anthropic/openai get zero room when no effort is requested", () => {
@@ -158,6 +159,8 @@ Deno.test("reasoningAllowance — effort table scales per family", () => {
   assertEquals(reasoningAllowance("anthropic/some-model", "low"), 1500);
   assertEquals(reasoningAllowance("anthropic/some-model", "medium"), 3000);
   assertEquals(reasoningAllowance("openai/some-model", "high"), 6000);
+  assertEquals(reasoningAllowance("qwen/qwen3.8-max-0902", "low"), 2500);
+  assertEquals(reasoningAllowance("qwen/qwen3.8-max-0902", "high"), 8000);
 });
 
 Deno.test("reasoningAllowance — the live batches_review shape: 2,500 visible + low on Gemini = 5,000 on the wire", () => {

@@ -9,6 +9,7 @@ import {
   decideTransportRequeue,
   isBodyTransportError,
   NoUserKey,
+  SeatBudgetExceeded,
   SeatUnavailable,
   shouldQuickRetry,
 } from "../_shared/openrouter-proxy.ts";
@@ -119,10 +120,13 @@ const BUILD_VERSION = "2026-09-08.p0-fixes.r2";
 
 import {
   auditSeatCoverage,
+  decideInfraRequeue,
   failRun,
   hasActiveSteps,
   isAbandonedSeed,
   isStepLocalFailure,
+  isTransientInfraError,
+  seatCapPause,
   planResumeFailed,
   requeueLegacyNullStartOrphans,
   requeueStepIfParentActive,
@@ -385,6 +389,24 @@ async function executeStep(admin: any, run: any, step: any) {
         }
         return;
       }
+      // Per-seat cap (model_registry.max_cost_per_run): pause exactly like
+      // the run budget instead of failing the run. The proxy re-checks the
+      // cap before every call, so resuming with the cap unchanged pauses
+      // again without spending (RC-10).
+      if (e instanceof SeatBudgetExceeded) {
+        const pause = seatCapPause(e, run);
+        await admin.from("run_steps").update(pause.step).eq("id", step.id);
+        await admin.from("boardroom_runs").update(pause.run).eq("id", run.id);
+        if (run.project_id && run.user_id) {
+          await insertAlert(admin, {
+            user_id: run.user_id,
+            project_id: run.project_id,
+            kind: "spend_cap",
+            detail: pause.alert,
+          });
+        }
+        return;
+      }
       if (e instanceof NoUserKey || e instanceof SeatUnavailable) {
         await admin
           .from("run_steps")
@@ -459,6 +481,20 @@ async function executeStep(admin: any, run: any, step: any) {
       }
       const msg = (e as Error).message ?? String(e);
       console.log(`[exec] ERROR step=${step.step_key} run=${run.id} msg=${msg}`);
+      // A database RPC failing around the call (the cost ledger after the
+      // model answered) is not a verdict on the step: requeue fresh on the
+      // same model, bounded by INFRA_REQUEUE_MAX, instead of failing the run.
+      if (isTransientInfraError(msg)) {
+        const decision = decideInfraRequeue(step);
+        console.log(`[exec] INFRA step=${step.step_key} run=${run.id} decision=${decision.action} attempts=${decision.attempts}`);
+        if (decision.action === "requeue") {
+          const outcome = await requeueStepIfParentActive(admin, step.id, decision.request, "infra_requeued");
+          if (outcome === "cancelled_parent_terminal") {
+            console.log(`[exec] INFRA step=${step.step_key} parent already terminal — step cancelled`);
+          }
+          return;
+        }
+      }
       await admin
         .from("run_steps")
         .update({ status: "failed", error: msg, completed_at: new Date().toISOString() })
@@ -2174,11 +2210,27 @@ async function processRun(admin: any, runId: string) {
   // invocation may request up to MAX_STEP_CONCURRENCY but never pushes the run
   // above the per-run limit.
   const claimed: any[] = [];
+  let claimFailed = false;
   while (claimed.length < MAX_STEP_CONCURRENCY) {
-    const step = await claimOneStep(admin, runId, MAX_STEP_CONCURRENCY);
+    let step: any;
+    try {
+      step = await claimOneStep(admin, runId, MAX_STEP_CONCURRENCY);
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e);
+      // A failed claim RPC leaves every step queued: that IS the requeue
+      // state, so leave the run for the next tick (and let this tick's
+      // other runs proceed) rather than abort the whole tick. Steps
+      // already claimed in this loop still run below; with none claimed
+      // the run must NOT be advanced as if it had no work.
+      if (!isTransientInfraError(msg)) throw e;
+      console.error(`[tick] claim failed for run=${runId}, retrying next tick: ${msg}`);
+      claimFailed = true;
+      break;
+    }
     if (!step) break;
     claimed.push(step);
   }
+  if (!claimed.length && claimFailed) return;
   if (!claimed.length) {
     await afterStepComplete(admin, run);
     return;
