@@ -7,6 +7,7 @@ import {
   auditSeatCoverage,
   failRun,
   hasActiveSteps,
+  isAbandonedSeed,
   runStepsPhase,
   STALE_RUNNING_STEP_MS,
   STALLED_RUN_MS,
@@ -693,6 +694,23 @@ Deno.test("runStepsPhase: queued beats running beats settled", () => {
 Deno.test("tick cutoffs: stale step 160 s (inside the 105 s proxy abort + 150 s isolate cap), stalled run 5 min", () => {
   assertEquals(STALE_RUNNING_STEP_MS, 160_000);
   assertEquals(STALLED_RUN_MS, 300_000);
+});
+
+Deno.test("isAbandonedSeed: a paused, stepless run older than the stalled cutoff is an abandoned seed", () => {
+  const now = Date.parse("2026-09-08T12:00:00Z");
+  const old = new Date(now - STALLED_RUN_MS - 1_000).toISOString();
+  const fresh = new Date(now - 30_000).toISOString();
+  assertEquals(isAbandonedSeed({ status: "paused", created_at: old }, [], now), true);
+  // Still inside the seeding window.
+  assertEquals(isAbandonedSeed({ status: "paused", created_at: fresh }, [], now), false);
+  // A paused run WITH steps is a user pause (or a reopen in progress) — never touched.
+  assertEquals(isAbandonedSeed({ status: "paused", created_at: old }, [{ status: "completed" }], now), false);
+  assertEquals(isAbandonedSeed({ status: "paused", created_at: old }, [{ status: "failed" }], now), false);
+  // Only paused runs qualify; queued/running belong to the stalled-run detector.
+  assertEquals(isAbandonedSeed({ status: "running", created_at: old }, [], now), false);
+  assertEquals(isAbandonedSeed({ status: "queued", created_at: old }, [], now), false);
+  // No usable timestamp: never guess.
+  assertEquals(isAbandonedSeed({ status: "paused", created_at: null }, [], now), false);
 });
 
 Deno.test("sweepOrphanSteps: cancels queued/running steps only under terminal parents", async () => {

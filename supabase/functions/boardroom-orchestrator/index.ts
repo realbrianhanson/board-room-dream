@@ -112,12 +112,13 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-07-29.import-workflow-gate.r1";
+const BUILD_VERSION = "2026-09-08.p0-fixes.r1";
 
 import {
   auditSeatCoverage,
   failRun,
   hasActiveSteps,
+  isAbandonedSeed,
   isStepLocalFailure,
   planResumeFailed,
   requeueLegacyNullStartOrphans,
@@ -2157,6 +2158,23 @@ async function failStalledRuns(admin: any): Promise<number> {
     console.log(`[tick] run ${run.id} (${run.kind}) has been running with no work since ${run.updated_at} — failing as stalled_no_work`);
     if ((await failRun(admin, fresh, "stalled_no_work")) === "won") failed++;
   }
+  // Abandoned seed (isAbandonedSeed): start_run / regenerate_batches /
+  // beginAudit insert the run as 'paused' and flip it to 'queued' only once
+  // its first steps exist. An invocation that died in between left a paused,
+  // stepless run that no tick path touches and that holds the
+  // one-active-per-kind slot — fail it through failRun so an audit's row and
+  // project status are reconciled like any other failure.
+  const { data: seeds } = await admin
+    .from("boardroom_runs")
+    .select("*")
+    .eq("status", "paused")
+    .lt("created_at", cutoff)
+    .limit(20);
+  for (const run of seeds ?? []) {
+    if (!isAbandonedSeed(run, await loadAllSteps(admin, run.id))) continue;
+    console.log(`[tick] run ${run.id} (${run.kind}) was seeded as paused at ${run.created_at} and never received a step — failing as seeding_abandoned`);
+    if ((await failRun(admin, run, "seeding_abandoned")) === "won") failed++;
+  }
   return failed;
 }
 
@@ -2562,7 +2580,7 @@ async function handleRequest(req: Request): Promise<Response> {
     if (!runId || !stepId) return j(400, { error: "Missing run_id or step_id" });
     const { data: run } = await admin
       .from("boardroom_runs")
-      .select("id, user_id, status")
+      .select("*")
       .eq("id", runId)
       .maybeSingle();
     if (!run || run.user_id !== userId) return j(404, { error: "Run not found" });
@@ -2602,6 +2620,11 @@ async function handleRequest(req: Request): Promise<Response> {
       })
       .eq("id", stepId);
     if (run.status === "failed") {
+      // Same reconciliation as resume_failed: failRun marked the audits row
+      // failed and rewound a final audit's project, so undo both before the
+      // run works again — otherwise the Audit Center shows a failed audit
+      // under a run that is still producing its findings.
+      await reverseAuditFailure(admin, run);
       await admin.from("boardroom_runs").update({ status: "running", error: null }).eq("id", runId).eq("status", "paused");
     }
     fireSelfTick();

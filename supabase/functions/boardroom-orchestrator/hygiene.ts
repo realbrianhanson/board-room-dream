@@ -490,6 +490,24 @@ export function hasActiveSteps(steps: Array<{ status?: string }>): boolean {
   return steps.some((s) => s.status === "queued" || s.status === "running");
 }
 
+// A run inserted as 'paused' by start_run / regenerate_batches / beginAudit
+// becomes 'queued' only after its first steps exist. An invocation that dies
+// in between leaves a paused run with ZERO steps holding the one-active-per-
+// kind slot forever: no tick path touches paused runs, and a user pause does
+// not look like this in practice (the UI offers Pause only on a run it can
+// already see working, which means its steps exist).
+// Pure. True when the run has sat paused and stepless for STALLED_RUN_MS.
+export function isAbandonedSeed(
+  run: { status?: string; created_at?: string | null },
+  steps: Array<{ status?: string }>,
+  nowMs: number = Date.now(),
+): boolean {
+  if (run?.status !== "paused" || steps.length > 0) return false;
+  const created = Date.parse(String(run?.created_at ?? ""));
+  if (!Number.isFinite(created)) return false;
+  return nowMs - created >= STALLED_RUN_MS;
+}
+
 export type OrphanSweepResult = { candidate_runs: number; terminal_runs: number; cancelled: number };
 
 // Bounded orphan sweep. A queued/running step whose parent run is already
