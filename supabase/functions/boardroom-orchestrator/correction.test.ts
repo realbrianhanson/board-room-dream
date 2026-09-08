@@ -2,6 +2,7 @@
 // Run: cd supabase/functions && deno test boardroom-orchestrator/correction.test.ts
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { correctionForStep, objectionsAndStealsBlock, promptJson, validateStepJson } from "./protocol.ts";
+import { evaluateChairMergeCandidate } from "../_shared/audit-findings.ts";
 
 Deno.test("correctionForStep — batch generation routes to batches copy (contract-consistent range, no exactly-six mandate)", () => {
   for (const k of ["batches_chair", "batches_revise_chair"]) {
@@ -61,7 +62,10 @@ Deno.test("correctionForStep — audit merge routes to bounded R3 merge copy wit
   assertStringIncludes(c, "<=6,000 characters");
   assertStringIncludes(c, "summary <=360");
   assertStringIncludes(c, "description <=240");
-  assertStringIncludes(c, "evidence <=140");
+  // Batch 4: the copy is generated from CAPS.mergeCorrection* (evidence cap
+  // 200), so it can no longer disagree with the validator's own numbers.
+  assertStringIncludes(c, "evidence <=200");
+  assert(!/evidence <=140/.test(c), "merge correction must not restate the stale 140-char evidence cap");
   // AUDIT-FINALIZATION-R2: correction must require the exact evidence marker
   // format so the shared downgrader does not P2-demote every retried finding.
   assertStringIncludes(c, "QUOTE:");
@@ -115,10 +119,14 @@ Deno.test("validateStepJson — batches_review_ enforces 0-8, severities, batch_
 
 // AUDIT-FINALIZATION-R2: live run a9e89958 emitted parseable Chair JSON with
 // evidence >200 chars but was marked completed because validateStepJson had
-// no audit_chair_merge branch. finalizeAudit then failed the whole run. The
-// shared merge evaluator must reject cap violations at the step boundary so
-// the existing single correction pass runs.
-Deno.test("validateStepJson — audit_chair_merge rejects evidence over cap and routes to merge correction", () => {
+// no audit_chair_merge branch. finalizeAudit then failed the whole run.
+// Batch 4 (RC-3): a cap overrun on paid, parseable output is now TRIMMED by
+// fitToMergeCaps inside the shared evaluator instead of bouncing the step
+// into a correction pass (and, on a second miss, killing the run). The
+// step-boundary validator therefore accepts this shape; the evidence the
+// audit publishes is clipped to the 280-char merge cap with its severity
+// intact (the QUOTE/WHY downgrade ran before the clip).
+Deno.test("validateStepJson — audit_chair_merge accepts evidence over cap (trimmed, not rejected)", () => {
   const badEvidence = {
     verdict: "findings",
     summary: "Live-shape audit merge",
@@ -134,12 +142,26 @@ Deno.test("validateStepJson — audit_chair_merge rejects evidence over cap and 
       line_end: 20,
     }],
   };
-  const err = validateStepJson("audit_chair_merge", badEvidence);
-  assert(err && /evidence/.test(err) && /280/.test(err), `expected evidence-over-280 error, got: ${err}`);
-  // And the routed correction must be the merge contract, not seat/map copy.
+  assertEquals(validateStepJson("audit_chair_merge", badEvidence), null);
+  const evaluation = evaluateChairMergeCandidate(badEvidence);
+  assertEquals(evaluation.error, null);
+  assertEquals(evaluation.findings.length, 1);
+  // Severity is settled BEFORE the clip: the existing truthfulness rule
+  // rescores a P0 with no IMPACT: marker to P1, and the clipped evidence
+  // does not demote it further (it still carries QUOTE/WHY).
+  assertEquals(evaluation.findings[0].severity, "P1");
+  assert(evaluation.findings[0].evidence.length <= 280, "evidence must be clipped to the merge cap");
+  // The merge correction copy is still the merge contract, not seat/map copy.
   const c = correctionForStep("audit_chair_merge");
   assertStringIncludes(c, "audit merge");
   assertStringIncludes(c, "QUOTE:");
+});
+
+Deno.test("validateStepJson — audit_chair_merge still hard-fails when findings is not an array", () => {
+  const err = validateStepJson("audit_chair_merge", { verdict: "findings", summary: "no list" });
+  assert(err && /findings/.test(err), `expected findings-array error, got: ${err}`);
+  const err2 = validateStepJson("audit_chair_merge", { verdict: "findings", summary: "x", findings: "none" });
+  assert(err2 && /findings/.test(err2), `expected findings-array error, got: ${err2}`);
 });
 
 Deno.test("validateStepJson — audit_chair_merge accepts a within-cap correction response", () => {
@@ -160,10 +182,12 @@ Deno.test("validateStepJson — audit_chair_merge accepts a within-cap correctio
   assertEquals(validateStepJson("audit_chair_merge", good), null);
 });
 
-Deno.test("validateStepJson — audit_chair_merge catches over-9,000 serialized payload before finalization", () => {
+Deno.test("validateStepJson — audit_chair_merge fits an over-9,000 serialized payload instead of failing it", () => {
   // 12 findings at merge per-field caps (title 120, description 320,
   // evidence 200) pushes serialized findings JSON past 9,000 chars while
-  // every individual finding still passes the per-field validator.
+  // every individual finding still passes the per-field validator. Batch 4:
+  // the evaluator drops from the tail until the set fits, so the step is
+  // accepted and the published set is under the cap.
   const findings = Array.from({ length: 12 }, (_, i) => ({
     severity: "P2",
     file_path: `src/some/deep/path/file_number_${i}.ts`,
@@ -175,8 +199,11 @@ Deno.test("validateStepJson — audit_chair_merge catches over-9,000 serialized 
     line_end: 2,
   }));
   const oversize = { verdict: "findings", summary: "big", findings };
-  const err = validateStepJson("audit_chair_merge", oversize);
-  assert(err && /9[, ]?000/.test(err), `expected serialized-size violation, got: ${err}`);
+  assertEquals(validateStepJson("audit_chair_merge", oversize), null);
+  const evaluation = evaluateChairMergeCandidate(oversize);
+  assertEquals(evaluation.error, null);
+  assert(evaluation.findings.length > 0 && evaluation.findings.length < 12, `expected a trimmed set, got ${evaluation.findings.length}`);
+  assert(JSON.stringify(evaluation.findings).length <= 9_000, "published findings must fit the serialized cap");
 });
 
 

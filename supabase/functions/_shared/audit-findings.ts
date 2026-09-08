@@ -660,12 +660,40 @@ export function validateMerged(
   return null;
 }
 
+// Fit an already normalized/deduped/downgraded merge report into the merge
+// caps instead of rejecting it: clip each text field, keep the highest
+// severities first (stable within a severity), cap the count, then drop
+// from the tail until the serialized findings fit. Paid output is trimmed,
+// never bounced. Pure; returns new objects.
+export function fitToMergeCaps(
+  findings: CleanFinding[],
+  summary: string,
+): { findings: CleanFinding[]; summary: string } {
+  const clipped = findings.map((f) => ({
+    ...f,
+    title: truncate(f.title, CAPS.mergeTitleMax),
+    description: truncate(f.description, CAPS.mergeDescriptionMax),
+    evidence: truncate(f.evidence, CAPS.mergeEvidenceMax),
+  }));
+  const published = clipped
+    .map((f, i) => ({ f, i }))
+    .sort((a, b) => (SEV_ORDER[a.f.severity] - SEV_ORDER[b.f.severity]) || (a.i - b.i))
+    .map((x) => x.f)
+    .slice(0, CAPS.mergeFindingsMax);
+  while (published.length && JSON.stringify(published).length > CAPS.mergeSerializedMax) {
+    published.pop();
+  }
+  return { findings: published, summary: truncate(summary, CAPS.mergeSummaryMax) };
+}
+
 // Shared merge-candidate evaluator used by BOTH validateStepJson (before the
-// step is marked completed, so a merge-cap violation triggers the existing
-// single correction pass) and finalizeAudit (defense in depth). Runs the
-// full pipeline: normalize → dedupe → downgrade unsupported P0/P1 → strict
-// validateMerged. Never truncates or synthesizes; a cap violation surfaces
-// as an error string exactly like the seat-report path.
+// step is marked completed) and finalizeAudit (defense in depth). Runs the
+// full pipeline: normalize → dedupe → downgrade unsupported P0/P1 →
+// fitToMergeCaps → validateMerged. A cap overrun is trimmed, not bounced;
+// the only remaining hard error is a response whose `findings` is not an
+// array (there is nothing to publish), which still routes to the single
+// correction pass. validateMerged runs on the fitted set as a guard, so a
+// residual error means the fitter and the validator have drifted.
 export type ChairMergeEvaluation = {
   error: string | null;
   findings: CleanFinding[];
@@ -679,8 +707,9 @@ export function evaluateChairMergeCandidate(
   ownerContract?: AuditOwnerContract,
 ): ChairMergeEvaluation {
   const obj = (parsed && typeof parsed === "object") ? (parsed as any) : {};
-  const rawFindings = Array.isArray(obj.findings) ? obj.findings : [];
-  const summary = typeof obj.summary === "string" ? obj.summary : "";
+  const hasFindingsArray = Array.isArray(obj.findings);
+  const rawFindings = hasFindingsArray ? obj.findings : [];
+  const rawSummary = typeof obj.summary === "string" ? obj.summary : "";
   const normalized = normalizeFindings(rawFindings);
   const deduped = dedupeFindings(normalized);
   const { findings: downgraded, downgrades, rejectedIndices } = downgradeUnsupported(deduped, ownerContract);
@@ -688,8 +717,11 @@ export function evaluateChairMergeCandidate(
   // them as factually unsupported. The full ledger (rescored + rejected)
   // remains on the audit summary for observability, but counts/verdict/
   // fix_prompt are based only on the published (kept) findings.
-  const published = downgraded.filter((_, i) => !rejectedIndices.has(i));
-  const error = validateMerged(published, summary);
+  const kept = downgraded.filter((_, i) => !rejectedIndices.has(i));
+  const { findings: published, summary } = fitToMergeCaps(kept, rawSummary);
+  const error = hasFindingsArray
+    ? validateMerged(published, summary)
+    : "findings must be an array (use [] for a clean verdict).";
   const verdictClaim = obj.verdict === "clean" ? "clean" : "findings";
   const verdict: "clean" | "findings" =
     verdictClaim === "clean" || published.length === 0 ? "clean" : "findings";

@@ -31,6 +31,7 @@ import {
   promptJson,
   candidateForLoop,
   lastCandidateLoop,
+  resolveConsensusThreshold,
 } from "./protocol.ts";
 import { deriveImportWorkflow, type ImportWorkflow } from "../_shared/import-workflow.ts";
 import { scopeContractForPrompt } from "../_shared/import-scope-gates.ts";
@@ -529,7 +530,7 @@ Respond with the markdown document ONLY — no JSON, no preamble, no closing rem
   }
   if (isDesign && plan) parts.push(`LOCKED PLAN\n\n${plan.content_md ?? ""}\n\nPRD\n\n${plan.prd_md ?? "(none)"}`);
   parts.push(draftsBlock(steps), objectionsAndStealsBlock(steps));
-  if (loop > 0) parts.push(priorRoundFailureBlock(steps, loop - 1));
+  if (loop > 0) parts.push(priorRoundFailureBlock(steps, loop - 1, await resolveConsensusThreshold(admin, run.user_id)));
   const user = `${parts.join("\n\n")}\n\nWrite the candidate document now.`;
   const imageParts = isDesign ? await loadScreenshotParts(admin, run.user_id, run.project_id) : [];
   await queueSteps(admin, run, {
@@ -646,7 +647,7 @@ export async function queueFinalRuling(admin: any, run: any, steps: any[]) {
   const lastCandidate = candidateForLoop(steps, lastCandidateLoop(steps));
   const lastLoop = run.loop_no; // by now already incremented to 3
   const previousLoop = Math.max(0, lastLoop - 1);
-  const failure = priorRoundFailureBlock(steps, previousLoop);
+  const failure = priorRoundFailureBlock(steps, previousLoop, await resolveConsensusThreshold(admin, run.user_id));
   const scope = await getScopeContract(admin, run);
   const system = withScope(scope, `The board has failed to reach consensus after three synthesis loops. You are the Chair — RULE. Accept some outstanding objections, reject others, and produce the final plan. This is a chair-ruled plan, not a consensus plan.
 

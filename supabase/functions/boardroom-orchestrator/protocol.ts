@@ -3,7 +3,7 @@
 // and the pure helpers that read candidate documents out of step history.
 // No step queuing here; the only I/O is the consensus-threshold lookup.
 
-import { evaluateChairMergeCandidate } from "../_shared/audit-findings.ts";
+import { CAPS, evaluateChairMergeCandidate } from "../_shared/audit-findings.ts";
 
 export const SEATS = ["chair", "strategist", "contrarian", "inspector"] as const;
 
@@ -100,7 +100,9 @@ ${JSON.stringify(j, null, 2)}`);
 }
 
 
-export function priorRoundFailureBlock(steps: any[], previousLoop: number) {
+// `threshold` is the resolved consensus gate (resolveConsensusThreshold) so
+// the Chair is shown the same bar the vote was judged against.
+export function priorRoundFailureBlock(steps: any[], previousLoop: number, threshold: number = 8) {
   const votes = SEATS
     .map((s) => steps.find((x) => x.step_key === `r4_vote_${s}_loop${previousLoop}` && x.status === "completed"))
     .filter(Boolean);
@@ -111,7 +113,7 @@ export function priorRoundFailureBlock(steps: any[], previousLoop: number) {
     (jj.blocking_objections ?? []).forEach((b: string) => blocking.push(`- [${v.seat}] ${b}`));
     for (const k of [...PLAN_RUBRIC, ...DESIGN_RUBRIC]) {
       const n = Number(jj?.scores?.[k]);
-      if (Number.isFinite(n) && n < 8) lowScores.push(`- [${v.seat}] ${k}: ${n}`);
+      if (Number.isFinite(n) && n < threshold) lowScores.push(`- [${v.seat}] ${k}: ${n}`);
     }
   }
   return `PRIOR VOTE FAILED (loop ${previousLoop})
@@ -119,7 +121,7 @@ export function priorRoundFailureBlock(steps: any[], previousLoop: number) {
 BLOCKING OBJECTIONS STILL STANDING:
 ${blocking.length ? blocking.join("\n") : "(none)"}
 
-RUBRIC SCORES BELOW 8:
+RUBRIC SCORES BELOW ${threshold}:
 ${lowScores.length ? lowScores.join("\n") : "(none)"}
 
 Revise ONLY the contested parts. Preserve agreed parts verbatim.`;
@@ -144,6 +146,109 @@ export function lastCandidateLoop(steps: any[]): number {
 
 
 // ============================== Validation ==============================
+
+function clipText(s: string, n: number): string {
+  const t = s.trim();
+  return t.length > n ? t.slice(0, n - 1).trimEnd() + "…" : t;
+}
+
+// "The Chair" / "Chair" / "chair" -> "chair". Anything else passes through
+// untouched so the validator still rejects an unknown seat.
+export function seatIdFromLabel(v: unknown): unknown {
+  if (typeof v !== "string") return v;
+  const key = v.trim().toLowerCase().replace(/^the\s+/, "");
+  return (SEATS as readonly string[]).includes(key) ? key : v;
+}
+
+// Normalize-then-validate. Models round-trip the schema with small,
+// mechanical deviations (a 7.5 score, "The Inspector" for a seat id, a
+// "resolved" objection with no quote, nine review issues, a 300-char issue
+// text, batch_no 1,2,2,4) that used to cost a full correction pass and, on
+// the second miss, the run. Each of those is coerced here deterministically
+// — never invented — and the coerced value is what validateStepJson sees and
+// what the caller must persist. Hard failures (a missing required top-level
+// key, a non-numeric score, a prompt_md outside its size contract) still
+// come back as `error`. Pure; the input object is not mutated.
+export function normalizeStepJson(
+  stepKey: string,
+  parsed: any,
+  kind: string = "plan",
+): { value: any; error: string | null } {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { value: parsed, error: validateStepJson(stepKey, parsed, kind) };
+  }
+  const value: any = JSON.parse(JSON.stringify(parsed));
+
+  if (stepKey.startsWith("r2_exam_")) {
+    if (Array.isArray(value.objections)) {
+      for (const o of value.objections) {
+        if (o && typeof o === "object") o.target_seat = seatIdFromLabel(o.target_seat);
+      }
+    }
+    if (Array.isArray(value.steals)) {
+      for (const s of value.steals) {
+        if (s && typeof s === "object") s.from_seat = seatIdFromLabel(s.from_seat);
+      }
+    }
+  }
+
+  if (stepKey.startsWith("r4_vote_")) {
+    if (value.scores && typeof value.scores === "object") {
+      for (const k of rubricForKind(kind)) {
+        const n = Number(value.scores[k]);
+        if (Number.isFinite(n)) value.scores[k] = Math.max(1, Math.min(10, Math.round(n)));
+      }
+    }
+    if (Array.isArray(value.objection_resolutions)) {
+      for (const r of value.objection_resolutions) {
+        if (r && typeof r === "object" && r.status === "resolved" && !String(r.evidence_quote ?? "").trim()) {
+          // No quote = it still stands (the prompt's own rule).
+          r.status = "standing";
+        }
+      }
+    }
+  }
+
+  if (stepKey.startsWith("batches_review_") || stepKey === "cr_review_inspector") {
+    if (Array.isArray(value.issues)) {
+      const issues = value.issues
+        .filter((iss: any) => iss && typeof iss === "object" && typeof iss.text === "string" && iss.text.trim().length >= 10)
+        .slice(0, 8)
+        .map((iss: any) => ({ ...iss, text: clipText(iss.text, 280) }));
+      value.issues = issues;
+      // The total-size cap is a wire budget, not a judgment: drop trailing
+      // issues (blocking ones are listed first by the prompt) until it fits.
+      while (value.issues.length && JSON.stringify(value).length > 4500) value.issues.pop();
+    }
+  }
+
+  if (stepKey === "batches_chair" || stepKey === "batches_revise_chair") {
+    if (Array.isArray(value.batches)) {
+      value.batches.forEach((b: any, i: number) => {
+        if (b && typeof b === "object") b.batch_no = i + 1;
+      });
+    }
+  }
+
+  return { value, error: validateStepJson(stepKey, value, kind) };
+}
+
+// What to persist when a NON-chair judgment step is still invalid after its
+// one correction pass. A single dead vote must fail that loop's consensus
+// (checkConsensus treats scores:null as a fail and the Chair sees the
+// marker as a standing objection), and a dead reviewer must count as an
+// empty review — neither is worth cancelling every paid sibling. Returns
+// null for every other step: chair steps stay run-fatal.
+export function degradedStepJson(stepKey: string, error: string): Record<string, unknown> | null {
+  const key = String(stepKey ?? "");
+  if (key.startsWith("r4_vote_")) {
+    return { scores: null, blocking_objections: ["vote_unparseable"], _meta: { degraded: error } };
+  }
+  if (key.startsWith("batches_review_")) {
+    return { verdict: "approve", issues: [], _meta: { degraded: error } };
+  }
+  return null;
+}
 
 export function validateStepJson(stepKey: string, parsed: any, kind: string = "plan"): string | null {
   if (!parsed || typeof parsed !== "object") return "Response is not a JSON object.";
@@ -337,10 +442,12 @@ export function correctionForStep(stepKey: string, opts?: { isImport?: boolean }
   if (key === "audit_chair_merge") {
     // AUDIT-MERGE-BOUNDED-R3 + AUDIT-FINALIZATION-R2: never restate the
     // 30/18,000 shape that caused the original truncation, and require the
-    // exact QUOTE/WHY evidence marker within the existing 140-char correction
-    // evidence cap. Serious findings without a verbatim quote get downgraded
-    // by the shared validator; correction should not solicit paraphrases.
-    return "Your prior audit merge JSON was invalid or truncated. Emit ONLY compact one-line valid JSON with keys verdict, summary, findings (and fix_prompt_md if any supported P0/P1 remains). HARD MAX 8 highest-severity findings; total JSON <=6,000 characters; summary <=360 characters; each finding description <=240 characters; each finding evidence <=140 characters. For every P0/P1 the evidence MUST use the exact marker form 'QUOTE: <short exact excerpt from the cited file> | WHY: <short reason it proves the issue>' — a paraphrase without a verbatim quote will be downgraded to P2. Drop the lowest-severity duplicates first; keep every supported P0/P1. If evidence for a finding is uncertain, OMIT the finding rather than expand or guess. Do NOT emit 30 findings or an 18,000-character schema — that limit caused the original truncation.";
+    // exact QUOTE/WHY evidence marker. Serious findings without a verbatim
+    // quote get downgraded by the shared validator; correction should not
+    // solicit paraphrases. Every number is read from CAPS.mergeCorrection*
+    // so the copy cannot drift from the caps the code applies.
+    const fmt = (n: number) => n.toLocaleString("en-US");
+    return `Your prior audit merge JSON was invalid or truncated. Emit ONLY compact one-line valid JSON with keys verdict, summary, findings (and fix_prompt_md if any supported P0/P1 remains). HARD MAX ${CAPS.mergeCorrectionFindingsMax} highest-severity findings; total JSON <=${fmt(CAPS.mergeCorrectionSerializedMax)} characters; summary <=${CAPS.mergeCorrectionSummaryMax} characters; each finding description <=${CAPS.mergeCorrectionDescriptionMax} characters; each finding evidence <=${CAPS.mergeCorrectionEvidenceMax} characters. For every P0/P1 the evidence MUST use the exact marker form 'QUOTE: <short exact excerpt from the cited file> | WHY: <short reason it proves the issue>' — a paraphrase without a verbatim quote will be downgraded to P2. Drop the lowest-severity duplicates first; keep every supported P0/P1. If evidence for a finding is uncertain, OMIT the finding rather than expand or guess. Do NOT emit 30 findings or an 18,000-character schema — that limit caused the original truncation.`;
   }
 
   if (/^audit_(chair|strategist|contrarian|inspector|reserve)(_c\d+)?$/.test(key)) {

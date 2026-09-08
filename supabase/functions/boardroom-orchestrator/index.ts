@@ -22,6 +22,8 @@ import {
   checkConsensus,
   resolveConsensusThreshold,
   validateStepJson,
+  normalizeStepJson,
+  degradedStepJson,
   correctionForStep,
 } from "./protocol.ts";
 import {
@@ -45,6 +47,7 @@ import {
 } from "./queues.ts";
 import { BatchContextTooLarge, MarkdownCompactionImpossible, buildValidationRetryRequest } from "../_shared/batch-context.ts";
 import { tryCloseJsonTail, tryRecoverTrailingRedundantCloser } from "../_shared/audit-findings.ts";
+import { extractJsonCandidate, repairTruncatedStepJson } from "../_shared/json-extract.ts";
 import {
   decideConflictOutcome,
   isUniqueViolation,
@@ -465,6 +468,19 @@ async function executeStep(admin: any, run: any, step: any) {
         }
       }
       if (!candidate) {
+        // Tolerant extraction (RC-3): the answer IS the right JSON but wrapped
+        // — ``` fences, a "Here is the JSON:" preamble, a "Note: done" trailer.
+        // Parses the first balanced top-level value as-is and ignores the
+        // rest; nothing is repaired. Sits between the redundant-closer rescue
+        // and the tail-closer so a complete-but-wrapped answer never reaches
+        // the closer heuristics. Still validated below like any other parse.
+        const ext = extractJsonCandidate(content);
+        if (ext.ok) {
+          candidate = ext.value;
+          recoveryMode = ext.mode;
+        }
+      }
+      if (!candidate) {
         // Conservative tail-closure rescue: the audit-map path repeatedly
         // truncates one token short of the outer "]}" (run e2c5faf3). The
         // helper appends ONLY the missing "}"/"]" needed to balance and re-
@@ -485,7 +501,15 @@ async function executeStep(admin: any, run: any, step: any) {
           tailClosed = rescued.closed;
         }
       }
-      const err = candidate ? validateStepJson(step.step_key, candidate, run.kind) : "Response was not parseable JSON.";
+      // Normalize-then-validate: mechanical schema deviations (7.5 scores,
+      // seat labels, a "resolved" objection with no quote, nine review
+      // issues, misnumbered batches) are coerced deterministically and the
+      // coerced value is what gets validated AND persisted.
+      let normalized = candidate
+        ? normalizeStepJson(step.step_key, candidate, run.kind)
+        : { value: null as any, error: "Response was not parseable JSON." as string | null };
+      let err = normalized.error;
+      let repairedMeta: { mode: string; dropped_chars: number } | null = null;
       if (err) {
         // Detect truncation: the proxy's budgetExhausted signal (provider
         // finish_reason of length/max_tokens OR completion tokens at the wire
@@ -505,8 +529,56 @@ async function executeStep(admin: any, run: any, step: any) {
         // and NEVER make two long model calls in one invocation. Queue the
         // correction into a fresh invocation, exactly one retry before failing.
         const validationAttempts = Number(step.request?._validation_attempts ?? 0);
-        if (validationAttempts >= 1) {
+        if (validationAttempts >= 1 && truncated) {
+          // Last resort, AFTER the widened correction pass also came back
+          // cut: keep the complete elements of a count-tolerant list step
+          // (audit map / merge findings, batch plans above the contract
+          // minimum) rather than fail the run. Allow-list and minimum-count
+          // guard live in repairTruncatedStepJson; the repaired value must
+          // still pass the same normalize/validate gate as a clean answer.
+          const repaired = repairTruncatedStepJson(step.step_key, content, {
+            isImport: step.request?._is_import === true,
+          });
+          if (repaired.ok) {
+            const again = normalizeStepJson(step.step_key, repaired.value, run.kind);
+            if (!again.error) {
+              normalized = again;
+              err = null;
+              repairedMeta = { mode: "truncation_cut", dropped_chars: repaired.dropped_chars };
+              console.log(`[exec] REPAIRED step=${step.step_key} run=${run.id} dropped_chars=${repaired.dropped_chars}`);
+            } else {
+              console.log(`[exec] REPAIR_REJECTED step=${step.step_key} run=${run.id} reason=${again.error}`);
+            }
+          } else {
+            console.log(`[exec] REPAIR_REFUSED step=${step.step_key} run=${run.id} reason=${repaired.reason}`);
+          }
+        }
+        if (err && validationAttempts >= 1) {
           const vmsg = `Step ${step.step_key} produced invalid JSON after one correction pass: ${err}`;
+          // A dead vote or reviewer degrades (fails that loop's consensus /
+          // counts as an empty review) instead of cancelling every paid
+          // sibling; chair steps and everything else stay run-fatal.
+          const degraded = degradedStepJson(step.step_key, err);
+          if (degraded) {
+            console.log(`[exec] DEGRADED step=${step.step_key} run=${run.id} err=${err}`);
+            await admin
+              .from("run_steps")
+              .update({
+                status: "completed",
+                response_text: content,
+                response_json: {
+                  ...degraded,
+                  _meta: { ...outputMeta, ...(fallbackMeta ? { fallback: fallbackMeta } : {}), ...(degraded._meta as any) },
+                },
+                tokens_in: usage.tokensIn,
+                tokens_out: usage.tokensOut,
+                cost_usd: usage.costUsd,
+                completed_at: new Date().toISOString(),
+              })
+              .eq("id", step.id)
+              .eq("status", "running");
+            return;
+          }
           await admin
             .from("run_steps")
             .update({
@@ -524,13 +596,15 @@ async function executeStep(admin: any, run: any, step: any) {
           await failRun(admin, run, vmsg);
           return;
         }
-        const vOutcome = await requeueForValidation(admin, run, step, baseMessages, content, err, truncated);
-        if (vOutcome === "cancelled_parent_terminal") {
-          console.log(`[exec] VALIDATION step=${step.step_key} parent already terminal — step cancelled`);
+        if (err) {
+          const vOutcome = await requeueForValidation(admin, run, step, baseMessages, content, err, truncated);
+          if (vOutcome === "cancelled_parent_terminal") {
+            console.log(`[exec] VALIDATION step=${step.step_key} parent already terminal — step cancelled`);
+          }
+          return;
         }
-        return;
       }
-      let parsed: any = candidate;
+      let parsed: any = normalized.value;
       if (!parsed || typeof parsed !== "object") parsed = {};
       parsed._meta = {
         ...(parsed._meta ?? {}),
@@ -538,6 +612,7 @@ async function executeStep(admin: any, run: any, step: any) {
         ...(fallbackMeta ? { fallback: fallbackMeta } : {}),
         ...(tailClosed ? { tail_closed: tailClosed } : {}),
         ...(recoveryMode ? { recovery_mode: recoveryMode } : {}),
+        ...(repairedMeta ? { repaired: repairedMeta } : {}),
       };
       await admin
         .from("run_steps")
@@ -1274,14 +1349,16 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
   }
   const evaluation = evaluateChairMergeCandidate(parsed, ownerContract);
   const { findings, downgrades, summary: mergedSummaryText } = evaluation;
-  if (evaluation.error) {
-    await admin
-      .from("audits")
-      .update({ status: "failed", completed_at: new Date().toISOString(), summary: { error: `merge_validation_failed: ${evaluation.error}` } })
-      .eq("id", auditId);
-    await failRun(admin, run, `audit_chair_merge failed validation: ${evaluation.error}`);
-    return;
+  // RC-3: the evaluator now fits the report into the merge caps instead of
+  // rejecting it, so a residual error here is a fitter/validator drift (or a
+  // merge with no findings array at all). The paid seat work is published
+  // as trimmed, with the warning recorded on the run, rather than failing
+  // the run at its very last step.
+  const validationWarning: string | null = evaluation.error ?? null;
+  if (validationWarning) {
+    console.log(`[audit] finalize run=${run.id} publishing with validation_warning=${validationWarning}`);
   }
+  const consensusWarning = validationWarning ? { validation_warning: validationWarning } : {};
 
   const isFinal = audit.kind === "final_az";
 
@@ -1420,7 +1497,7 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
 
     await admin
       .from("boardroom_runs")
-      .update({ status: "consensus", consensus: { ...(run.consensus ?? {}), verdict: "clean" } })
+      .update({ status: "consensus", consensus: { ...(run.consensus ?? {}), verdict: "clean", ...consensusWarning } })
       .eq("id", run.id);
     return;
   }
@@ -1569,7 +1646,7 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
 
   await admin
     .from("boardroom_runs")
-    .update({ status: "consensus", consensus: { ...(run.consensus ?? {}), verdict: "findings", fix_batch_id: fixBatchId } })
+    .update({ status: "consensus", consensus: { ...(run.consensus ?? {}), verdict: "findings", fix_batch_id: fixBatchId, ...consensusWarning } })
     .eq("id", run.id);
 }
 
