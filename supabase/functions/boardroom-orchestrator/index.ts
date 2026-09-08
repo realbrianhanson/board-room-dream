@@ -46,6 +46,7 @@ import {
   RepoContractUnavailable,
 } from "./queues.ts";
 import { BatchContextTooLarge, MarkdownCompactionImpossible, buildValidationRetryRequest, continuationPrefix, joinContinuation } from "../_shared/batch-context.ts";
+import { isSmokeRun, keepSmoke, loopCap, runBudgetUsd } from "../_shared/smoke-mode.ts";
 import { tryCloseJsonTail, tryRecoverTrailingRedundantCloser } from "../_shared/audit-findings.ts";
 import { extractJsonCandidate, repairTruncatedStepJson } from "../_shared/json-extract.ts";
 import {
@@ -341,6 +342,7 @@ async function executeStep(admin: any, run: any, step: any) {
           json: jsonMode,
           forceFallback: !!step.request?.force_fallback,
           maxTokens: Number(step.request?.max_tokens) > 0 ? Number(step.request.max_tokens) : undefined,
+          smoke: isSmokeRun(run),
         }),
         STEP_HARD_TIMEOUT_MS,
         step.step_key,
@@ -474,6 +476,10 @@ async function executeStep(admin: any, run: any, step: any) {
       tokens_out: usage.tokensOut,
       reasoning_tokens: Number(result.reasoningTokens ?? 0) || 0,
       wire_max_tokens: Number(result.wireMaxTokens ?? 0) || 0,
+      // The model that actually answered. A smoke run borrows the smoke (or
+      // inspector) row's model for every seat, so the row must say which.
+      model: result.model ?? null,
+      ...(result.smokeSource ? { smoke_model_source: result.smokeSource } : {}),
     };
 
     if (jsonMode) {
@@ -840,7 +846,7 @@ async function lockPlanAndQueueBlueprint(
       .from("boardroom_runs")
       .update({
         status: finalStatus,
-        consensus: { scores, plan_version_id: inserted?.id ?? null },
+        consensus: keepSmoke(run, { scores, plan_version_id: inserted?.id ?? null }),
         dissent_ledger: dissentLedger,
         updated_at: new Date().toISOString(),
       })
@@ -855,11 +861,11 @@ async function lockPlanAndQueueBlueprint(
     .from("boardroom_runs")
     .update({
       round_no: 6,
-      consensus: {
+      consensus: keepSmoke(run, {
         pending_final_status: mode,
         scores,
         plan_version_id: inserted?.id ?? null,
-      },
+      }),
       dissent_ledger: dissentLedger,
       updated_at: new Date().toISOString(),
     })
@@ -951,7 +957,7 @@ async function finalizeBlueprint(admin: any, run: any, steps: any[]) {
     .from("boardroom_runs")
     .update({
       status: finalStatus,
-      consensus: meta.scores ?? {},
+      consensus: keepSmoke(run, meta.scores ?? {}),
       updated_at: new Date().toISOString(),
     })
     .eq("id", run.id);
@@ -1262,7 +1268,7 @@ async function finalizeBatches(admin: any, run: any, batchesJson: any[]) {
     .from("boardroom_runs")
     .update({
       status: "completed",
-      consensus: { batches_inserted: plannedRows.length },
+      consensus: keepSmoke(run, { batches_inserted: plannedRows.length }),
       updated_at: new Date().toISOString(),
     })
     .eq("id", run.id)
@@ -2035,7 +2041,8 @@ async function advanceRun(admin: any, runIn: any) {
       return;
     }
     const nextLoop = loop + 1;
-    if (nextLoop < 3) {
+    // Three revision loops normally; a smoke run goes straight to the ruling.
+    if (nextLoop < loopCap(isSmokeRun(run))) {
       await queueRound3(admin, run, steps, nextLoop);
       await admin
         .from("boardroom_runs")
@@ -2303,6 +2310,15 @@ async function handleRequest(req: Request): Promise<Response> {
     if (!["test", "plan", "features", "design", "change_request", "audit", "batches"].includes(kind)) {
       return j(400, { error: "Invalid kind" });
     }
+    // Smoke mode (RC-9): the $1 rehearsal of a run kind — no revision loops,
+    // no repo sample, three batches with one reviewer, every seat on the
+    // cheap smoke model. Admin-only: it is a pipeline check, not a product.
+    const smoke = body?.smoke === true;
+    if (smoke) {
+      const { data: isAdmin, error: roleErr } = await admin.rpc("has_role", { _user_id: userId, _role: "admin" });
+      if (roleErr) return j(500, { error: "Role check failed" });
+      if (isAdmin !== true) return j(403, { error: "Smoke runs are admin-only" });
+    }
     const { data: project } = await admin
       .from("projects")
       .select("id, user_id, is_import, github_repo")
@@ -2456,7 +2472,8 @@ async function handleRequest(req: Request): Promise<Response> {
       .eq("key", "constitution")
       .maybeSingle();
 
-    const budget = kind === "test" ? 0.25 : kind === "change_request" ? 3.0 : kind === "batches" ? 3.0 : 10.0;
+    if (smoke) consensusMeta = { ...(consensusMeta ?? {}), smoke: true };
+    const budget = runBudgetUsd(kind, smoke);
     const { data: run, error: rerr } = await admin
       .from("boardroom_runs")
       .insert({

@@ -9,6 +9,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { SpendPanel } from "@/components/spend-panel";
 import { startGithubConnect } from "@/lib/github-connect";
+import { extractFunctionsErrorMessage } from "@/lib/functions-error";
+import { SMOKE_KIND_LABEL, SMOKE_KINDS, type SmokeKind, smokeRunOutcome, smokeRunRequest } from "@/lib/smoke-run";
 
 export const Route = createFileRoute("/_authenticated/settings")({
   component: SettingsPage,
@@ -805,6 +807,20 @@ function SettingsPage() {
 
           <div className="mt-14 border-t border-border pt-10">
             <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+              Admin · Smoke run
+            </span>
+            <h2 className="mt-3 font-display text-2xl text-foreground">The $1 rehearsal.</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Runs a kind end to end on the cheap smoke seat (or the Inspector's model when no smoke seat
+              is enabled) so a code change is proven before anyone pays for a full run.
+            </p>
+            <div className="mt-6">
+              <SmokeRunPanel />
+            </div>
+          </div>
+
+          <div className="mt-14 border-t border-border pt-10">
+            <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
               Admin · Default daily cap
             </span>
             <h2 className="mt-3 font-display text-2xl text-foreground">The workspace ceiling.</h2>
@@ -847,6 +863,110 @@ function SettingsPage() {
         </>
       )}
     </div>
+  );
+}
+
+type SmokeProject = { id: string; name: string };
+
+function SmokeRunPanel() {
+  const [projects, setProjects] = useState<SmokeProject[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [projectId, setProjectId] = useState("");
+  const [kind, setKind] = useState<SmokeKind>("audit");
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    const { data, error } = await supabase
+      .from("projects")
+      .select("id, name")
+      .order("created_at", { ascending: false });
+    if (error) {
+      setLoadError(error.message);
+      return;
+    }
+    setLoadError(null);
+    const rows = (data ?? []) as SmokeProject[];
+    setProjects(rows);
+    setProjectId((cur) => cur || rows[0]?.id || "");
+  }
+  useEffect(() => { void load(); }, []);
+
+  async function run() {
+    if (!projectId) return toast.error("Pick a project first");
+    setBusy(true);
+    try {
+      const req = smokeRunRequest(kind, projectId);
+      const { data, error } = await supabase.functions.invoke(req.fn, { body: req.body });
+      if (error) throw new Error(await extractFunctionsErrorMessage(error));
+      if ((data as { error?: string })?.error) throw new Error((data as { error: string }).error);
+      toast.success(smokeRunOutcome(data));
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-border bg-surface-1 p-6">
+      {loadError ? (
+        <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+          <p className="font-medium">Couldn't load projects.</p>
+          <p className="mt-1 break-words text-destructive/80">{loadError}</p>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="mt-3 inline-flex rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+          >
+            Retry
+          </button>
+        </div>
+      ) : projects === null ? (
+        <div className="h-16 animate-pulse rounded-lg bg-surface-2" />
+      ) : projects.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No projects yet — create one before running a smoke.</p>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end">
+          <label className="block">
+            <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Project</span>
+            <select
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+              className="mt-1.5 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground"
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Kind</span>
+            <select
+              value={kind}
+              onChange={(e) => setKind(e.target.value as SmokeKind)}
+              className="mt-1.5 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground"
+            >
+              {SMOKE_KINDS.map((k) => (
+                <option key={k} value={k}>{SMOKE_KIND_LABEL[k]}</option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={run}
+            disabled={busy || !projectId}
+            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-all hover:brightness-110 disabled:opacity-60"
+          >
+            {busy ? "Queuing…" : "Run smoke"}
+          </button>
+        </div>
+      )}
+      <p className="mt-4 text-xs text-muted-foreground">
+        Same gates and the same side effects as a real run (a smoke plan locks a plan version, a smoke
+        batches run writes three batches, a smoke audit records findings) — use a throwaway project.
+        Budget $1. Progress shows in the Boardroom, Runway or Audit Center for that project.
+      </p>
+    </section>
   );
 }
 

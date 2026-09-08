@@ -20,6 +20,7 @@ import {
 } from "../_shared/batch-context.ts";
 export { BatchContextTooLarge } from "../_shared/batch-context.ts";
 import { batchPromptPolicy, productStrategyContract } from "../_shared/batch-count-policy.ts";
+import { batchesReviewSeats, isSmokeRun, smokeBatchPromptPolicy } from "../_shared/smoke-mode.ts";
 import {
   SEATS,
   type Seat,
@@ -393,13 +394,17 @@ export async function queueRound1(admin: any, run: any) {
   const scope = isImport ? await getScopeContract(admin, run) : "";
   let system: string;
   let userContent: string;
+  // A smoke run skips the repo sample (up to 300 KB to four seats) — it is a
+  // pipeline rehearsal, not a real deliberation.
+  const smoke = isSmokeRun(run);
+  const emptySample = { files: [] as any[], fileTree: [] as string[] };
 
   if (run.kind === "design") {
     const plan = workflow && !workflow.requiresPlan ? null : await loadLockedPlan(admin, run.project_id);
     system =
       "Round 1 of the Design Council. You are drafting INDEPENDENTLY — you cannot see the other seats' drafts. Produce your best design direction for this app. You MUST include: concept/mood; palette as specific HSL values; type pairing with specific font names; spacing and shape language; ONE distinctive signature element (a structural design move — non-negotiable, this is the point); and motion rules. Be specific, opinionated, and premium. Avoid generic AI-slop aesthetics.";
     if (isImport) {
-      const sample = await loadRepoSample(admin, project, 12);
+      const sample = smoke ? emptySample : await loadRepoSample(admin, project, 12);
       const treeBlock = sample.fileTree.length ? sample.fileTree.join("\n") : "(no repo files available)";
       const codeBlock = sample.files.length ? formatFiles(sample.files) : "(no repo files available)";
       const planBlock = plan?.content_md?.trim()
@@ -414,7 +419,7 @@ export async function queueRound1(admin: any, run: any) {
   } else if (run.kind === "plan" && isImport) {
     system =
       "Round 1 of the board's improvement deliberation. This app already exists — the owner has brought it to the board. You are drafting INDEPENDENTLY. Produce a PRIORITIZED IMPROVEMENT PLAN: what's broken, what's missing, what to build next, ranked by impact. Be specific, opinionated, and concrete about the code you can see. Do not restart the app from scratch.";
-    const sample = await loadRepoSample(admin, project, 15);
+    const sample = smoke ? emptySample : await loadRepoSample(admin, project, 15);
     const audit = await latestAuditSummary(admin, run.project_id);
     const treeBlock = sample.fileTree.length ? sample.fileTree.join("\n") : "(no repo linked)";
     const auditBlock = audit?.summary
@@ -978,7 +983,8 @@ export async function queueBatchesStep(admin: any, run: any) {
   // minimum needed to cover the locked improvement plan). Greenfield stays
   // 6-8 (prefer 6). The validator globally accepts 3-8 so this prompt-side
   // range simply constrains the model within the allowed window.
-  const policy = batchPromptPolicy(isImport);
+  // A smoke run pins the count to the validator's floor (three batches).
+  const policy = isSmokeRun(run) ? smokeBatchPromptPolicy() : batchPromptPolicy(isImport);
   const batchRangeText = policy.rangeText;
   const batchRangePrompt = policy.rangePrompt;
   const batchCountRule = policy.countRule;
@@ -1187,7 +1193,8 @@ ${shape}`),
       ? `LOCKED DESIGN BRIEF (compact)\n\n${compactDesign}`
       : `NO LOCKED DESIGN BRIEF.`;
   const user = `${repoContract}\n\n${planSection}\n\n${prdSection}\n\nFEATURES\n\n${featuresBlock}\n\n${designSection}\n\nDRAFT BATCHES\n\n${draftBlock}\n\nProduce your JSON now.`;
-  const rows = (["inspector", "contrarian"] as const).map((seat) => ({
+  // Both reviewers normally; a smoke run gets the inspector alone.
+  const rows = batchesReviewSeats(isSmokeRun(run)).map((seat) => ({
     run_id: run.id,
     user_id: run.user_id,
     step_key: `batches_review_${seat}`,
@@ -1240,7 +1247,7 @@ export async function queueBatchesRevise(admin: any, run: any, draftJson: any, r
   const issues = reviewSteps
     .map((s: any) => `--- ${SEAT_LABEL[s.seat as Seat]} ---\n${JSON.stringify(promptJson(s.response_json ?? { missing: true }), null, 2)}`)
     .join("\n\n");
-  const revisePolicy = batchPromptPolicy(isImport);
+  const revisePolicy = isSmokeRun(run) ? smokeBatchPromptPolicy() : batchPromptPolicy(isImport);
   const batchRangeText = revisePolicy.rangeText;
   const batchCountRule = revisePolicy.countRule;
   const baseSystem = `Batches revision — you are the Chair. The Inspector and Contrarian reviewed your drafted build sequence and found issues. FIX every blocking issue and every major issue you agree with — do not merely acknowledge them. Keep every uncontested batch verbatim. The LIVE REPO CONTRACT outranks any guessed name in your original draft or the PRD; correct invented paths to the real ones, or relabel them CREATE/ADD with proper dependency ordering. Preserve the SCOPE CONTRACT above at all times — never re-introduce out-of-scope work even if a reviewer requested it.

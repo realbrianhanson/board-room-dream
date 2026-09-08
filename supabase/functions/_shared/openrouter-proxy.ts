@@ -2,6 +2,7 @@
 // The single choke point for every LLM call in BOARDROOM.
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { decryptSecret } from "./crypto.ts";
+import { resolveSmokeSource } from "./smoke-mode.ts";
 
 export class BudgetExceeded extends Error {
   constructor(msg = "Run budget exceeded") {
@@ -91,7 +92,16 @@ export type ProxyOptions = {
   forceFallback?: boolean;
   /** Cap completion tokens to bound cost/latency on JSON-shape emitters. */
   maxTokens?: number;
+  /**
+   * Smoke run: every seat is served by the enabled "smoke" registry row's
+   * model (or the inspector's when no smoke row exists). The seat's own
+   * role_prompt, per-run cap and ledger label are kept.
+   */
+  smoke?: boolean;
 };
+
+/** Which registry row's model served a smoke call (see resolveSmokeSource). */
+export type SmokeModelSource = "smoke" | "inspector" | "seat";
 
 export type FallbackMeta = {
   fallback_model_used: string;
@@ -114,7 +124,21 @@ export type ProxyResult = {
   /** True when the completion hit the wire cap — by finish_reason OR by token count. */
   budgetExhausted?: boolean;
   fallback?: FallbackMeta;
+  /** Set on smoke calls only: which registry row's model answered. */
+  smokeSource?: SmokeModelSource;
 };
+
+// Pure. On a smoke call the seat keeps its identity (role_prompt, per-run
+// cap, ledger label) but borrows the model — and fallback — of the smoke row,
+// else the inspector row. With neither enabled the seat's own model stays.
+export function applySmokeSource(seatRow: SeatRow, rows: readonly SeatRow[]): { row: SeatRow; source: SmokeModelSource } {
+  const src = resolveSmokeSource(rows);
+  if (!src) return { row: seatRow, source: "seat" };
+  return {
+    row: { ...seatRow, model_id: src.row.model_id, fallback_model_id: src.row.fallback_model_id ?? null },
+    source: src.source,
+  };
+}
 
 // Reasoning models count their hidden thinking tokens INSIDE max_tokens, so a
 // cap sized for the visible answer alone gets eaten by the thinking and the
@@ -633,7 +657,13 @@ export async function callSeat(
   await checkDailyCap(admin, userId);
   if (options.runId) await checkBudget(admin, options.runId);
 
-  const seatRow = await loadSeat(admin, seat);
+  let seatRow = await loadSeat(admin, seat);
+  let smokeSource: SmokeModelSource | undefined;
+  if (options.smoke) {
+    const applied = applySmokeSource(seatRow, await loadRegistry(admin));
+    seatRow = applied.row;
+    smokeSource = applied.source;
+  }
   if (options.runId) await checkSeatBudget(admin, options.runId, seat, seatRow.max_cost_per_run);
   const allowed = await loadAllowedModels(admin);
   if (!allowed.has(seatRow.model_id)) {
@@ -754,6 +784,7 @@ export async function callSeat(
         primary_model: seatRow.model_id,
         reason: "refusal",
       },
+      ...(smokeSource ? { smokeSource } : {}),
     };
   }
 
@@ -768,6 +799,7 @@ export async function callSeat(
     reasoningTokens: attempt.reasoningTokens,
     wireMaxTokens: attempt.wireMaxTokens,
     budgetExhausted: attempt.budgetExhausted,
+    ...(smokeSource ? { smokeSource } : {}),
   };
 }
 

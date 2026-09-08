@@ -15,6 +15,7 @@ import {
 import { deriveImportWorkflow, type ImportWorkflow } from "../_shared/import-workflow.ts";
 import { scopeContractForPrompt } from "../_shared/import-scope-gates.ts";
 import { assertStepInsertOk } from "../_shared/step-insert.ts";
+import { auditBudgetUsd, auditChunksForRun, auditMapSeats } from "../_shared/smoke-mode.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -392,6 +393,7 @@ async function insertAuditSteps(
   batchOutcome: string | null,
   fileTree: string[],
   scopeContract: string | null,
+  smoke = false,
 ) {
   const contractBody = isFinal
     ? finalContract?.mode === "import_current_milestone"
@@ -432,7 +434,8 @@ CODE
 ${code}
 
 Produce your JSON now.`;
-    for (const seat of ["inspector", "contrarian", "strategist"] as const) {
+    // Three seats per chunk normally; a smoke audit queues the inspector only.
+    for (const seat of auditMapSeats(smoke)) {
       rows.push({
         run_id: run.id,
         user_id: run.user_id,
@@ -511,8 +514,12 @@ async function beginAudit(params: {
   pastedCode: string | null;
   budget: number;
   workflow: ImportWorkflow | null;
+  /** Smoke audit (RC-9): one chunk, inspector only, $1 budget; the Chair merge still runs. */
+  smoke?: boolean;
 }) {
-  const { admin, userId, project, batchId, kind, loopNo, source, pastedCode, budget, workflow } = params;
+  const { admin, userId, project, batchId, kind, loopNo, source, pastedCode, workflow } = params;
+  const smoke = params.smoke === true;
+  const budget = smoke ? auditBudgetUsd(kind, true) : params.budget;
   const isFinal = kind === "final_az";
   const scopeContract = isFinal && project.is_import && workflow ? scopeContractForPrompt(workflow) : null;
 
@@ -672,6 +679,7 @@ async function beginAudit(params: {
     audit_kind: kind,
     files_analyzed: filesAnalyzed,
   };
+  if (smoke) consensus.smoke = true;
   if (isFinal && auditContractMode) {
     consensus.audit_contract_mode = auditContractMode;
     consensus.included_batch_ids = includedBatchIds;
@@ -723,7 +731,7 @@ async function beginAudit(params: {
     await insertAuditSteps(
       admin,
       run,
-      chunks,
+      auditChunksForRun(chunks, smoke),
       batchPrompt,
       finalContract,
       batchPlan,
@@ -732,6 +740,7 @@ async function beginAudit(params: {
       batchOutcome,
       fileTree,
       scopeContract,
+      smoke,
     );
   } catch (e) {
     return await failSeed((e as Error)?.message ?? String(e));
@@ -777,6 +786,15 @@ Deno.serve(async (req) => {
   const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  // Smoke audit (RC-9): one chunk, inspector only, still merged, $1 budget.
+  // Admin-only — it is a pipeline check, not an audit of the product.
+  const smoke = body?.smoke === true;
+  if (smoke) {
+    const { data: isAdmin, error: roleErr } = await admin.rpc("has_role", { _user_id: userId, _role: "admin" });
+    if (roleErr) return j(500, { error: "Role check failed" });
+    if (isAdmin !== true) return j(403, { error: "Smoke audits are admin-only" });
+  }
 
   async function ownProject(project_id: string) {
     const { data } = await admin
@@ -826,6 +844,7 @@ Deno.serve(async (req) => {
         admin, userId, project, batchId,
         kind: "batch", loopNo, source, pastedCode, budget: 5.0,
         workflow: null,
+        smoke,
       });
       if ("error" in res) return j(400, { error: res.error });
       return j(200, res);
@@ -907,6 +926,7 @@ Deno.serve(async (req) => {
         admin, userId, project, batchId: null,
         kind: "final_az", loopNo: 1, source, pastedCode, budget: 12.0,
         workflow,
+        smoke,
       });
       if ("error" in res) return j(400, { error: res.error });
       return j(200, res);
