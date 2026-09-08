@@ -63,12 +63,23 @@ ${JSON.stringify(intake?.validation_scores ?? null, null, 2)}`;
 
 
 
-export function draftsBlock(steps: any[], forSeat?: Seat) {
+// `maxCharsPerDraft` bounds each draft (design Round-3 input diet, RC-4): the
+// cut is on a code-point boundary and carries an explicit note so the Chair
+// knows the draft continues past what it sees. Unset = full drafts (Round 2
+// exams need them whole).
+export function draftsBlock(steps: any[], forSeat?: Seat, maxCharsPerDraft?: number) {
   return SEATS
     .filter((s) => (forSeat ? s !== forSeat : true))
     .map((s) => {
       const step = steps.find((x) => x.step_key === `r1_draft_${s}` && x.status === "completed");
-      return `--- ${SEAT_LABEL[s]} (${s}) DRAFT ---\n${step?.response_text ?? "(no draft)"}`;
+      let text = String(step?.response_text ?? "(no draft)");
+      if (maxCharsPerDraft && maxCharsPerDraft > 0 && text.length > maxCharsPerDraft) {
+        let cut = maxCharsPerDraft;
+        const code = text.charCodeAt(cut - 1);
+        if (code >= 0xD800 && code <= 0xDBFF) cut -= 1;
+        text = `${text.slice(0, cut)}\n\n[draft truncated at ${maxCharsPerDraft} chars of ${text.length}]`;
+      }
+      return `--- ${SEAT_LABEL[s]} (${s}) DRAFT ---\n${text}`;
     })
     .join("\n\n");
 }

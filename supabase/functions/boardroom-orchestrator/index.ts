@@ -45,7 +45,7 @@ import {
   queueRound4,
   RepoContractUnavailable,
 } from "./queues.ts";
-import { BatchContextTooLarge, MarkdownCompactionImpossible, buildValidationRetryRequest } from "../_shared/batch-context.ts";
+import { BatchContextTooLarge, MarkdownCompactionImpossible, buildValidationRetryRequest, continuationPrefix, joinContinuation } from "../_shared/batch-context.ts";
 import { tryCloseJsonTail, tryRecoverTrailingRedundantCloser } from "../_shared/audit-findings.ts";
 import { extractJsonCandidate, repairTruncatedStepJson } from "../_shared/json-extract.ts";
 import {
@@ -129,6 +129,8 @@ import {
   sweepOrphanSteps,
   TERMINAL_RUN_STATUSES,
   validationRetryBudget,
+  timeoutRequeueRequest,
+  staleRequeueRequest,
 } from "./hygiene.ts";
 
 function fireSelfTick(body: any = {}) {
@@ -225,17 +227,13 @@ function withHardTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T
 // without booting Deno.serve. See that module for behavior contracts.
 
 
+// Payload built by the pure timeoutRequeueRequest (hygiene.ts): reserve
+// model, low reasoning, same visible cap.
 async function requeueForTimeout(admin: any, step: any): Promise<string> {
-  const timeoutAttempts = Number(step.request?._timeout_attempts ?? 0) + 1;
   return await requeueStepIfParentActive(
     admin,
     step.id,
-    {
-      ...(step.request ?? {}),
-      _timeout_attempts: timeoutAttempts,
-      // Never switch back to the timed-out primary — the reserve answers next.
-      force_fallback: true,
-    },
+    timeoutRequeueRequest(step.request),
     "timeout_failover",
   );
 }
@@ -255,7 +253,16 @@ async function requeueForBodyTransport(admin: any, step: any, attempts: number):
   );
 }
 
-async function requeueForValidation(admin: any, run: any, step: any, baseMessages: any[], assistantContent: string, validationError: string, truncated: boolean): Promise<string> {
+async function requeueForValidation(
+  admin: any,
+  run: any,
+  step: any,
+  baseMessages: any[],
+  assistantContent: string,
+  validationError: string,
+  truncated: boolean,
+  continuation = false,
+): Promise<string> {
   const attempts = Number(step.request?._validation_attempts ?? 0) + 1;
   try {
     const { request: newRequest, mode } = buildValidationRetryRequest({
@@ -265,6 +272,7 @@ async function requeueForValidation(admin: any, run: any, step: any, baseMessage
       assistantContent,
       validationError,
       truncated,
+      continuation,
       correction: correctionForStep(step.step_key, { isImport: step.request?._is_import === true ? true : step.request?._is_import === false ? false : undefined }),
     });
     // The correction pass used to re-send the identical max_tokens / effort
@@ -273,7 +281,10 @@ async function requeueForValidation(admin: any, run: any, step: any, baseMessage
     // when the output was truncated, widen the visible cap (bounded so the
     // call still finishes inside the proxy abort). Applied HERE, not in
     // buildValidationRetryRequest, which stays a pure message builder.
-    const bumped = validationRetryBudget(step, truncated);
+    // A markdown continuation keeps its visible cap: only the remainder is
+    // requested, and a bounded "widening" could SHRINK a draft's cap (8,000 ->
+    // 6,000) and re-cut a genuinely long document.
+    const bumped = continuation ? { reasoning_effort: "low" as const } : validationRetryBudget(step, truncated);
     return await requeueStepIfParentActive(
       admin,
       step.id,
@@ -645,13 +656,37 @@ async function executeStep(admin: any, run: any, step: any) {
       return;
     }
 
-    // Non-JSON free-markdown path — complete as-is.
+    // Non-JSON free-markdown path. A draft cut at the budget used to complete
+    // as-is and become the locked plan verbatim (RC-4). Now: one continuation
+    // pass in a fresh invocation (text so far replayed, low reasoning, same
+    // cap), joined here on completion; a continuation that is itself cut
+    // completes with what exists and is stamped truncated for the UI.
+    const validationAttempts = Number(step.request?._validation_attempts ?? 0);
+    if (result.budgetExhausted && validationAttempts === 0) {
+      console.log(`[exec] TRUNCATED_MARKDOWN step=${step.step_key} run=${run.id} chars=${content.length} — queueing continuation`);
+      const cOutcome = await requeueForValidation(admin, run, step, baseMessages, content, "truncated markdown", true, true);
+      if (cOutcome === "cancelled_parent_terminal") {
+        console.log(`[exec] TRUNCATED_MARKDOWN step=${step.step_key} parent already terminal — step cancelled`);
+      }
+      return;
+    }
+    const prefix = continuationPrefix(step.request);
+    const fullText = prefix ? joinContinuation(prefix, content) : content;
+    const stillCut = !!result.budgetExhausted && validationAttempts >= 1;
+    if (stillCut) console.log(`[exec] TRUNCATED_MARKDOWN step=${step.step_key} run=${run.id} continuation also cut — completing with ${fullText.length} chars`);
     await admin
       .from("run_steps")
       .update({
         status: "completed",
-        response_text: content,
-        response_json: { _meta: { ...outputMeta, ...(fallbackMeta ? { fallback: fallbackMeta } : {}) } },
+        response_text: fullText,
+        response_json: {
+          _meta: {
+            ...outputMeta,
+            ...(fallbackMeta ? { fallback: fallbackMeta } : {}),
+            ...(prefix ? { continued: true, continuation_prefix_chars: prefix.length } : {}),
+            ...(stillCut ? { truncated: true } : {}),
+          },
+        },
         tokens_in: usage.tokensIn,
         tokens_out: usage.tokensOut,
         cost_usd: usage.costUsd,
@@ -2189,16 +2224,12 @@ async function pipelineTickBody(admin: any) {
     // Atomic parent-aware requeue via RPC — if the parent flips terminal
     // between the check above and this call, the RPC cancels the step
     // instead of resurrecting it.
+    // Payload built by the pure staleRequeueRequest (hygiene.ts): sticky
+    // fallback pin, low reasoning, same visible cap.
     await requeueStepIfParentActive(
       admin,
       st.id,
-      {
-        ...(st.request ?? {}),
-        _attempts: attempts,
-        // Sticky: once force_fallback is on, NEVER switch back to the
-        // timed-out primary. First rescue also forces the fallback.
-        force_fallback: alreadyForced || attempts >= 1,
-      },
+      staleRequeueRequest(st.request, attempts),
       "requeued_stale",
     );
   }

@@ -17,6 +17,8 @@ import {
   requeueStepIfParentActive,
   resetRequestForResume,
   reverseAuditFailure,
+  staleRequeueRequest,
+  timeoutRequeueRequest,
   TERMINAL_RUN_STATUSES,
   VALIDATION_RETRY_MAX_TOKENS_CHAIR,
   VALIDATION_RETRY_MAX_TOKENS_OTHER,
@@ -743,4 +745,59 @@ Deno.test("sweepOrphanSteps: nothing to do is a no-op with zero counts", async (
   assertEquals(state.steps[0].status, "queued");
   const empty = makeFakeAdmin({ runs: [], steps: [], audits: [], rpcCalls: [] });
   assertEquals(await sweepOrphanSteps(empty), { candidate_runs: 0, terminal_runs: 0, cancelled: 0 });
+});
+
+// ============================== RC-4: cheaper reserve on the timeout path ==============================
+
+Deno.test("timeoutRequeueRequest: reserve model + low reasoning, visible cap and prompt kept, counter bumped", () => {
+  const stored = {
+    reasoning_effort: "medium",
+    max_tokens: 10000,
+    temperature: 0.4,
+    messages: [{ role: "system", content: "s" }, { role: "user", content: "u" }],
+    _validation_attempts: 0,
+  };
+  const out = timeoutRequeueRequest(stored);
+  assertEquals(out.force_fallback, true);
+  assertEquals(out.reasoning_effort, "low");
+  assertEquals(out.max_tokens, 10000, "max_tokens is NOT shrunk — a smaller cap re-cuts a long draft");
+  assertEquals(out._timeout_attempts, 1);
+  assertEquals(out.messages, stored.messages);
+  assertEquals(out.temperature, 0.4);
+  assertEquals(out._validation_attempts, 0);
+  // Input untouched.
+  assertEquals(stored.reasoning_effort, "medium");
+  assertEquals("force_fallback" in stored, false);
+  // Second timeout increments again.
+  assertEquals(timeoutRequeueRequest(out)._timeout_attempts, 2);
+  assertEquals(timeoutRequeueRequest(undefined)._timeout_attempts, 1);
+});
+
+Deno.test("staleRequeueRequest: watchdog rescue forces the fallback on the first rescue and stays sticky, low reasoning", () => {
+  const first = staleRequeueRequest({ reasoning_effort: "high", max_tokens: 8000 }, 1);
+  assertEquals(first.force_fallback, true);
+  assertEquals(first.reasoning_effort, "low");
+  assertEquals(first.max_tokens, 8000);
+  assertEquals(first._attempts, 1);
+  const zero = staleRequeueRequest({ reasoning_effort: "high" }, 0);
+  assertEquals(zero.force_fallback, false, "attempt 0 does not force the fallback");
+  assertEquals(zero.reasoning_effort, "low");
+  const sticky = staleRequeueRequest({ force_fallback: true }, 0);
+  assertEquals(sticky.force_fallback, true, "once forced, never back to the primary");
+});
+
+Deno.test("resetRequestForResume: a markdown continuation strips its replayed assistant turn + continue instruction", () => {
+  const base = [{ role: "system", content: "s" }, { role: "user", content: "u" }];
+  const out = resetRequestForResume(
+    {
+      _validation_retry_mode: "continuation",
+      _validation_attempts: 1,
+      reasoning_effort: "low",
+      messages: [...base, { role: "assistant", content: "# Plan\n\nHalf a doc" }, { role: "user", content: "Continue exactly from the last complete sentence. Do not repeat anything." }],
+    },
+    "stuck_model_call",
+  );
+  assertEquals(out.messages, base);
+  assertEquals("_validation_retry_mode" in out, false);
+  assertEquals(out._validation_attempts, 0);
 });

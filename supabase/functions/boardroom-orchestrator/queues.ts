@@ -14,6 +14,7 @@ import {
   BatchContextTooLarge,
   compactMarkdown,
   COMPACT_ARTIFACT_CAP,
+  safeCompactMarkdown,
   isBatchGenerationStep,
   renderCompactRepoContract,
 } from "../_shared/batch-context.ts";
@@ -495,6 +496,10 @@ Requirements: at least ONE objection targeting EACH of the three other seats, at
 
 
 
+// Design Round-3 input caps (chars). Plan / PRD excerpts and per-draft bound.
+export const DESIGN_R3_ARTIFACT_CAP = 8_000;
+export const DESIGN_R3_DRAFT_CAP = 6_000;
+
 // Round 3 is two-phase: the Chair writes the candidate as FREE MARKDOWN (its
 // best register — long documents forced into JSON strings come out flat), then
 // a cheap extraction step lifts the decision log into structured JSON. The
@@ -531,11 +536,22 @@ Respond with the markdown document ONLY — no JSON, no preamble, no closing rem
   if (String(run.founder_notes ?? "").trim()) {
     parts.push(`FOUNDER'S NOTES TO THE BOARD (the founder is the client — weigh these heavily):\n${String(run.founder_notes).trim()}`);
   }
-  if (isDesign && plan) parts.push(`LOCKED PLAN\n\n${plan.content_md ?? ""}\n\nPRD\n\n${plan.prd_md ?? "(none)"}`);
-  parts.push(draftsBlock(steps), objectionsAndStealsBlock(steps));
+  // Design Round-3 input diet (RC-4): the full plan + PRD + four drafts +
+  // objections + screenshots pushed the Chair's draft past the proxy abort.
+  // Locked artifacts are heading-balanced excerpts, each draft is bounded,
+  // and the screenshots ride only on loop 0 (the revision loops rework the
+  // contested parts of a brief that already saw them).
+  if (isDesign && plan) {
+    parts.push(
+      `LOCKED PLAN\n\n${safeCompactMarkdown(plan.content_md ?? "", DESIGN_R3_ARTIFACT_CAP)}\n\nPRD\n\n${
+        plan.prd_md == null ? "(none)" : safeCompactMarkdown(plan.prd_md, DESIGN_R3_ARTIFACT_CAP)
+      }`,
+    );
+  }
+  parts.push(draftsBlock(steps, undefined, isDesign ? DESIGN_R3_DRAFT_CAP : undefined), objectionsAndStealsBlock(steps));
   if (loop > 0) parts.push(priorRoundFailureBlock(steps, loop - 1, await resolveConsensusThreshold(admin, run.user_id)));
   const user = `${parts.join("\n\n")}\n\nWrite the candidate document now.`;
-  const imageParts = isDesign ? await loadScreenshotParts(admin, run.user_id, run.project_id) : [];
+  const imageParts = isDesign && loop === 0 ? await loadScreenshotParts(admin, run.user_id, run.project_id) : [];
   await queueSteps(admin, run, {
     run_id: run.id,
     user_id: run.user_id,

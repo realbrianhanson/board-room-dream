@@ -230,6 +230,41 @@ export function validationRetryBudget(
   return bumped ? { max_tokens: bumped, reasoning_effort: "low" } : { reasoning_effort: "low" };
 }
 
+// ============================== Timeout requeue payloads ==============================
+
+// Pure. A step whose primary model hit the proxy abort is requeued on the
+// reserve — but the reserve used to be asked for the IDENTICAL job (same
+// prompt, same effort, same cap) under the identical clock, so it timed out
+// too and the run died (RC-4). The requeue now forces low reasoning: the
+// hidden thinking is what the wall clock could not fit. max_tokens is kept
+// on purpose — a smaller cap would cut a genuinely long document and the
+// markdown path would then lock a truncated plan.
+export function timeoutRequeueRequest(request: any): any {
+  const base = request ?? {};
+  return {
+    ...base,
+    _timeout_attempts: Number(base._timeout_attempts ?? 0) + 1,
+    // Never switch back to the timed-out primary — the reserve answers next.
+    force_fallback: true,
+    reasoning_effort: "low",
+  };
+}
+
+// Pure. The watchdog rescue for a step whose invocation died before
+// executeStep could requeue it: same cheaper-reserve rule as above, with the
+// watchdog's own attempt counter and its sticky fallback pin (once forced,
+// never back to the primary; the first rescue also forces it).
+export function staleRequeueRequest(request: any, attempts: number): any {
+  const base = request ?? {};
+  const alreadyForced = !!base.force_fallback;
+  return {
+    ...base,
+    _attempts: attempts,
+    force_fallback: alreadyForced || attempts >= 1,
+    reasoning_effort: "low",
+  };
+}
+
 // ============================== Audit failure locality ==============================
 
 // The status a failed final audit hands the project back to: what
@@ -351,7 +386,9 @@ export function resetRequestForResume(request: any, error: string | null | undef
     if (mode === "without_echo" && n >= 2 && msgs[n - 1]?.role === "user") {
       req.messages = msgs.slice(0, n - 1);
     } else if (
-      mode === "with_echo" && n >= 3 &&
+      // A markdown continuation replays the text so far as an assistant turn
+      // plus the continue instruction — the same two-turn tail as an echo.
+      (mode === "with_echo" || mode === "continuation") && n >= 3 &&
       msgs[n - 1]?.role === "user" && msgs[n - 2]?.role === "assistant"
     ) {
       req.messages = msgs.slice(0, n - 2);

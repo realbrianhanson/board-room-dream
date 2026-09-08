@@ -147,6 +147,26 @@ export function compactMarkdown(md: string | null | undefined, capChars: number)
   return out;
 }
 
+// compactMarkdown refuses (throws MarkdownCompactionImpossible) when the
+// marker plus every H1-H3 heading alone exceeds the cap. Prompt builders
+// that only need a BOUNDED excerpt (the design Round-3 draft input, RC-4)
+// fall back to a head slice with an explicit truncation note rather than
+// sending the whole document. Output length <= capChars by construction.
+export const HEAD_SLICE_NOTE = "\n\n> [TRUNCATED — headings alone exceed the excerpt cap; consult the locked artifact for the full text]";
+
+export function safeCompactMarkdown(md: string | null | undefined, capChars: number): string {
+  const text = String(md ?? "");
+  try {
+    return compactMarkdown(text, capChars);
+  } catch (e) {
+    if (!(e instanceof MarkdownCompactionImpossible)) throw e;
+    const keep = Math.max(0, capChars - HEAD_SLICE_NOTE.length);
+    const head = sliceCodepointsSafe(text, keep);
+    const out = head + HEAD_SLICE_NOTE;
+    return out.length <= capChars ? out : sliceCodepointsSafe(out, capChars);
+  }
+}
+
 // Prioritize architectural evidence: manifests, router/framework roots,
 // Supabase config + migrations + edge-function entrypoints, shared contracts.
 // We intentionally rank "arbitrary implementation body" lowest so a 100 KiB
@@ -338,16 +358,99 @@ export type ValidationRetryInput = {
   validationError: string;
   truncated: boolean;
   correction: string; // Pre-computed via correctionForStep(stepKey).
+  /**
+   * Non-JSON (free markdown) step cut at the budget: instead of a correction
+   * pass, ask the model to CONTINUE the document it already wrote. Explicit
+   * opt-in from the orchestrator's markdown path; JSON steps never set it.
+   */
+  continuation?: boolean;
 };
+
+export type ValidationRetryMode = "with_echo" | "without_echo" | "continuation";
 
 export type ValidationRetryResult = {
   request: Record<string, unknown>;
-  mode: "with_echo" | "without_echo";
+  mode: ValidationRetryMode;
   chars: number;
 };
 
+// ============================== Markdown continuation (RC-4) ==============================
+
+// A free-markdown step (Round-1 drafts, the Chair's Round-3 candidate) cut at
+// max_tokens used to complete as-is and become the locked plan verbatim. The
+// continuation request replays the text so far as the assistant turn and asks
+// for the remainder only, at low reasoning (the thinking is done — what is
+// left is emission). The orchestrator joins the two halves on completion via
+// joinContinuation. Exact copy pinned by tests.
+export const CONTINUATION_INSTRUCTION =
+  "Continue exactly from the last complete sentence. Do not repeat anything.";
+
+// The cut happened before ANY visible text (hidden reasoning consumed the
+// whole budget): there is nothing to continue, so ask for the document again
+// from the base context alone — a plain no-echo retry, still at low effort.
+export const CONTINUATION_RESTART_INSTRUCTION =
+  "Your previous attempt produced no visible text before the output budget ran out. Write the complete document now, as requested above, without any preamble.";
+
+// Where the orchestrator finds the text so far for a continuation step: the
+// assistant turn the continuation request replays (second-to-last message).
+// "" for any other request shape, so joining is the identity elsewhere.
+export function continuationPrefix(request: any): string {
+  if (!request || request._validation_retry_mode !== "continuation") return "";
+  const msgs = Array.isArray(request.messages) ? request.messages : [];
+  const n = msgs.length;
+  if (n < 2) return "";
+  const prior = msgs[n - 2];
+  if (prior?.role !== "assistant" || typeof prior?.content !== "string") return "";
+  return prior.content;
+}
+
+// Join the first half and the continuation. Models asked to "continue from the
+// last complete sentence" sometimes restate the partial last line before
+// carrying on; when the continuation opens with that line, the overlap is
+// dropped so the join never duplicates text. Otherwise plain concatenation —
+// the cut may sit mid-word, so no separator is inserted.
+export function joinContinuation(prefix: string, continuation: string): string {
+  const head = String(prefix ?? "");
+  const tail = String(continuation ?? "");
+  if (!head) return tail;
+  if (!tail) return head;
+  const lastNl = head.lastIndexOf("\n");
+  const lastLine = head.slice(lastNl + 1).trim();
+  const tailTrim = tail.replace(/^\s+/, "");
+  if (lastLine.length >= 12 && tailTrim.startsWith(lastLine)) {
+    return head + tailTrim.slice(lastLine.length);
+  }
+  return head + tail;
+}
+
 export function buildValidationRetryRequest(input: ValidationRetryInput): ValidationRetryResult {
   const { stepKey, baseRequest, baseMessages, assistantContent, validationError, truncated, correction } = input;
+
+  if (input.continuation) {
+    // Markdown continuation: no schema to correct, so the correction copy is
+    // never used. Effort drops to "low" for the remainder; the visible cap is
+    // left to the caller (the orchestrator keeps it — a shorter cap would
+    // re-cut a genuinely long document).
+    if (assistantContent.trim()) {
+      const req = {
+        ...baseRequest,
+        reasoning_effort: "low",
+        messages: [
+          ...baseMessages,
+          { role: "assistant", content: assistantContent },
+          { role: "user", content: CONTINUATION_INSTRUCTION },
+        ],
+      };
+      return { request: req, mode: "continuation", chars: JSON.stringify(req).length };
+    }
+    const req = {
+      ...baseRequest,
+      reasoning_effort: "low",
+      messages: [...baseMessages, { role: "user", content: CONTINUATION_RESTART_INSTRUCTION }],
+    };
+    return { request: req, mode: "without_echo", chars: JSON.stringify(req).length };
+  }
+
   const correctionText = truncated
     ? correction
     : `Your previous response failed validation: ${validationError}\nReturn ONLY the required JSON object, no prose, no code fences.`;

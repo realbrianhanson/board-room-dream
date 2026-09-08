@@ -166,6 +166,33 @@ function estimateCost(modelId: string, tokensIn: number, tokensOut: number): num
   return (tokensIn * p.in + tokensOut * p.out) / 1_000_000;
 }
 
+// A call aborted at the proxy timeout was still generated and billed by the
+// provider, but no usage ever arrived, so the ledger showed tokens_in 0 and
+// the run budget / seat cap / daily cap never saw the burned attempt (the
+// $202 ledger is a floor). The estimate row is written under a DISTINCT seat
+// label so it can never be mistaken for the completion the same step later
+// records on the fallback: `<seat>:timeout`. Both helpers are pure.
+export const TIMEOUT_LEDGER_SEAT_SUFFIX = ":timeout";
+
+export function timeoutLedgerSeat(seat: string): string {
+  return `${seat}${TIMEOUT_LEDGER_SEAT_SUFFIX}`;
+}
+
+// tokens_in ~ prompt chars / 4 (system + user messages as sent on the wire);
+// tokens_out = the wire cap, the most the aborted generation can have
+// produced. 0 when the call was uncapped (no honest estimate exists).
+export function timeoutLedgerEstimate(body: any): { tokensIn: number; tokensOut: number } {
+  let promptChars = 0;
+  try {
+    promptChars = JSON.stringify(body?.messages ?? []).length;
+  } catch {
+    promptChars = 0;
+  }
+  const tokensIn = Math.ceil(promptChars / 4);
+  const tokensOut = Math.max(0, Math.floor(Number(body?.max_tokens ?? 0) || 0));
+  return { tokensIn, tokensOut };
+}
+
 export type SeatRow = {
   seat: string;
   model_id: string;
@@ -272,11 +299,13 @@ async function checkBudget(admin: SupabaseClient, runId: string) {
 async function checkSeatBudget(admin: SupabaseClient, runId: string, seat: string, cap: number | null) {
   const capNum = Number(cap);
   if (!Number.isFinite(capNum) || capNum <= 0) return;
+  // Timed-out attempts are ledgered under `<seat>:timeout` (see
+  // timeoutLedgerSeat) and count against the seat like any other spend.
   const { data } = await admin
     .from("cost_ledger")
     .select("cost_usd")
     .eq("run_id", runId)
-    .eq("seat", seat);
+    .in("seat", [seat, timeoutLedgerSeat(seat)]);
   const spent = (data ?? []).reduce((s: number, r: any) => s + Number(r.cost_usd ?? 0), 0);
   if (spent >= capNum) throw new SeatBudgetExceeded(seat, capNum, spent);
 }
@@ -321,6 +350,11 @@ async function checkDailyCap(admin: SupabaseClient, userId: string): Promise<voi
   if (spent >= cap) throw new DailyCapExceeded(cap, spent, scope);
 }
 
+// Same-invocation refusal retries are only safe while the first answer came
+// back fast; past this many ms since callSeat started, no further call is
+// started in this invocation.
+export const REFUSAL_RETRY_WINDOW_MS = 15_000;
+
 const REFUSAL_PATTERNS = [
   /\bi (?:can't|cannot|won't|will not) (?:help|assist|comply|do|provide)/i,
   /\bi'?m (?:unable|not able) to (?:help|assist|comply|provide)/i,
@@ -328,10 +362,13 @@ const REFUSAL_PATTERNS = [
   /\bas an ai\b.*\b(?:can'?t|cannot|unable)\b/i,
 ];
 
-function isRefusal(content: string, finishReason: string | undefined, jsonMode: boolean): boolean {
+export function isRefusal(content: string, finishReason: string | undefined, jsonMode: boolean): boolean {
   if (finishReason === "content_filter" || finishReason === "safety") return true;
   const trimmed = (content ?? "").trim();
-  if (!trimmed) return true;
+  // Empty content with finish_reason length/max_tokens is a budget the hidden
+  // reasoning ate, not a refusal — treating it as one used to fire up to
+  // three same-invocation full-cost calls that exhausted identically.
+  if (!trimmed) return finishReason !== "length" && finishReason !== "max_tokens";
   // Anything that even looks like an attempt at the requested format is not a
   // refusal — the validation/re-prompt layer owns malformed output. Refusals
   // are short prose that LEADS with the refusal, so anchor the regex to the
@@ -636,7 +673,26 @@ export async function callSeat(
   };
 
   const doCall = async (modelId: string) => {
-    const res = await callOpenRouter(apiKey, buildBody(modelId));
+    const body = buildBody(modelId);
+    let res: Awaited<ReturnType<typeof callOpenRouter>>;
+    try {
+      res = await callOpenRouter(apiKey, body);
+    } catch (e) {
+      if ((e as any)?.isTimeout) {
+        // Honest accounting for the aborted generation (see
+        // timeoutLedgerEstimate). Best effort: the timeout itself is the
+        // signal the orchestrator needs, so a ledger failure is logged and
+        // never replaces or masks the ProxyTimeoutError.
+        try {
+          const est = timeoutLedgerEstimate(body);
+          const estCost = estimateCost(modelId, est.tokensIn, est.tokensOut);
+          await recordCall(admin, userId, timeoutLedgerSeat(seat), modelId, est.tokensIn, est.tokensOut, estCost, options);
+        } catch (ledgerErr) {
+          console.error(`[proxy] timeout ledger estimate failed seat=${seat} model=${modelId}: ${(ledgerErr as Error)?.message ?? ledgerErr}`);
+        }
+      }
+      throw e;
+    }
     const tokensIn = Number(res.usage.prompt_tokens ?? 0);
     const tokensOut = Number(res.usage.completion_tokens ?? 0);
     const reportedCost = Number(res.usage.cost);
@@ -661,17 +717,23 @@ export async function callSeat(
   // function immediately — never start a fallback call inside the same
   // invocation, because the platform can kill this invocation at any moment
   // (~150s) and take the fallback call with it.
+  const startedAt = Date.now();
   let attempt = await doCall(primaryId);
   let refused = isRefusal(attempt.content, attempt.finishReason, !!options.json);
 
-  // Refusal handling is UNCHANGED — refusals are cheap sub-second responses,
-  // so one same-invocation retry + one same-invocation fallback stay safe.
-  if (refused) {
+  // Refusals are cheap sub-second responses, so one same-invocation retry +
+  // one same-invocation fallback stay safe — but ONLY while the clock says
+  // so. A "refusal" that arrived after a long generation is not a refusal
+  // worth re-buying inside an isolate that is about to hit its wall-clock
+  // cap; the validation layer owns it from here.
+  const withinRefusalWindow = () => Date.now() - startedAt < REFUSAL_RETRY_WINDOW_MS;
+  if (refused && withinRefusalWindow()) {
     attempt = await doCall(primaryId);
     refused = isRefusal(attempt.content, attempt.finishReason, !!options.json);
   }
 
   if (refused
+    && withinRefusalWindow()
     && seatRow.fallback_model_id
     && seatRow.fallback_model_id !== seatRow.model_id
     && allowed.has(seatRow.fallback_model_id)) {
