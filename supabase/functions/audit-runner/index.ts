@@ -14,6 +14,7 @@ import {
 } from "../_shared/audit-contract.ts";
 import { deriveImportWorkflow, type ImportWorkflow } from "../_shared/import-workflow.ts";
 import { scopeContractForPrompt } from "../_shared/import-scope-gates.ts";
+import { assertStepInsertOk } from "../_shared/step-insert.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -443,7 +444,8 @@ Produce your JSON now.`;
       });
     }
   });
-  await admin.from("run_steps").insert(rows);
+  // Up to ~70 rows, several MB: read the result instead of assuming it landed.
+  assertStepInsertOk(await admin.from("run_steps").insert(rows), "audit map steps insert");
 }
 
 // Extracted for direct testability: proves every map/extraction request
@@ -684,7 +686,10 @@ async function beginAudit(params: {
       project_id: project.id,
       user_id: userId,
       kind: "audit",
-      status: "queued",
+      // Seeded while 'paused' (ignored by the orchestrator tick, still covered
+      // by the one-active-per-kind index) and queued only once every map step
+      // exists — the per-minute cron used to fail a run it saw with no steps.
+      status: "paused",
       round_no: 1,
       loop_no: 0,
       budget_usd: budget,
@@ -702,19 +707,41 @@ async function beginAudit(params: {
   if (batchId) await admin.from("batches").update({ status: "auditing" }).eq("id", batchId);
   if (isFinal) await admin.from("projects").update({ status: "auditing" }).eq("id", project.id);
 
-  await insertAuditSteps(
-    admin,
-    run,
-    chunks,
-    batchPrompt,
-    finalContract,
-    batchPlan,
-    batchDesignBrief,
-    isFinal,
-    batchOutcome,
-    fileTree,
-    scopeContract,
-  );
+  // Seeding failed: fail the audits row and the run with the message (the
+  // run has no steps or siblings yet, so the orchestrator's failRun adds
+  // nothing) and hand a final audit's project back to the status it held
+  // before we flipped it to 'auditing'.
+  const failSeed = async (msg: string) => {
+    await admin.from("audits").update({ status: "failed", completed_at: new Date().toISOString() }).eq("id", audit.id);
+    await admin.from("boardroom_runs").update({ status: "failed", error: msg }).eq("id", run.id);
+    if (isFinal && previousProjectStatus) {
+      await admin.from("projects").update({ status: previousProjectStatus }).eq("id", project.id).eq("status", "auditing");
+    }
+    return { error: msg };
+  };
+  try {
+    await insertAuditSteps(
+      admin,
+      run,
+      chunks,
+      batchPrompt,
+      finalContract,
+      batchPlan,
+      batchDesignBrief,
+      isFinal,
+      batchOutcome,
+      fileTree,
+      scopeContract,
+    );
+  } catch (e) {
+    return await failSeed((e as Error)?.message ?? String(e));
+  }
+  const { error: flipErr } = await admin
+    .from("boardroom_runs")
+    .update({ status: "queued" })
+    .eq("id", run.id)
+    .eq("status", "paused");
+  if (flipErr) return await failSeed(`Audit seeded but could not be queued: ${flipErr.message}`);
   fireOrchestrator();
   return {
     audit_id: audit.id,

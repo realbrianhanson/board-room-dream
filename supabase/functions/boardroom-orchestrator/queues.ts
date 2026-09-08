@@ -35,6 +35,7 @@ import {
 } from "./protocol.ts";
 import { deriveImportWorkflow, type ImportWorkflow } from "../_shared/import-workflow.ts";
 import { scopeContractForPrompt } from "../_shared/import-scope-gates.ts";
+import { assertStepInsertOk } from "../_shared/step-insert.ts";
 
 // Load the caller-selected import workflow ONCE per run and cache on the run
 // object. Server MUST re-derive from persisted intakes.answers.goals; scope
@@ -151,7 +152,9 @@ async function queueSteps(admin: any, run: any, rowsIn: any | any[]): Promise<an
       assertBatchRequestSize(String(row.step_key), row.request);
     }
   }
-  return admin.from("run_steps").insert(rowsIn);
+  // Read the insert result: a rejected insert used to leave the run queued
+  // with zero steps for the cron to fail. 23505 (rows already there) passes.
+  return admin.from("run_steps").insert(rowsIn).then(assertStepInsertOk);
 }
 
 
@@ -1419,7 +1422,7 @@ Coverage honesty: the summary must state how much of the app was actually read (
   // prose-stripped seat findings only (see buildMergeInput). The Chair
   // dedupes and assigns final severities against deterministic caps and
   // validators; no plan/PRD/features/design/CR scope can be introduced here.
-  await admin.from("run_steps").insert({
+  const mergeInsert = await admin.from("run_steps").insert({
     run_id: run.id,
     user_id: run.user_id,
     step_key: "audit_chair_merge",
@@ -1439,4 +1442,5 @@ Coverage honesty: the summary must state how much of the app was actually read (
       ],
     },
   });
+  assertStepInsertOk(mergeInsert, "audit_chair_merge insert");
 }

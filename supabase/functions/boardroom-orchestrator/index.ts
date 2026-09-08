@@ -116,12 +116,17 @@ const BUILD_VERSION = "2026-07-29.import-workflow-gate.r1";
 import {
   auditSeatCoverage,
   failRun,
+  hasActiveSteps,
   isStepLocalFailure,
   planResumeFailed,
   requeueLegacyNullStartOrphans,
   requeueStepIfParentActive,
   resetRequestForResume,
   reverseAuditFailure,
+  runStepsPhase,
+  STALE_RUNNING_STEP_MS,
+  STALLED_RUN_MS,
+  sweepOrphanSteps,
   TERMINAL_RUN_STATUSES,
   validationRetryBudget,
 } from "./hygiene.ts";
@@ -1661,12 +1666,37 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
 }
 
 
+// Advance a run once its steps settle. A throw inside advanceRun used to
+// escape processRun / pipelineTick and leave the run 'running' with nothing
+// queued — invisible to every rescue path and blocking the one-active-run
+// slot for its kind. Now it fails the run with the message (first-terminal-
+// wins, so a concurrent failure's error is preserved).
 async function afterStepComplete(admin: any, runIn: any) {
+  try {
+    await advanceRun(admin, runIn);
+  } catch (e) {
+    const msg = (e as Error)?.message ?? String(e);
+    console.error(`[after] advance failed for run ${runIn?.id}: ${msg}`);
+    const run = (await getRun(admin, runIn.id)) ?? runIn;
+    await failRun(admin, run, `advance failed: ${msg}`);
+  }
+}
+
+async function advanceRun(admin: any, runIn: any) {
   const run = await getRun(admin, runIn.id);
   if (!run) return;
   const steps = await loadAllSteps(admin, run.id);
+  const phase = runStepsPhase(steps);
+  // No steps at all = the run is still being seeded (start_run inserts the
+  // run row, then its first steps) or was orphaned before they landed.
+  // Advancing here queued Round 2 against zero drafts and failed a batches
+  // run for a draft that had not been inserted yet.
+  if (phase === "no_steps") {
+    console.log(`[after] run ${run.id} has no steps yet`);
+    return;
+  }
   // Queued steps = claimable work -> kick one tick to pick them up.
-  if (steps.some((s: any) => s.status === "queued")) {
+  if (phase === "queued") {
     fireSelfTick();
     return;
   }
@@ -1675,7 +1705,7 @@ async function afterStepComplete(admin: any, runIn: any) {
   // per-minute cron rescues orphans. Re-firing on merely-running steps created
   // an infinite tick storm that maxed the instance and kept old warm isolates
   // permanently busy so redeployed code never took effect.
-  if (steps.some((s: any) => s.status === "running")) {
+  if (phase === "running") {
     return;
   }
 
@@ -1826,11 +1856,17 @@ async function afterStepComplete(admin: any, runIn: any) {
 
   if (run.kind === "batches") {
     const draft = steps.find((x: any) => x.step_key === "batches_chair");
-    if (!(draft?.status === "completed" && draft.response_json && !draft.response_json.invalid)) {
-      await admin
-        .from("boardroom_runs")
-        .update({ status: "failed", error: draft?.response_json?.validation_error ?? "batches_chair did not produce a valid response" })
-        .eq("id", run.id);
+    // Absent = still seeding (or orphaned before the row landed) — the
+    // stalled-run detector in pipelineTick fails a run whose draft never
+    // arrives. Only a real failure ends the run here: the step failed, or its
+    // JSON was rejected. failRun (not a bare status write) so the siblings and
+    // the project's zero-batch status are reconciled like every other failure.
+    if (!draft) return;
+    const draftOk = draft.status === "completed" && draft.response_json && !draft.response_json.invalid;
+    if (!draftOk) {
+      if (draft.status === "failed" || draft.response_json?.invalid) {
+        await failRun(admin, run, draft.response_json?.validation_error ?? "batches_chair did not produce a valid response");
+      }
       return;
     }
 
@@ -1848,13 +1884,11 @@ async function afterStepComplete(admin: any, runIn: any) {
         ? validateStepJson("batches_revise_chair", revise.response_json)
         : (revise.response_json?.validation_error ?? revise.error ?? "batches_revise_chair did not complete");
       if (!ok || validationError || !revisedList.length) {
-        await admin
-          .from("boardroom_runs")
-          .update({
-            status: "failed",
-            error: `The Chair's revision failed after reviewers flagged blocking issues: ${validationError ?? "empty batches list"}. Draft and reviewer notes are preserved in run_steps for diagnosis.`,
-          })
-          .eq("id", run.id);
+        await failRun(
+          admin,
+          run,
+          `The Chair's revision failed after reviewers flagged blocking issues: ${validationError ?? "empty batches list"}. Draft and reviewer notes are preserved in run_steps for diagnosis.`,
+        );
         return;
       }
       await finalizeBatches(admin, run, revisedList);
@@ -2044,10 +2078,71 @@ async function processRun(admin: any, runId: string) {
 }
 
 
+// Heartbeat: proves the tick is actually reaching the function. pg_cron
+// reporting "succeeded" only means the HTTP request was enqueued.
+async function writeTickHeartbeat(admin: any) {
+  try {
+    const now = new Date().toISOString();
+    const { error } = await admin
+      .from("app_settings")
+      .upsert({ key: "orchestrator_last_tick", value: { at: now }, updated_at: now }, { onConflict: "key" });
+    if (error) console.error(`[tick] heartbeat write failed: ${error.message ?? error}`);
+  } catch (e) {
+    console.error(`[tick] heartbeat write failed: ${(e as Error)?.message ?? e}`);
+  }
+}
+
+// Stalled-run detector. A run 'running' with nothing queued or in flight for
+// STALLED_RUN_MS is given one advance; if that queues nothing and the run is
+// still 'running', it is failed as stalled_no_work so it stops blocking the
+// one-active-run-per-kind slot and the owner sees a real error instead of a
+// spinner (the Revven "stuck for 48h" shape).
+async function failStalledRuns(admin: any): Promise<number> {
+  const cutoff = new Date(Date.now() - STALLED_RUN_MS).toISOString();
+  const { data: stale } = await admin
+    .from("boardroom_runs")
+    .select("*")
+    .eq("status", "running")
+    .lt("updated_at", cutoff)
+    .limit(20);
+  let failed = 0;
+  for (const run of stale ?? []) {
+    if (hasActiveSteps(await loadAllSteps(admin, run.id))) continue;
+    await afterStepComplete(admin, run);
+    const fresh = await getRun(admin, run.id);
+    if (!fresh || fresh.status !== "running") continue;
+    if (hasActiveSteps(await loadAllSteps(admin, run.id))) continue;
+    console.log(`[tick] run ${run.id} (${run.kind}) has been running with no work since ${run.updated_at} — failing as stalled_no_work`);
+    if ((await failRun(admin, fresh, "stalled_no_work")) === "won") failed++;
+  }
+  return failed;
+}
+
 async function pipelineTick(admin: any) {
+  try {
+    return await pipelineTickBody(admin);
+  } finally {
+    await writeTickHeartbeat(admin);
+  }
+}
+
+async function pipelineTickBody(admin: any) {
+  // Orphan sweep: queued/running steps under a run that is already terminal
+  // are invisible to the watchdog (it scans 'running' steps) and to the run
+  // loop (it scans active runs). Bounded UPDATE, terminal parents only.
+  let orphansCancelled = 0;
+  try {
+    const sweep = await sweepOrphanSteps(admin);
+    orphansCancelled = sweep.cancelled;
+    console.log(`[tick] orphan sweep: ${sweep.cancelled} step(s) cancelled under ${sweep.terminal_runs} terminal run(s)`);
+  } catch (e) {
+    console.error(`[tick] orphan sweep failed: ${(e as Error)?.message ?? e}`);
+  }
+
   // Last-resort backup for steps orphaned by a dead invocation: the platform
   // can kill an isolate at any moment (~150s cap) and take its in-isolate
-  // timers with it, so a step 'running' for 3+ minutes belongs to an
+  // timers with it, so a step 'running' for STALE_RUNNING_STEP_MS (160 s —
+  // past the ~105 s proxy abort and the isolate cap) belongs to an
   // invocation that no longer exists. The primary timeout failover lives in
   // executeStep — this watchdog only catches the rare case where the
   // invocation died BEFORE executeStep's catch block could requeue.
@@ -2055,7 +2150,7 @@ async function pipelineTick(admin: any) {
   // Escalation preserves prior state so we never switch back to the timed-out
   // primary model: existing force_fallback stays sticky, existing
   // _timeout_attempts is preserved, and _attempts caps the rescue count.
-  const staleCutoff = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+  const staleCutoff = new Date(Date.now() - STALE_RUNNING_STEP_MS).toISOString();
   const { data: staleSteps } = await admin
     .from("run_steps")
     .select("id, run_id, step_key, request")
@@ -2115,6 +2210,7 @@ async function pipelineTick(admin: any) {
   // back to 'queued' and resurrected under a dead run.
   await requeueLegacyNullStartOrphans(admin, staleCutoff);
 
+  const stalledFailed = await failStalledRuns(admin);
 
   const { data: runs } = await admin
     .from("boardroom_runs")
@@ -2124,7 +2220,7 @@ async function pipelineTick(admin: any) {
   for (const r of runs ?? []) {
     await processRun(admin, r.id);
   }
-  return { processed: (runs ?? []).length };
+  return { processed: (runs ?? []).length, orphans_cancelled: orphansCancelled, stalled_failed: stalledFailed };
 }
 
 
@@ -2336,7 +2432,11 @@ async function handleRequest(req: Request): Promise<Response> {
         project_id: projectId,
         user_id: userId,
         kind,
-        status: "queued",
+        // Seeded while 'paused': the tick ignores it, the one-active-per-kind
+        // index still covers it, and it becomes 'queued' only once its first
+        // steps exist. The per-minute cron used to find the freshly inserted
+        // run with zero steps and fail it a second later (run cfa73001).
+        status: "paused",
         round_no: 1,
         loop_no: 0,
         constitution_version: constRow?.version ?? 1,
@@ -2354,15 +2454,22 @@ async function handleRequest(req: Request): Promise<Response> {
     try {
       await createInitialSteps(admin, run);
     } catch (e) {
+      // Never leave a paused, stepless run holding the active slot.
+      await admin
+        .from("boardroom_runs")
+        .update({ status: "failed", error: (e as Error)?.message ?? String(e) })
+        .eq("id", run.id);
       if (e instanceof RepoContractUnavailable || e instanceof BatchContextTooLarge || e instanceof MarkdownCompactionImpossible) {
-        await admin
-          .from("boardroom_runs")
-          .update({ status: "failed", error: e.message })
-          .eq("id", run.id);
         return j(400, { error: e.message });
       }
       throw e;
     }
+    const { error: flipErr } = await admin
+      .from("boardroom_runs")
+      .update({ status: "queued" })
+      .eq("id", run.id)
+      .eq("status", "paused");
+    if (flipErr) return j(500, { error: `Run seeded but could not be queued: ${flipErr.message}` });
     fireSelfTick();
     return j(200, { run_id: run.id, status: "queued" });
   }
@@ -2626,7 +2733,8 @@ async function handleRequest(req: Request): Promise<Response> {
         project_id: projectId,
         user_id: userId,
         kind: "batches",
-        status: "queued",
+        // Seeded while 'paused', queued once the steps exist (see start_run).
+        status: "paused",
         round_no: 1,
         loop_no: 0,
         constitution_version: constRow?.version ?? 1,
@@ -2648,6 +2756,19 @@ async function handleRequest(req: Request): Promise<Response> {
         ? e.message
         : `Failed to seed regen run (restored old batches): ${(e as Error).message}`;
       return j(400, { error: msg });
+    }
+    const { error: flipErr } = await admin
+      .from("boardroom_runs")
+      .update({ status: "queued" })
+      .eq("id", run.id)
+      .eq("status", "paused");
+    if (flipErr) {
+      await admin
+        .from("boardroom_runs")
+        .update({ status: "failed", error: `Run seeded but could not be queued: ${flipErr.message}` })
+        .eq("id", run.id);
+      await restore();
+      return j(500, { error: `Run seeded but could not be queued (restored old batches): ${flipErr.message}` });
     }
     fireSelfTick();
     return j(200, { run_id: run.id, archived_count: list.length });

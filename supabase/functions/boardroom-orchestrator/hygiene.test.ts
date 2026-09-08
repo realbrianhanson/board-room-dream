@@ -6,6 +6,11 @@ import {
   AUDIT_COVERAGE_FLOOR,
   auditSeatCoverage,
   failRun,
+  hasActiveSteps,
+  runStepsPhase,
+  STALE_RUNNING_STEP_MS,
+  STALLED_RUN_MS,
+  sweepOrphanSteps,
   isStepLocalFailure,
   planResumeFailed,
   requeueLegacyNullStartOrphans,
@@ -666,4 +671,76 @@ Deno.test("planResumeFailed: non-audit runs requeue the failed step and its canc
   assertEquals(plan.chairDead, false);
   assertEquals(plan.finalizeRetry, false);
   assertEquals(plan.requeue.map((s: any) => s.id), ["b", "c"]);
+});
+
+// ============================== Tick hygiene (RC-5) ==============================
+
+Deno.test("runStepsPhase: a run with no steps yet is 'no_steps' — advance must not run", () => {
+  assertEquals(runStepsPhase([]), "no_steps");
+  assertEquals(hasActiveSteps([]), false);
+});
+
+Deno.test("runStepsPhase: queued beats running beats settled", () => {
+  assertEquals(runStepsPhase([{ status: "completed" }, { status: "queued" }, { status: "running" }]), "queued");
+  assertEquals(runStepsPhase([{ status: "completed" }, { status: "running" }]), "running");
+  assertEquals(runStepsPhase([{ status: "completed" }, { status: "failed" }]), "settled");
+  assertEquals(hasActiveSteps([{ status: "completed" }, { status: "running" }]), true);
+  assertEquals(hasActiveSteps([{ status: "completed" }, { status: "failed" }]), false);
+});
+
+Deno.test("tick cutoffs: stale step 160 s (inside the 105 s proxy abort + 150 s isolate cap), stalled run 5 min", () => {
+  assertEquals(STALE_RUNNING_STEP_MS, 160_000);
+  assertEquals(STALLED_RUN_MS, 300_000);
+});
+
+Deno.test("sweepOrphanSteps: cancels queued/running steps only under terminal parents", async () => {
+  const state = {
+    runs: [
+      { id: "dead", status: "failed", error: "x", kind: "batches" },
+      { id: "done", status: "chair_ruled", error: null, kind: "plan" },
+      { id: "live", status: "running", error: null, kind: "plan" },
+      { id: "seeding", status: "paused", error: null, kind: "batches" },
+    ],
+    steps: [
+      // the cfa73001 shape: a queued step inserted after the cron failed its run
+      { id: "orphan_q", run_id: "dead", status: "queued", started_at: null, created_at: "t", error: null },
+      { id: "orphan_r", run_id: "done", status: "running", started_at: "t", created_at: "t", error: null },
+      { id: "dead_done", run_id: "dead", status: "completed", started_at: "t", created_at: "t", error: null },
+      { id: "live_q", run_id: "live", status: "queued", started_at: null, created_at: "t", error: null },
+      { id: "live_r", run_id: "live", status: "running", started_at: "t", created_at: "t", error: null },
+      { id: "seed_q", run_id: "seeding", status: "queued", started_at: null, created_at: "t", error: null },
+    ],
+    audits: [],
+    rpcCalls: [],
+  };
+  const admin = makeFakeAdmin(state);
+  const out = await sweepOrphanSteps(admin);
+  assertEquals(out, { candidate_runs: 4, terminal_runs: 2, cancelled: 2 });
+  const byId = (id: string) => state.steps.find((s) => s.id === id)!;
+  assertEquals(byId("orphan_q").status, "failed");
+  assertEquals(byId("orphan_q").error, "cancelled_parent_terminal");
+  assertEquals(byId("orphan_r").status, "failed");
+  assertEquals(byId("orphan_r").error, "cancelled_parent_terminal");
+  // Completed rows under a terminal run are left alone.
+  assertEquals(byId("dead_done").status, "completed");
+  // Active and seeding parents are never touched.
+  assertEquals(byId("live_q").status, "queued");
+  assertEquals(byId("live_r").status, "running");
+  assertEquals(byId("seed_q").status, "queued");
+  // Never routes through the requeue RPC — this is a plain bounded UPDATE.
+  assertEquals(state.rpcCalls.length, 0);
+});
+
+Deno.test("sweepOrphanSteps: nothing to do is a no-op with zero counts", async () => {
+  const state = {
+    runs: [{ id: "live", status: "running", error: null, kind: "plan" }],
+    steps: [{ id: "s", run_id: "live", status: "queued", started_at: null, created_at: "t", error: null }],
+    audits: [],
+    rpcCalls: [],
+  };
+  const admin = makeFakeAdmin(state);
+  assertEquals(await sweepOrphanSteps(admin), { candidate_runs: 1, terminal_runs: 0, cancelled: 0 });
+  assertEquals(state.steps[0].status, "queued");
+  const empty = makeFakeAdmin({ runs: [], steps: [], audits: [], rpcCalls: [] });
+  assertEquals(await sweepOrphanSteps(empty), { candidate_runs: 0, terminal_runs: 0, cancelled: 0 });
 });

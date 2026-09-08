@@ -423,3 +423,75 @@ export function planResumeFailed(
     : steps.filter((st: any) => st?.status === "failed" && st.id !== chair?.id);
   return { chair, chairDead, finalizeRetry, requeue };
 }
+
+// ============================== Tick hygiene (RC-5) ==============================
+
+// A step 'running' this long belongs to an invocation that no longer exists:
+// the proxy aborts every model call at ~105 s and the platform kills an
+// isolate at ~150 s, so 160 s is past both. The watchdog used to wait 3 min.
+export const STALE_RUNNING_STEP_MS = 160_000;
+
+// A run that has been 'running' with nothing queued or in flight for this
+// long, and that afterStepComplete cannot advance, is dead: the seeding window
+// is seconds, and every legitimate wait holds a queued/running step.
+export const STALLED_RUN_MS = 5 * 60 * 1000;
+
+export type RunStepsPhase = "no_steps" | "queued" | "running" | "settled";
+
+// Pure. What the advance function should do with a run's steps. `no_steps`
+// means the run is still being seeded (or was orphaned before its first step
+// landed) — advancing it would queue Round 2 against zero drafts or, for a
+// batches run, fail it for a draft that has not been inserted yet.
+export function runStepsPhase(steps: Array<{ status?: string }>): RunStepsPhase {
+  if (!steps.length) return "no_steps";
+  if (steps.some((s) => s.status === "queued")) return "queued";
+  if (steps.some((s) => s.status === "running")) return "running";
+  return "settled";
+}
+
+export function hasActiveSteps(steps: Array<{ status?: string }>): boolean {
+  return steps.some((s) => s.status === "queued" || s.status === "running");
+}
+
+export type OrphanSweepResult = { candidate_runs: number; terminal_runs: number; cancelled: number };
+
+// Bounded orphan sweep. A queued/running step whose parent run is already
+// terminal is invisible to every other path (the watchdog scans 'running'
+// steps only, the tick scans active runs only) and would sit there forever —
+// run cfa73001's batches_chair step did exactly that. The UPDATE is scoped to
+// steps under runs that are terminal right now; it never touches a step
+// whose parent is active, paused, or being seeded.
+export async function sweepOrphanSteps(admin: any, limit = 500): Promise<OrphanSweepResult> {
+  const { data: active } = await admin
+    .from("run_steps")
+    .select("run_id")
+    .in("status", ["queued", "running"])
+    .limit(limit);
+  const runIds = [...new Set(((active ?? []) as Array<{ run_id: string }>).map((s) => s.run_id))];
+  if (!runIds.length) return { candidate_runs: 0, terminal_runs: 0, cancelled: 0 };
+
+  const { data: terminalRuns } = await admin
+    .from("boardroom_runs")
+    .select("id")
+    .in("id", runIds)
+    .in("status", [...TERMINAL_RUN_STATUSES]);
+  const terminalIds = ((terminalRuns ?? []) as Array<{ id: string }>).map((r) => r.id);
+  if (!terminalIds.length) return { candidate_runs: runIds.length, terminal_runs: 0, cancelled: 0 };
+
+  const { data, error } = await admin
+    .from("run_steps")
+    .update({
+      status: "failed",
+      error: "cancelled_parent_terminal",
+      completed_at: new Date().toISOString(),
+    })
+    .in("run_id", terminalIds)
+    .in("status", ["queued", "running"])
+    .select("id");
+  if (error) throw new Error(`orphan sweep failed: ${error.message ?? error}`);
+  return {
+    candidate_runs: runIds.length,
+    terminal_runs: terminalIds.length,
+    cancelled: Array.isArray(data) ? data.length : 0,
+  };
+}
