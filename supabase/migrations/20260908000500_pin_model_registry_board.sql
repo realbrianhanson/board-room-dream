@@ -43,7 +43,7 @@ GRANT ALL ON public.model_registry_history TO service_role;
 
 DROP POLICY IF EXISTS "Admins read model registry history" ON public.model_registry_history;
 CREATE POLICY "Admins read model registry history" ON public.model_registry_history
-  FOR SELECT TO authenticated USING (public.is_admin(auth.uid()));
+  FOR SELECT TO authenticated USING (private.is_admin(auth.uid()));
 -- No INSERT/UPDATE/DELETE policies: only the SECURITY DEFINER trigger writes.
 
 CREATE OR REPLACE FUNCTION public.log_model_registry_change()
