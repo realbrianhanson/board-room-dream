@@ -186,9 +186,10 @@ export function normalizeStepJson(
   stepKey: string,
   parsed: any,
   kind: string = "plan",
+  opts?: ValidateStepOpts,
 ): { value: any; error: string | null } {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { value: parsed, error: validateStepJson(stepKey, parsed, kind) };
+    return { value: parsed, error: validateStepJson(stepKey, parsed, kind, opts) };
   }
   const value: any = JSON.parse(JSON.stringify(parsed));
 
@@ -243,7 +244,7 @@ export function normalizeStepJson(
     }
   }
 
-  return { value, error: validateStepJson(stepKey, value, kind) };
+  return { value, error: validateStepJson(stepKey, value, kind, opts) };
 }
 
 // What to persist when a NON-chair judgment step is still invalid after its
@@ -263,7 +264,80 @@ export function degradedStepJson(stepKey: string, error: string): Record<string,
   return null;
 }
 
-export function validateStepJson(stepKey: string, parsed: any, kind: string = "plan"): string | null {
+// ============================== Batch prompt length (soft rule) ==============================
+
+// Code-channel prompt_md sizes. 900-2,600 is what the Chair is asked for;
+// the JIT batch compiler regrounds and rewrites every batch against live code
+// before Copy is enabled and accepts up to 3,200, so a draft inside that band
+// is not a product defect. Live run dd1e502e failed on a 2,675-char batch 6
+// after the correction pass returned the same answer — a validator that
+// rejects instead of accepting a slightly long draft (RC-3).
+export const CODE_PROMPT_MIN_CHARS = 900;
+export const CODE_PROMPT_TARGET_MAX_CHARS = 2600;
+export const CODE_PROMPT_HARD_MAX_CHARS = 3200;
+export const HUMAN_PROMPT_MIN_CHARS = 300;
+export const HUMAN_PROMPT_TARGET_MAX_CHARS = 2400;
+
+export type BatchPromptLengthVerdict = {
+  ok: boolean;
+  error?: string;
+  warning?: { batch_no: number; chars: number };
+};
+
+// Pure. `attempt` is the step's _validation_attempts at acceptance time:
+// 0 = the first answer, >= 1 = the answer to the single correction pass.
+// Under the minimum is always an error (a real defect). Code channels accept
+// 900-3,200 silently. Above the target maximum is an error on the first
+// attempt only, so the correction pass can ask for a shorter prompt; on the
+// correction attempt any length >= minimum is accepted with a warning the
+// caller records as response_json._meta.length_warning. The human channel
+// keeps its 300-2,400 shape with the same soft treatment.
+export function batchPromptLengthVerdict(
+  channel: string,
+  chars: number,
+  attempt: number,
+  batchNo = 0,
+): BatchPromptLengthVerdict {
+  const isCode = channel === "lovable" || channel === "supabase";
+  const min = isCode ? CODE_PROMPT_MIN_CHARS : HUMAN_PROMPT_MIN_CHARS;
+  const targetMax = isCode ? CODE_PROMPT_TARGET_MAX_CHARS : HUMAN_PROMPT_TARGET_MAX_CHARS;
+  const silentMax = isCode ? CODE_PROMPT_HARD_MAX_CHARS : HUMAN_PROMPT_TARGET_MAX_CHARS;
+  const n = Number(chars) || 0;
+  const rule = isCode
+    ? `code batches must be ${CODE_PROMPT_MIN_CHARS}-${CODE_PROMPT_TARGET_MAX_CHARS.toLocaleString("en-US")} characters (hard maximum ${CODE_PROMPT_HARD_MAX_CHARS.toLocaleString("en-US")})`
+    : `human batches must be ${HUMAN_PROMPT_MIN_CHARS}-${HUMAN_PROMPT_TARGET_MAX_CHARS.toLocaleString("en-US")} characters`;
+  const error = `Batch ${batchNo} prompt_md is ${n} chars — ${rule}.`;
+  if (n < min) return { ok: false, error };
+  if (n <= silentMax) return { ok: true };
+  if ((Number(attempt) || 0) >= 1) return { ok: true, warning: { batch_no: batchNo, chars: n } };
+  return { ok: false, error };
+}
+
+// Pure. The length warnings a batches step carries once accepted on its
+// correction attempt (empty on the first attempt or for any other step).
+export function batchPromptLengthWarnings(
+  stepKey: string,
+  parsed: any,
+  attempt: number,
+): Array<{ batch_no: number; chars: number }> {
+  if (stepKey !== "batches_chair" && stepKey !== "batches_revise_chair") return [];
+  const b = Array.isArray(parsed?.batches) ? parsed.batches : [];
+  const out: Array<{ batch_no: number; chars: number }> = [];
+  b.forEach((item: any, i: number) => {
+    if (!item || typeof item !== "object" || typeof item.prompt_md !== "string") return;
+    const v = batchPromptLengthVerdict(item.channel, item.prompt_md.length, attempt, Number(item.batch_no) || i + 1);
+    if (v.ok && v.warning) out.push(v.warning);
+  });
+  return out;
+}
+
+export type ValidateStepOpts = {
+  // The step's _validation_attempts when the answer is judged (default 0).
+  attempt?: number;
+};
+
+export function validateStepJson(stepKey: string, parsed: any, kind: string = "plan", opts?: ValidateStepOpts): string | null {
+  const attempt = Number(opts?.attempt ?? 0) || 0;
   if (!parsed || typeof parsed !== "object") return "Response is not a JSON object.";
   if (stepKey.startsWith("r2_exam_")) {
     const seat = stepKey.replace("r2_exam_", "");
@@ -383,7 +457,8 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
       const promptLen = item.prompt_md.length;
       const isCode = item.channel === "lovable" || item.channel === "supabase";
       if (isCode) {
-        if (promptLen < 900 || promptLen > 2600) return `Batch ${n} prompt_md is ${promptLen} chars — code batches must be 900-2,600 characters.`;
+        const lengthVerdict = batchPromptLengthVerdict(item.channel, promptLen, attempt, n);
+        if (!lengthVerdict.ok) return lengthVerdict.error ?? "Batch prompt_md length is out of contract.";
         if (!/Acceptance checks:/.test(item.prompt_md)) return `Batch ${n} (code) must include an "Acceptance checks:" line.`;
         // Count numbered items (1. 2. …) beneath the Acceptance checks: line, until blank line / "Keep everything else…" — must be 2–4.
         const idx = item.prompt_md.search(/Acceptance checks:\s*$/m);
@@ -403,7 +478,8 @@ export function validateStepJson(stepKey: string, parsed: any, kind: string = "p
         if (!/Typecheck when done\./.test(item.prompt_md)) return `Batch ${n} (code) must end with "Typecheck when done."`;
       } else {
         // human channel
-        if (promptLen < 300 || promptLen > 2400) return `Batch ${n} prompt_md is ${promptLen} chars — human batches must be 300-2,400 characters.`;
+        const lengthVerdict = batchPromptLengthVerdict(item.channel, promptLen, attempt, n);
+        if (!lengthVerdict.ok) return lengthVerdict.error ?? "Batch prompt_md length is out of contract.";
         if (/Typecheck when done\./.test(item.prompt_md)) return `Batch ${n} (human) must not include "Typecheck when done."`;
         if (/Acceptance checks:/.test(item.prompt_md)) return `Batch ${n} (human) must not include "Acceptance checks:" — write plain-language numbered steps only.`;
       }
@@ -447,7 +523,7 @@ export function correctionForStep(stepKey: string, opts?: { isImport?: boolean }
     } else {
       range = "the same count range as the original system contract above (3-6 for imports, 6-8 for greenfield — prefer 6). Do NOT invent extra batches; pick the smallest count that fully covers the locked scope without padding.";
     }
-    return `Your JSON was truncated. Return ${range} Each prompt_md 900-1,800 characters; total JSON <=16,000 characters. Preserve required coverage but remove repeated context and prose. Do not silently pad to 6 to satisfy an old default.`;
+    return `Your JSON was truncated. Return ${range} Each prompt_md 900-2,600 characters (hard maximum 3,200); total JSON <=16,000 characters. Preserve required coverage but remove repeated context and prose. Do not silently pad to 6 to satisfy an old default.`;
   }
   if (key === "batches_review_inspector" || key === "batches_review_contrarian") {
     return "Your review JSON was truncated. Return ONLY {verdict, issues}; max 8 issues; each issue.text 10-280 characters; total JSON <=4,500 characters. Preserve every blocking issue, merge duplicates, no prose.";

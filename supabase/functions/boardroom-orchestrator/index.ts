@@ -27,6 +27,7 @@ import {
   voteScorecard,
   validateStepJson,
   normalizeStepJson,
+  batchPromptLengthWarnings,
   degradedStepJson,
   correctionForStep,
 } from "./protocol.ts";
@@ -51,8 +52,8 @@ import {
 } from "./queues.ts";
 import { BatchContextTooLarge, MarkdownCompactionImpossible, buildValidationRetryRequest, continuationPrefix, joinContinuation } from "../_shared/batch-context.ts";
 import { isSmokeRun, keepSmoke, runBudgetUsd } from "../_shared/smoke-mode.ts";
-import { tryCloseJsonTail, tryRecoverTrailingRedundantCloser } from "../_shared/audit-findings.ts";
-import { extractJsonCandidate, repairTruncatedStepJson } from "../_shared/json-extract.ts";
+import { repairTruncatedStepJson } from "../_shared/json-extract.ts";
+import { acceptStepJson, revalidateStoredStep } from "./accept-json.ts";
 import {
   decideConflictOutcome,
   isUniqueViolation,
@@ -523,62 +524,17 @@ async function executeStep(admin: any, run: any, step: any) {
     };
 
     if (jsonMode) {
-      let candidate: any = null;
-      let tailClosed: string | null = null;
-      let recoveryMode: string | null = null;
-      try { candidate = JSON.parse(content); } catch { candidate = null; }
-      if (!candidate) {
-        // AUDIT-JSON-RECOVERY-R5: valid top-level JSON followed only by
-        // whitespace and redundant same-kind closers (e.g. extra "}" after
-        // an object) is machine-recoverable without repair. Runs strictly
-        // after JSON.parse and before the tail-closer rescue.
-        const rec = tryRecoverTrailingRedundantCloser(content);
-        if (rec.ok) {
-          candidate = rec.value;
-          recoveryMode = "trailing_redundant_closer";
-        }
-      }
-      if (!candidate) {
-        // Tolerant extraction (RC-3): the answer IS the right JSON but wrapped
-        // — ``` fences, a "Here is the JSON:" preamble, a "Note: done" trailer.
-        // Parses the first balanced top-level value as-is and ignores the
-        // rest; nothing is repaired. Sits between the redundant-closer rescue
-        // and the tail-closer so a complete-but-wrapped answer never reaches
-        // the closer heuristics. Still validated below like any other parse.
-        const ext = extractJsonCandidate(content);
-        if (ext.ok) {
-          candidate = ext.value;
-          recoveryMode = ext.mode;
-        }
-      }
-      if (!candidate) {
-        // Conservative tail-closure rescue: the audit-map path repeatedly
-        // truncates one token short of the outer "]}" (run e2c5faf3). The
-        // helper appends ONLY the missing "}"/"]" needed to balance and re-
-        // parses; refuses on unterminated strings, dangling commas, or any
-        // other ambiguity. Rescued output must still pass validateStepJson.
-        // Shape selection: audit merge → strict "merge"; audit seat maps →
-        // "map"; every other JSON step (Round-4 vote, cr_exam_*, batches_*,
-        // etc.) → "generic". Generic still bounds the appended-closer count
-        // and passes the rescued value through validateStepJson downstream.
-        const rescueShape = step.step_key === "audit_chair_merge"
-          ? "merge"
-          : /^audit_(chair|strategist|contrarian|inspector|reserve)(_c\d+)?$/.test(step.step_key)
-            ? "map"
-            : "generic";
-        const rescued = tryCloseJsonTail(content, { shape: rescueShape });
-        if (rescued.ok) {
-          candidate = rescued.value;
-          tailClosed = rescued.closed;
-        }
-      }
-      // Normalize-then-validate: mechanical schema deviations (7.5 scores,
-      // seat labels, a "resolved" objection with no quote, nine review
-      // issues, misnumbered batches) are coerced deterministically and the
-      // coerced value is what gets validated AND persisted.
-      let normalized = candidate
-        ? normalizeStepJson(step.step_key, candidate, run.kind)
-        : { value: null as any, error: "Response was not parseable JSON." as string | null };
+      // Parse -> recover -> extract -> tail-close -> normalize/validate, shared
+      // with the resume paths (accept-json.ts). The attempt count decides the
+      // soft batch-length rule: a code prompt above the target maximum is an
+      // error on the first answer only and a warning on the correction pass.
+      const validationAttempts = Number(step.request?._validation_attempts ?? 0);
+      const accepted = acceptStepJson(step.step_key, content, run.kind, { attempt: validationAttempts });
+      const candidate: any = accepted.candidate;
+      const tailClosed: string | null = accepted.tailClosed;
+      const recoveryMode: string | null = accepted.recoveryMode;
+      let lengthWarning = accepted.lengthWarning;
+      let normalized: { value: any; error: string | null } = { value: accepted.value, error: accepted.error };
       let err = normalized.error;
       let repairedMeta: { mode: string; dropped_chars: number } | null = null;
       if (err) {
@@ -599,7 +555,6 @@ async function executeStep(admin: any, run: any, step: any) {
         // Invocation-safe correction: NEVER mark completed with invalid output
         // and NEVER make two long model calls in one invocation. Queue the
         // correction into a fresh invocation, exactly one retry before failing.
-        const validationAttempts = Number(step.request?._validation_attempts ?? 0);
         if (validationAttempts >= 1 && truncated) {
           // Last resort, AFTER the widened correction pass also came back
           // cut: keep the complete elements of a count-tolerant list step
@@ -611,10 +566,11 @@ async function executeStep(admin: any, run: any, step: any) {
             isImport: step.request?._is_import === true,
           });
           if (repaired.ok) {
-            const again = normalizeStepJson(step.step_key, repaired.value, run.kind);
+            const again = normalizeStepJson(step.step_key, repaired.value, run.kind, { attempt: validationAttempts });
             if (!again.error) {
               normalized = again;
               err = null;
+              lengthWarning = batchPromptLengthWarnings(step.step_key, again.value, validationAttempts);
               repairedMeta = { mode: "truncation_cut", dropped_chars: repaired.dropped_chars };
               console.log(`[exec] REPAIRED step=${step.step_key} run=${run.id} dropped_chars=${repaired.dropped_chars}`);
             } else {
@@ -685,6 +641,7 @@ async function executeStep(admin: any, run: any, step: any) {
         ...(tailClosed ? { tail_closed: tailClosed } : {}),
         ...(recoveryMode ? { recovery_mode: recoveryMode } : {}),
         ...(repairedMeta ? { repaired: repairedMeta } : {}),
+        ...(lengthWarning.length ? { length_warning: lengthWarning } : {}),
       };
       await admin
         .from("run_steps")
@@ -1321,6 +1278,34 @@ async function finalizeBatches(admin: any, run: any, batchesJson: any[]) {
     .not("status", "in", `(${TERMINAL_RUN_STATUSES.join(",")})`);
 }
 
+
+// Resume / retry: before a failed step is bought again, re-judge the text it
+// stored under the CURRENT acceptance rules (accept-json.ts). A pass marks
+// the step completed with the normalized value (+ _meta.revalidated) and
+// clears its error — no model call — so afterStepComplete advances the run
+// from it. Returns false (nothing written) when the stored text still fails,
+// or the row was no longer 'failed'.
+async function completeStepFromStoredOutput(admin: any, run: any, step: any): Promise<boolean> {
+  const verdict = revalidateStoredStep(step, run.kind);
+  if (!verdict.ok) {
+    if (step?.response_text) console.log(`[resume] REVALIDATE_FALLTHROUGH step=${step.step_key} run=${run.id} reason=${verdict.reason}`);
+    return false;
+  }
+  const { data: done, error } = await admin
+    .from("run_steps")
+    .update({
+      status: "completed",
+      error: null,
+      response_json: verdict.response_json,
+      completed_at: new Date().toISOString(),
+    })
+    .eq("id", step.id)
+    .eq("status", "failed")
+    .select("id");
+  if (error || !done?.length) return false;
+  console.log(`[resume] REVALIDATED step=${step.step_key} run=${run.id} — completed from stored output`);
+  return true;
+}
 
 async function loadAllSteps(admin: any, runId: string) {
   const { data } = await admin
@@ -2026,8 +2011,10 @@ async function advanceRun(admin: any, runIn: any) {
         ? revise.response_json.batches
         : [];
       // Extra guard: re-run validation even if executeStep already accepted it.
+      // attempt: 1 — the soft length treatment, so a revision accepted on its
+      // correction pass (or revalidated on resume) is not refused here.
       const validationError = ok
-        ? validateStepJson("batches_revise_chair", revise.response_json)
+        ? validateStepJson("batches_revise_chair", revise.response_json, run.kind, { attempt: 1 })
         : (revise.response_json?.validation_error ?? revise.error ?? "batches_revise_chair did not complete");
       if (!ok || validationError || !revisedList.length) {
         await failRun(
@@ -2708,7 +2695,7 @@ async function handleRequest(req: Request): Promise<Response> {
     if (!run || run.user_id !== userId) return j(404, { error: "Run not found" });
     const { data: step } = await admin
       .from("run_steps")
-      .select("id, status, error, request")
+      .select("id, step_key, status, error, request, response_text, response_json")
       .eq("id", stepId)
       .eq("run_id", runId)
       .maybeSingle();
@@ -2729,18 +2716,23 @@ async function handleRequest(req: Request): Promise<Response> {
       if (claimErr) return j(409, { error: `Could not reopen the run: ${claimErr.message}` });
       if (!claimed?.length) return j(409, { error: "Run is no longer failed — refresh and try again." });
     }
-    // Reset attempt markers / reserve pin / correction turn so the retried
-    // step gets its correction pass back instead of failing on first miss.
-    await admin
-      .from("run_steps")
-      .update({
-        status: "queued",
-        error: null,
-        completed_at: null,
-        started_at: null,
-        request: resetRequestForResume(step.request, step.error),
-      })
-      .eq("id", stepId);
+    // Stored output that the current rules accept completes the step from
+    // the row (no model call); otherwise reset attempt markers / reserve pin
+    // / correction turn so the retried step gets its correction pass back
+    // instead of failing on first miss.
+    const revalidated = await completeStepFromStoredOutput(admin, run, step);
+    if (!revalidated) {
+      await admin
+        .from("run_steps")
+        .update({
+          status: "queued",
+          error: null,
+          completed_at: null,
+          started_at: null,
+          request: resetRequestForResume(step.request, step.error),
+        })
+        .eq("id", stepId);
+    }
     if (run.status === "failed") {
       // Same reconciliation as resume_failed: failRun marked the audits row
       // failed and rewound a final audit's project, so undo both before the
@@ -2750,7 +2742,7 @@ async function handleRequest(req: Request): Promise<Response> {
       await admin.from("boardroom_runs").update({ status: "running", error: null }).eq("id", runId).eq("status", "paused");
     }
     fireSelfTick();
-    return j(200, { ok: true });
+    return j(200, { ok: true, revalidated });
   }
 
   // RC-2: resume a failed run where it stopped. Every sibling failRun
@@ -2819,7 +2811,14 @@ async function handleRequest(req: Request): Promise<Response> {
       if (!claimed?.length) return j(409, { error: "Run is no longer failed — refresh and try again." });
     }
     let requeued = 0;
+    let revalidated = 0;
     for (const st of requeue) {
+      // A step whose stored answer the current rules accept is completed from
+      // the row; the normal advance picks it up once the run is running.
+      if (await completeStepFromStoredOutput(admin, run, st)) {
+        revalidated++;
+        continue;
+      }
       const patch: any = { status: "queued", error: null, completed_at: null, started_at: null };
       if (st.error !== "cancelled_parent_terminal") {
         patch.request = resetRequestForResume(st.request, st.error);
@@ -2832,7 +2831,11 @@ async function handleRequest(req: Request): Promise<Response> {
       // With seat retries in flight the fan-in (afterStepComplete) queues
       // the merge once they are terminal; otherwise queue it right away.
       if (requeued === 0) {
-        await queueAuditChairMerge(admin, run, steps.filter((x: any) => x.id !== chair.id));
+        // A seat completed from its stored output above is 'completed' in
+        // the table but still 'failed' in the list loaded before the loop;
+        // reload so its findings reach the merge.
+        const fresh = revalidated > 0 ? await loadAllSteps(admin, run.id) : steps;
+        await queueAuditChairMerge(admin, run, fresh.filter((x: any) => x.id !== chair.id));
       }
     }
     await reverseAuditFailure(admin, run);
@@ -2840,7 +2843,7 @@ async function handleRequest(req: Request): Promise<Response> {
     if (check.extra > 0) patch.budget_usd = check.newTotal;
     await admin.from("boardroom_runs").update(patch).eq("id", run.id).eq("status", "paused");
     fireSelfTick();
-    return j(200, { ok: true, run_id: run.id, requeued, merge_requeued: chairDead });
+    return j(200, { ok: true, run_id: run.id, requeued, revalidated, merge_requeued: chairDead });
   }
 
   // Owner cancel: terminalize an active run through failRun so every

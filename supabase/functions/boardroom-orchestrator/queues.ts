@@ -1016,7 +1016,7 @@ ${manual}
 
 OUTPUT DISCIPLINE (hard limits — the run FAILS if you exceed them):
 - ${batchCountRule}
-- Each prompt_md: 900-2,600 characters, MAX 8 numbered implementation items.
+- Each prompt_md: 900-2,600 characters (hard maximum 3,200), MAX 8 numbered implementation items.
 - Code batches: 2-4 acceptance checks (not 5).
 - Do NOT restate plan/PRD prose, feature lists, or design tokens verbatim in prompts. Reference them by name.
 - Total serialized JSON payload: <=24,000 characters. If you approach that, cut prose — not scope.
@@ -1261,7 +1261,7 @@ ${manual}
 
 OUTPUT DISCIPLINE (hard limits — the run FAILS if you exceed them):
 - ${batchCountRule}
-- Each prompt_md: 900-2,600 characters, MAX 8 numbered items, 2-4 acceptance checks for code batches.
+- Each prompt_md: 900-2,600 characters (hard maximum 3,200), MAX 8 numbered items, 2-4 acceptance checks for code batches.
 - Do NOT restate plan/PRD prose, feature lists, or design tokens verbatim. Reference them by name.
 - Total serialized JSON payload: <=24,000 characters. If you approach that, cut prose — not scope.
 
