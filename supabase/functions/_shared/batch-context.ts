@@ -405,20 +405,25 @@ export function continuationPrefix(request: any): string {
 }
 
 // Join the first half and the continuation. Models asked to "continue from the
-// last complete sentence" sometimes restate the partial last line before
-// carrying on; when the continuation opens with that line, the overlap is
-// dropped so the join never duplicates text. Otherwise plain concatenation —
-// the cut may sit mid-word, so no separator is inserted.
+// last complete sentence" routinely restate the partial trailing sentence (a
+// SUFFIX of the last line, not the whole line) or the whole last line before
+// carrying on; the longest suffix of the head (>= 12 chars, searched within
+// the last CONTINUATION_OVERLAP_WINDOW chars) that the continuation opens
+// with is dropped so the join never duplicates text. Otherwise plain
+// concatenation — the cut may sit mid-word, so no separator is inserted.
+export const CONTINUATION_OVERLAP_MIN = 12;
+export const CONTINUATION_OVERLAP_WINDOW = 600;
+
 export function joinContinuation(prefix: string, continuation: string): string {
   const head = String(prefix ?? "");
   const tail = String(continuation ?? "");
   if (!head) return tail;
   if (!tail) return head;
-  const lastNl = head.lastIndexOf("\n");
-  const lastLine = head.slice(lastNl + 1).trim();
   const tailTrim = tail.replace(/^\s+/, "");
-  if (lastLine.length >= 12 && tailTrim.startsWith(lastLine)) {
-    return head + tailTrim.slice(lastLine.length);
+  const window = head.slice(-CONTINUATION_OVERLAP_WINDOW);
+  for (let len = window.length; len >= CONTINUATION_OVERLAP_MIN; len--) {
+    const suffix = window.slice(window.length - len);
+    if (tailTrim.startsWith(suffix)) return head + tailTrim.slice(len);
   }
   return head + tail;
 }
@@ -474,6 +479,26 @@ export function buildValidationRetryRequest(input: ValidationRetryInput): Valida
     };
     const chars = JSON.stringify(req).length;
     // Batch-generation steps keep the hard cap even on the no-echo path.
+    if (isBatchGenerationStep(stepKey) && chars > MAX_BATCH_REQUEST_CHARS) {
+      throw new BatchContextTooLarge(stepKey, chars);
+    }
+    return { request: req, mode: "without_echo", chars };
+  }
+
+  // No visible text at all (hidden reasoning consumed the whole budget, or
+  // the provider returned an empty message): there is nothing to echo, and
+  // an empty assistant turn is rejected outright by several providers, which
+  // would turn the widened correction pass into a 400. Send the correction
+  // alone.
+  if (!assistantContent.trim()) {
+    const noEchoText = truncated
+      ? `${correctionText}\n\n(Retry note: your prior response contained no visible text before the output budget ran out. Emit the required JSON directly, without preamble.)`
+      : `${correctionText}\n\n(Retry note: your prior response was empty. Emit the required JSON directly, without preamble.)`;
+    const req = {
+      ...baseRequest,
+      messages: [...baseMessages, { role: "user", content: noEchoText }],
+    };
+    const chars = JSON.stringify(req).length;
     if (isBatchGenerationStep(stepKey) && chars > MAX_BATCH_REQUEST_CHARS) {
       throw new BatchContextTooLarge(stepKey, chars);
     }

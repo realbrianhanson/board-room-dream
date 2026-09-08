@@ -584,6 +584,44 @@ Deno.test("buildValidationRetryRequest — the continuation flag is opt-in; a tr
   assertEquals("reasoning_effort" in out.request, false);
 });
 
+Deno.test("buildValidationRetryRequest — a JSON correction never echoes an EMPTY assistant turn (reasoning ate the whole budget)", () => {
+  // isRefusal no longer swallows empty+length, so an all-reasoning answer
+  // reaches the correction pass on its first attempt; an empty assistant
+  // message is a provider 400, which would waste the widened retry.
+  for (const [content, truncated] of [["", true], ["  \n\t", true], ["", false]] as Array<[string, boolean]>) {
+    const out = buildValidationRetryRequest({
+      stepKey: "r4_vote_inspector_loop0",
+      baseRequest: { json_output: true, max_tokens: 3500, messages: CONT_BASE },
+      baseMessages: CONT_BASE,
+      assistantContent: content,
+      validationError: "Response was not parseable JSON.",
+      truncated,
+      correction: "Return the vote JSON only.",
+    });
+    assertEquals(out.mode, "without_echo", `content=${JSON.stringify(content)} truncated=${truncated}`);
+    const msgs = out.request.messages as any[];
+    assertEquals(msgs.length, CONT_BASE.length + 1);
+    assertEquals(msgs.some((m) => m.role === "assistant"), false);
+    assertEquals(msgs.at(-1).role, "user");
+    assertStringIncludes(msgs.at(-1).content, truncated ? "Return the vote JSON only." : "Response was not parseable JSON.");
+    assertStringIncludes(msgs.at(-1).content, "Retry note");
+  }
+  // Batch-generation steps keep the hard cap on this path too.
+  const huge = [{ role: "system", content: "s" }, { role: "user", content: "u".repeat(MAX_BATCH_REQUEST_CHARS) }];
+  assertThrows(
+    () => buildValidationRetryRequest({
+      stepKey: "batches_chair",
+      baseRequest: { json_output: true, messages: huge },
+      baseMessages: huge,
+      assistantContent: "",
+      validationError: "x",
+      truncated: true,
+      correction: "c",
+    }),
+    BatchContextTooLarge,
+  );
+});
+
 Deno.test("continuationPrefix — reads the replayed assistant turn only for continuation-mode requests", () => {
   const msgs = [...CONT_BASE, { role: "assistant", content: "half" }, { role: "user", content: CONTINUATION_INSTRUCTION }];
   assertEquals(continuationPrefix({ _validation_retry_mode: "continuation", messages: msgs }), "half");
@@ -605,6 +643,29 @@ Deno.test("joinContinuation — a restated partial last line is not duplicated",
   assertEquals(joinContinuation(head, tail), "## Type\n\nBody copy uses Inter at 16px with a 1.5 line height.\n\n## Spacing & shape");
   // Short trailing fragments are never treated as overlap (too easy to match by accident).
   assertEquals(joinContinuation("Use\nthe", "the rest"), "Use\nthethe rest");
+});
+
+Deno.test("joinContinuation — a restated partial trailing SENTENCE (suffix of the last line) is not duplicated", () => {
+  // "Continue exactly from the last complete sentence" invites the model to
+  // re-emit the sentence that was cut, which is a suffix of the last line.
+  const head = "## Tokens\n\nPrimary is a deep navy. The signature element is a hairline rule that";
+  const tail = "The signature element is a hairline rule that runs under every H2.\n\n## Motion";
+  assertEquals(
+    joinContinuation(head, tail),
+    "## Tokens\n\nPrimary is a deep navy. The signature element is a hairline rule that runs under every H2.\n\n## Motion",
+  );
+  // Leading whitespace before the restated fragment is ignored for matching.
+  assertEquals(
+    joinContinuation("Body copy uses Inter at 16px with a 1.5 line", "\n\n16px with a 1.5 line height."),
+    "Body copy uses Inter at 16px with a 1.5 line height.",
+  );
+  // The longest overlap wins: a suffix that spans the previous line break.
+  assertEquals(
+    joinContinuation("## A\n\nFirst sentence here.\nSecond one that", "First sentence here.\nSecond one that ends.\n"),
+    "## A\n\nFirst sentence here.\nSecond one that ends.\n",
+  );
+  // A genuine mid-word continuation with an accidental short match stays a plain concat.
+  assertEquals(joinContinuation("the rule of the", "the road"), "the rule of thethe road");
 });
 
 Deno.test("joinContinuation — empty halves", () => {
