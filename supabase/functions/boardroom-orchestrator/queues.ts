@@ -8,6 +8,7 @@ import {
   loadOwnerAuthority,
   OWNER_AUTHORITY_RULES,
   type OwnerAuthority,
+  ownerAuthorityRulesNeeded,
 } from "../_shared/owner-authority.ts";
 import {
   assertBatchRequestSize,
@@ -136,12 +137,14 @@ async function ensureAuthority(admin: any, run: any): Promise<OwnerAuthority> {
 async function queueSteps(admin: any, run: any, rowsIn: any | any[]): Promise<any> {
   const authority = await ensureAuthority(admin, run);
   const rows = Array.isArray(rowsIn) ? rowsIn : [rowsIn];
+  // Constitution v3 already carries the doctrine (one copy per call, RC-6).
+  const prependRules = ownerAuthorityRulesNeeded(run);
   for (const row of rows) {
     const msgs = row?.request?.messages;
     if (Array.isArray(msgs)) {
       for (const m of msgs) {
         if (m?.role === "system" && typeof m.content === "string") {
-          m.content = `${OWNER_AUTHORITY_RULES}\n\n${m.content}`;
+          if (prependRules) m.content = `${OWNER_AUTHORITY_RULES}\n\n${m.content}`;
         } else if (m?.role === "user") {
           const injected = injectOwnerAuthority("", m.content, authority);
           m.content = injected.user;
@@ -1381,6 +1384,28 @@ import {
   normalizeFindings,
 } from "../_shared/audit-findings.ts";
 
+// Pure. Extra clauses for the Chair's CODE COVERAGE line (RC-6): the files
+// the selection never read (tests, generated, over-cap) and, when the
+// Strategist was queued on no chunk (no UI surface, or an audit-only
+// import), a warning not to imply UX coverage.
+export function auditCoverageExtras(consensus: any, seatSteps: Array<{ step_key?: string }>): string {
+  let out = "";
+  const skipped = Math.max(0, Math.floor(Number(consensus?.files_skipped) || 0));
+  if (skipped > 0) {
+    const list: string[] = Array.isArray(consensus?.skipped_paths) ? consensus.skipped_paths.map((p: unknown) => String(p)) : [];
+    const more = skipped - list.length;
+    out += `; UNREAD: ${skipped} files (${list.join(", ")}${more > 0 ? `, +${more} more` : ""})`;
+  }
+  const incremental = consensus?.incremental;
+  if (incremental && typeof incremental === "object" && typeof incremental.base_sha === "string") {
+    out += `; INCREMENTAL: only files changed since commit ${incremental.base_sha.slice(0, 7)} were read - findings on unchanged files are carried forward from the previous final audit after this merge, so never call the app clean beyond the changed files`;
+  }
+  if (consensus?.smoke !== true && !seatSteps.some((s) => /^audit_strategist/.test(String(s.step_key ?? "")))) {
+    out += "; the Strategist reviewed no chunk (no UI surface in the code read, or an audit-only scope) - do not imply UX or positioning coverage";
+  }
+  return out;
+}
+
 export async function queueAuditChairMerge(admin: any, run: any, steps: any[]) {
   // Collect every completed seat report — single-chunk (audit_<seat>) and
   // map-reduce chunked (audit_<seat>_cN) alike. Strip prose/prompt/raw
@@ -1410,7 +1435,7 @@ export async function queueAuditChairMerge(admin: any, run: any, steps: any[]) {
   // empty on a full audit).
   const coverageGap = (missing.length
     ? `; ${missing.length} of ${allSeatSteps.length} seat reviews did not complete (${missing.join(", ")}) - state this gap in the summary`
-    : "") + smokeCoverageNote(run.consensus);
+    : "") + smokeCoverageNote(run.consensus) + auditCoverageExtras(run.consensus, allSeatSteps);
   const system = `You are the Chair. The seats independently reviewed the student's code — possibly split across chunks, so the same underlying issue may be reported more than once. Merge, dedupe across seats AND chunks, assign FINAL severities, and produce ONE audit report.
 
 Severities:

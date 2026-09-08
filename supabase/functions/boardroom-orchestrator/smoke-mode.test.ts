@@ -87,7 +87,8 @@ Deno.test("audit-runner / queues.ts — smoke_chunks is stored at seed time and 
   const auditSrc = await Deno.readTextFile(new URL("../audit-runner/index.ts", import.meta.url));
   assertStringIncludes(auditSrc, "consensus.smoke_chunks = smokeAuditChunks(chunks.length)");
   // files_analyzed must count the files in the one chunk a smoke maps, not the repo.
-  assertStringIncludes(auditSrc, "filesAnalyzed = smoke ? (chunkFilesFor(res.files)[0]?.length ?? 0) : res.files.length");
+  // (RC-6: chunkFiles now returns the packed chunks with their paths.)
+  assertStringIncludes(auditSrc, "filesAnalyzed = smoke ? (packed.paths[0]?.length ?? 0) : res.files.length");
   const queuesSrc = await Deno.readTextFile(new URL("./queues.ts", import.meta.url));
   assertStringIncludes(queuesSrc, "+ smokeCoverageNote(run.consensus)");
 });

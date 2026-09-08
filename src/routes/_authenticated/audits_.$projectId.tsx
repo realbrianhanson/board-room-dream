@@ -14,6 +14,7 @@ import {
 import { useProjectJourney } from "@/hooks/use-project-journey";
 import { extractFunctionsErrorMessage } from "@/lib/functions-error";
 import {
+  canOfferFullRescan,
   canResumeFinal,
   canStartFinal,
   latestFinal as pickLatestFinal,
@@ -95,6 +96,9 @@ function AuditCenterPage() {
   const [showPaste, setShowPaste] = useState(false);
   const [pasted, setPasted] = useState("");
   const [showRetry, setShowRetry] = useState(false);
+  // GitHub final audits re-read only what changed since the last successful
+  // one by default; this forces the whole tree.
+  const [fullRescan, setFullRescan] = useState(false);
   const [strategyValidity, setStrategyValidity] = useState<StrategyPanelValidity | null>(null);
   const strategyPanelRef = useRef<StrategyPanelHandle | null>(null);
   // Persisted goals from the latest intake for this project. `null` means
@@ -247,6 +251,7 @@ function AuditCenterPage() {
     try {
       const payload: Record<string, unknown> = { action: "start_final_audit", project_id: projectId, source };
       if (source === "paste") payload.pasted_code = pasted;
+      if (source === "github" && fullRescan) payload.full_rescan = true;
       const { data, error } = await supabase.functions.invoke("audit-runner", { body: payload });
       if (error) {
         const msg = await extractFunctionsErrorMessage(error);
@@ -271,6 +276,7 @@ function AuditCenterPage() {
   const previousFinalAudits = useMemo(() => pickPreviousFinals(audits), [audits]);
   const startAllowed = canStartFinal({ isOwner, audits, starting });
   const retryLabel = startCtaLabel(finalAudit);
+  const fullRescanOffered = !!ghRepo && canOfferFullRescan(audits);
   const resumeAllowed = canResumeFinal({
     isOwner,
     latest: finalAudit,
@@ -730,6 +736,21 @@ function AuditCenterPage() {
                         Cancel
                       </button>
                     </div>
+                    {fullRescanOffered && (
+                      <label className="flex items-start gap-2 text-xs text-muted-foreground">
+                        <input
+                          type="checkbox"
+                          checked={fullRescan}
+                          onChange={(e) => setFullRescan(e.target.checked)}
+                          data-testid="final-full-rescan"
+                          className="mt-0.5 h-3.5 w-3.5 accent-primary"
+                        />
+                        <span>
+                          Full rescan — re-read every file. By default only files changed since the last successful
+                          final audit are read and its findings on untouched files carry forward.
+                        </span>
+                      </label>
+                    )}
                     {!ghRepo && (
                       <GitHubRepoCard
                         projectId={projectId}

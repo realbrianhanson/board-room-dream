@@ -115,7 +115,7 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-09-08.p0-fixes.r1";
+const BUILD_VERSION = "2026-09-08.p0-fixes.r2";
 
 import {
   auditSeatCoverage,
@@ -1425,8 +1425,34 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
     console.log(`[audit] finalize run=${run.id} publishing with validation_warning=${validationWarning}`);
   }
   const consensusWarning = validationWarning ? { validation_warning: validationWarning } : {};
+  let carryError: string | null = null;
 
   const isFinal = audit.kind === "final_az";
+
+  // RC-6 incremental audit: snapshot the prior final audit's unresolved
+  // findings on files this run did not re-read BEFORE supersession resolves
+  // them; they are copied under this audit once its own findings land.
+  const {
+    incrementalMetaFromConsensus,
+    selectCarryForward,
+    carryForwardRow,
+    carryForwardNote,
+    CARRY_FORWARD_STATUSES,
+  } = await import("../_shared/audit-incremental.ts");
+  const incremental = isFinal ? incrementalMetaFromConsensus(run.consensus) : null;
+  let carried: import("../_shared/audit-incremental.ts").PriorFinding[] = [];
+  if (incremental) {
+    const { data: priorRows, error: priorErr } = await admin
+      .from("audit_findings")
+      .select("id, seat, severity, file_path, title, description, evidence, confidence, line_start, line_end, fix_batch_id, status")
+      .eq("audit_id", incremental.prior_audit_id)
+      .in("status", [...CARRY_FORWARD_STATUSES]);
+    if (priorErr) {
+      await failRun(admin, run, `incremental audit: could not read prior findings: ${priorErr.message ?? priorErr}`);
+      return;
+    }
+    carried = selectCarryForward(priorRows ?? [], incremental);
+  }
 
   // FINAL-AUDIT-SUPERSESSION-R1: for a successful final_az finalization
   // (validation passed; clean OR findings verdict), resolve open/fix_drafted
@@ -1454,15 +1480,14 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
     }
   }
 
-  const verdict = evaluation.verdict;
+  // Carried-forward findings are still open findings of this audit: a merge
+  // that found nothing in the changed files cannot declare the app clean.
+  const verdict = carried.length && evaluation.verdict === "clean" ? "findings" : evaluation.verdict;
   const filesAnalyzed = Number(run.consensus?.files_analyzed ?? 0) || null;
 
-  const counts = {
-    P0: findings.filter((f) => f.severity === "P0").length,
-    P1: findings.filter((f) => f.severity === "P1").length,
-    P2: findings.filter((f) => f.severity === "P2").length,
-    P3: findings.filter((f) => f.severity === "P3").length,
-  };
+  const countOf = (sev: string) =>
+    findings.filter((f) => f.severity === sev).length + carried.filter((f) => f.severity === sev).length;
+  const counts = { P0: countOf("P0"), P1: countOf("P1"), P2: countOf("P2"), P3: countOf("P3") };
   // R3 — never let the persisted summary.text assert a severity class the
   // post-downgrade counts don't support. Live regression: audit 2d953efb had
   // counts.P0=0 but summary text said "P0". reconcileAuditSummaryText is
@@ -1472,13 +1497,17 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
     .filter((d: any) => d?.disposition === "rejected_unsupported" || d?.published === false)
     .map((d: any) => String(d?.title ?? ""))
     .filter((t: string) => t.length > 0);
-  const reconciledText = reconcileAuditSummaryText(mergedSummaryText, counts, rejectedTitles);
+  const reconciledText = reconcileAuditSummaryText(mergedSummaryText, counts, rejectedTitles) +
+    (incremental ? carryForwardNote(carried.length, incremental.base_sha) : "");
 
   const summary = {
     verdict,
     text: reconciledText,
     counts,
     validation_downgrades: downgrades,
+    ...(incremental
+      ? { carried_forward: { from_audit_id: incremental.prior_audit_id, base_sha: incremental.base_sha, count: carried.length } }
+      : {}),
   };
 
   if (verdict === "clean") {
@@ -1696,6 +1725,24 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
     );
   }
 
+  // Copy (never move) the prior audit's findings on untouched files. A prior
+  // fix batch link is kept only if that batch survived supersession.
+  if (carried.length) {
+    const batchIds = [...new Set(carried.map((f) => f.fix_batch_id).filter((x): x is string => !!x))];
+    const live = new Set<string>();
+    if (batchIds.length) {
+      const { data: liveRows } = await admin.from("batches").select("id").in("id", batchIds);
+      for (const b of liveRows ?? []) live.add(String(b.id));
+    }
+    const { error: carryErr } = await admin
+      .from("audit_findings")
+      .insert(carried.map((f) => carryForwardRow(f, auditId, audit.user_id, live)));
+    if (carryErr) {
+      carryError = `carry-forward insert of ${carried.length} findings failed: ${carryErr.message ?? carryErr}`;
+      console.error(`[audit] finalize run=${run.id} ${carryError}`);
+    }
+  }
+
   if (Number(audit.loop_no ?? 1) >= 2 && findings.length && audit.project_id) {
     let batchTitle = "";
     if (audit.batch_id) {
@@ -1712,7 +1759,16 @@ async function finalizeAudit(admin: any, run: any, steps: any[]) {
 
   await admin
     .from("boardroom_runs")
-    .update({ status: "consensus", consensus: { ...(run.consensus ?? {}), verdict: "findings", fix_batch_id: fixBatchId, ...consensusWarning } })
+    .update({
+      status: "consensus",
+      consensus: {
+        ...(run.consensus ?? {}),
+        verdict: "findings",
+        fix_batch_id: fixBatchId,
+        ...consensusWarning,
+        ...(carryError ? { carry_forward_error: carryError } : {}),
+      },
+    })
     .eq("id", run.id);
 }
 

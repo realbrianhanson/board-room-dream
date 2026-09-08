@@ -819,3 +819,24 @@ Deno.test("resetRequestForResume: a markdown continuation strips its replayed as
   assertEquals("_validation_retry_mode" in out, false);
   assertEquals(out._validation_attempts, 0);
 });
+
+// RC-6: the Strategist skips backend-only chunks, so a chunk may hold only
+// two queued seats. Both completing is full coverage, not a missing seat.
+Deno.test("auditSeatCoverage: a two-seat chunk (no strategist) counts as fully covered when both complete", () => {
+  const rows = [
+    { step_key: "audit_inspector_c1", status: "completed" },
+    { step_key: "audit_contrarian_c1", status: "completed" },
+    { step_key: "audit_inspector_c2", status: "completed" },
+    { step_key: "audit_contrarian_c2", status: "completed" },
+    { step_key: "audit_strategist_c2", status: "completed" },
+  ];
+  const cov = auditSeatCoverage(rows);
+  assertEquals(cov.ok, true);
+  assertEquals(cov.missing, []);
+  assertEquals(cov.completed, 5);
+  assertEquals(cov.total, 5);
+  // One of the two seats failing still leaves the chunk touched.
+  const oneDown = auditSeatCoverage(rows.map((r) => r.step_key === "audit_contrarian_c1" ? { ...r, status: "failed" } : r));
+  assertEquals(oneDown.ok, true);
+  assertEquals(oneDown.missing, ["audit_contrarian_c1"]);
+});

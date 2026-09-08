@@ -802,56 +802,31 @@ export const MAP_FINDING_SCHEMA_DOC = `Each finding MUST be an object with EXACT
   "severity": "P0"|"P1"|"P2"|"P3",
   "file_path": "repo-relative path (never a fragment label like 'fragment 3 of 5')",
   "title": "<=${CAPS.mapTitleMax} chars, one short line",
-  "description": "<=${CAPS.mapDescriptionMax} chars, one to two sentences: what is broken and why",
-  "evidence": "<=${CAPS.mapEvidenceMax} chars. For P0/P1 the evidence MUST use the marker form: 'QUOTE: <exact short excerpt from the file> | WHY: <one sentence reason it proves the issue>'. A filename alone, a speculative risk, or a semantic paraphrase without the QUOTE/WHY markers will be downgraded to P2 by the shared validator.",
+  "description": "<=${CAPS.mapDescriptionMax} chars: what is broken and why",
+  "evidence": "<=${CAPS.mapEvidenceMax} chars. P0/P1 MUST use 'QUOTE: <exact short excerpt from the file> | WHY: <one sentence>'; a filename, a speculative risk, or a paraphrase without QUOTE/WHY is downgraded to P2 by the validator.",
   "confidence": "high"|"medium"|"low",
   "line_start": integer > 0 or null,
   "line_end": integer > 0 (>= line_start) or null
 }
 
-Serious findings (P0/P1) require:
-- a concrete repo-relative file_path,
-- a verbatim QUOTE: <excerpt> | WHY: <reason> pair in the evidence,
-- confidence "high" or "medium".
+P0/P1 require a concrete repo-relative file_path, a verbatim QUOTE/WHY pair, and confidence high or medium.
+Evidence markers the validator checks (missing marker -> downgraded to P2, or P1 for a P0 without IMPACT):
+- P0: 'IMPACT: build_failure' | 'IMPACT: data_loss' | 'IMPACT: auth_bypass' | 'IMPACT: secret_exposure'.
+- file_path under supabase/migrations/*: 'CURRENT: <quoted current effective definition>' proving the line is still in force.
+- "table/column/function/policy X does not exist": 'SCHEMA_LEDGER: <inventory line proving absence>' or 'RUNTIME_FAILURE: <error>'; partial-chunk absence is NOT proof.
+- "helper/validator/middleware applies to all X": 'CALLER: <quote from a reachable current caller>'.
+- auth/admin/RLS/privilege bypass cited from a src/* frontend file: 'SERVER_AUTH: <quote of the current vulnerable server RLS/RPC/edge/security-definer construct>'.
+- copy, positioning, acquisition, pricing/monetization, onboarding activation or buyer-reach claims: 'OWNER_CONTRACT: <verbatim owner intake / founder note / locked-PRD requirement>' or 'RUNTIME_FAILURE: <error>'.
 
-P0 requires an IMPACT class marker inside the evidence:
-  'IMPACT: build_failure' or 'IMPACT: data_loss' or 'IMPACT: auth_bypass' or 'IMPACT: secret_exposure'.
-Any P0 without a valid IMPACT is deterministically downgraded to P1.
+Cumulative-ledger rule: SQL migrations are a cumulative ledger; an older migration is NOT proof of the current effective state. QUOTE the CURRENT effective definition (later migration, current grant/policy/trigger, current code) or downgrade to P2.
 
-Migration-file rule (hard): if file_path is under supabase/migrations/*, a P0/P1 MUST include a
-compact 'CURRENT: <quoted current effective definition>' marker corroborating that the quoted line
-still represents the effective state (later migration, current schema, current grant/policy/trigger).
-Missing CURRENT → downgraded to P2.
+Client-side vs server-side authorization: a client-side route/UI role check is navigation UX, not the authorization boundary. Flag it as an exploit only when the server (RLS / RPC / edge function / security-definer) is concretely bypassable and you QUOTE the vulnerable server construct.
 
-Missing-object claim rule: any claim of the form "table/column/function/policy X does not exist"
-requires either 'SCHEMA_LEDGER: <inventory line proving absence>' or 'RUNTIME_FAILURE: <error>' in
-the evidence. Partial-chunk absence is NOT proof. Missing marker → downgraded to P2.
+Cross-file composition: prompts, wrappers and providers compose across files. Never claim "seats share the same prompt" or "no constitution is prepended" without a QUOTE from the wrapper — callSeat in supabase/functions/_shared/openrouter-proxy.ts prepends the constitution and each model_registry.role_prompt.
 
-Universal-helper claim rule: any claim that a helper/validator/middleware "applies to all X" or
-"every call goes through Y" requires 'CALLER: <quote from a reachable current caller>'. Missing
-marker → downgraded to P2.
+Fragment-boundary rule (hard): the CODE section may split a file across labelled fragments ("fragment N of M"). A non-first fragment MAY start mid-token/mid-statement/mid-comment and a non-final fragment MAY end mid-token — that is packaging, not source truncation. Never report a file as truncated, malformed or syntactically broken based only on a fragment boundary; always cite the original repo-relative file_path, never the fragment label.
 
-Client-surface security claim rule (frontend src/*): any P0/P1 that alleges an auth/admin/RLS/privilege/
-unauthorized/direct-SELECT bypass and cites a src/* frontend file MUST include a compact
-'SERVER_AUTH: <quote of the current vulnerable server RLS/RPC/edge/security-definer construct>' marker.
-UI-only observation without SERVER_AUTH is downgraded to P2.
-
-Product-strategy/copy claim rule: findings about copy, positioning, acquisition, pricing/monetization,
-onboarding activation, or buyer-reach cannot be P0/P1 without either 'OWNER_CONTRACT: <verbatim owner
-intake / founder note / locked-PRD requirement>' or 'RUNTIME_FAILURE: <error>'. Without one, they are
-downgraded to P2 (still visible as product-quality findings).
-
-Cumulative-ledger rule: SQL migrations are a cumulative ledger. An older migration is NOT proof of the current effective state. Corroborate any P0/P1 based on a migration against later migrations / current grants / current RLS policies / current triggers / current code — the QUOTE must come from the CURRENT effective definition, not a superseded one. Otherwise downgrade to P2 or drop.
-
-Client-side vs server-side authorization: a client-side route/UI role check is navigation UX, not the authorization boundary. Do NOT flag it as an exploit unless the underlying server (RLS / RPC / edge function / security-definer) is concretely bypassable and you can QUOTE the vulnerable server construct.
-
-Cross-file composition: prompts, wrappers, and providers compose across files. Do NOT claim "seats share the same prompt" or "no constitution is prepended" without a QUOTE from the actual wrapper — the current source (e.g. callSeat in supabase/functions/_shared/openrouter-proxy.ts prepends the constitution and each model_registry.role_prompt) wins over any model claim of absence.
-
-Fragment-boundary rule (hard):
-- The CODE section may show one or more files split across labelled fragments ("fragment N of M"). A non-first fragment MAY begin mid-token, mid-statement, or mid-comment; a non-final fragment MAY end mid-token. Never report a file as truncated, malformed, or syntactically broken based ONLY on a fragment boundary. Report syntax truncation only when the FULL file boundary is present or you have concrete full-file evidence.
-- Always cite the original repo-relative file_path in "file_path" — never the fragment label.
-
-Do NOT label a Supabase anon/publishable key as a leaked secret. Only flag a secret when the code embeds an actual unredacted private credential, service-role key, or high-entropy secret.`;
+A Supabase anon/publishable key is NOT a leaked secret; flag a secret only for an actual unredacted private credential, service-role key or high-entropy secret.`;
 
 
 // ============================== JSON tail closure ==============================

@@ -1,6 +1,15 @@
 // Shared GitHub → code-payload assembly used by audit-runner and boardroom-orchestrator.
 // deno-lint-ignore-file no-explicit-any
 import { decryptSecret } from "./crypto.ts";
+import {
+  finalizeMigrationLedger,
+  MIGRATION_MAX_FILES,
+  type LedgerFetchStatus,
+  type MigrationAttempt,
+  type MigrationFile,
+  parseMigrationsToInventory,
+  renderTargetInventory,
+} from "./target-schema-inventory.ts";
 
 const BINARY_EXT = /\.(png|jpe?g|gif|webp|ico|svg|pdf|zip|gz|tar|mp3|mp4|mov|woff2?|ttf|otf|eot|wasm|bin)$/i;
 const LOCK_FILES = /(^|\/)(bun\.lockb?|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|deno\.lock)$/i;
@@ -70,8 +79,11 @@ async function gh(token: string, path: string) {
 }
 
 // Heuristic ordering: prefer frontend UI and route/component files first so
-// small caps favor the code that actually shapes design + UX.
-function keyFileScore(path: string): number {
+// small caps favor the code that actually shapes design + UX. Edge-function
+// entrypoints and the shared server modules score alongside UI components:
+// the 200-file audit cap used to drop the orchestrator, proxy and every
+// shared helper — the files a security audit exists for (RC-6).
+export function keyFileScore(path: string): number {
   const p = path.toLowerCase();
   let s = 0;
   if (/^(src|app|pages)\//.test(p)) s += 5;
@@ -81,7 +93,142 @@ function keyFileScore(path: string): number {
   if (/(index|home|landing|main|app)\.[a-z]+$/.test(p)) s += 2;
   if (/(readme|package\.json|tailwind\.config|vite\.config|tsconfig|astro\.config|next\.config)/.test(p)) s += 2;
   if (/\.(css|scss|md|json)$/.test(p)) s += 1;
+  if (/^supabase\/functions\/[^/]+\/index\.ts$/.test(p)) s += 9;
+  if (/^supabase\/functions\/_shared\/[^/]+\.ts$/.test(p)) s += 8;
   return s;
+}
+
+// Files that cost audit tokens without carrying product or security truth:
+// tests, generated route trees and DB types, editor/lint config, prose.
+// Applied to every assembled payload unless the caller passes exclude: null.
+export const AUDIT_EXCLUDE =
+  /(\.test\.|\.spec\.|__tests__\/|\.gen\.|routeTree\.gen|integrations\/supabase\/types\.ts|\.lovable\/|\.md$|\.prettier|eslint\.config|components\.json)/;
+
+export function isExcludedPath(path: string, exclude: RegExp | null = AUDIT_EXCLUDE): boolean {
+  return !!exclude && exclude.test(path);
+}
+
+const MIGRATION_SQL = /^supabase\/migrations\/[^/]+\.sql$/i;
+// Synthetic path of the folded migration ledger: every supabase/migrations
+// *.sql file at HEAD is parsed into one effective-schema inventory instead of
+// shipping the raw SQL of every historical migration.
+export const MIGRATION_INVENTORY_PATH = "supabase/migrations/EFFECTIVE_SCHEMA.inventory";
+// GitHub's compare endpoint lists at most this many files in one response;
+// a diff that large is not a trustworthy incremental set, so read the tree.
+export const COMPARE_FILE_CAP = 300;
+
+function basicKeep(path: string): boolean {
+  return !BINARY_EXT.test(path) && !LOCK_FILES.test(path) && !IGNORE_DIR.test(path) && !SECRET_FILES.test(path);
+}
+
+export class NoChangesSinceBase extends Error {
+  constructor(public readonly baseSha: string) {
+    super(`No changes since the last audited commit ${baseSha.slice(0, 7)} - push first, or run a full rescan`);
+    this.name = "NoChangesSinceBase";
+  }
+}
+
+export type TreeEntry = { path: string; size: number; sha?: string };
+export type CompareFile = { filename: string; status: string };
+export type CompareResult = { ok: true; files: CompareFile[] } | { ok: false };
+
+export type FileSelection = {
+  /** Ordered files to fetch (already excluded: binaries, secrets, oversize, AUDIT_EXCLUDE, folded migrations). */
+  toFetch: TreeEntry[];
+  /** Every migration path at HEAD to fold into the inventory (empty when none are in scope). */
+  migrationPaths: string[];
+  /** Paths dropped before any fetch, with the reason folded into the caller's skipped list. */
+  skippedPaths: string[];
+  /** Non-removed files of a successful compare (before any filter), else []. */
+  changedPaths: string[];
+  removedPaths: string[];
+  /** True when the payload covers only the changed set. */
+  incremental: boolean;
+  fileTree: string[];
+};
+
+// Pure. Decides WHAT to read before a single content fetch so the selection
+// is deterministic and testable: incremental set vs whole tree, exclusions,
+// tree-size pre-filter, key-file ordering, migration folding.
+export function planFileSelection(input: {
+  tree: TreeEntry[];
+  compare: CompareResult | null;
+  baseSha: string | null;
+  maxFileBytes: number;
+  preferKeyFiles: boolean;
+  exclude: RegExp | null;
+  foldMigrations: boolean;
+}): FileSelection {
+  const treeOk = input.tree.filter((t) => basicKeep(t.path));
+  const bySize = new Map(input.tree.map((t) => [t.path, t] as const));
+  const fileTree = treeOk.map((t) => t.path).slice(0, 400);
+
+  let candidates: TreeEntry[] = treeOk;
+  let changedPaths: string[] = [];
+  let removedPaths: string[] = [];
+  let incremental = false;
+  if (input.baseSha && input.compare?.ok) {
+    const nonRemoved = input.compare.files.filter((f) => f.status !== "removed");
+    removedPaths = input.compare.files.filter((f) => f.status === "removed").map((f) => f.filename);
+    if (nonRemoved.length === 0) throw new NoChangesSinceBase(input.baseSha);
+    if (input.compare.files.length < COMPARE_FILE_CAP) {
+      incremental = true;
+      changedPaths = nonRemoved.map((f) => f.filename);
+      candidates = changedPaths
+        .map((p) => bySize.get(p) ?? { path: p, size: 0 })
+        .filter((t) => basicKeep(t.path));
+    }
+  }
+
+  const skippedPaths: string[] = [];
+  const toFetch: TreeEntry[] = [];
+  let migrationPaths: string[] = [];
+  let migrationInScope = false;
+  for (const t of candidates) {
+    if (input.foldMigrations && MIGRATION_SQL.test(t.path)) { migrationInScope = true; continue; }
+    if (isExcludedPath(t.path, input.exclude)) { skippedPaths.push(t.path); continue; }
+    if (t.size > input.maxFileBytes) { skippedPaths.push(t.path); continue; }
+    toFetch.push(t);
+  }
+  if (migrationInScope) {
+    migrationPaths = treeOk.map((t) => t.path).filter((p) => MIGRATION_SQL.test(p)).sort();
+    if (incremental) changedPaths = [...changedPaths, MIGRATION_INVENTORY_PATH];
+  }
+
+  const ordered = input.preferKeyFiles
+    ? toFetch
+      .map((f) => ({ f, score: keyFileScore(f.path) }))
+      .sort((a, b) => b.score - a.score || a.f.path.localeCompare(b.f.path))
+      .map((x) => x.f)
+    : toFetch;
+
+  return { toFetch: ordered, migrationPaths, skippedPaths, changedPaths, removedPaths, incremental, fileTree };
+}
+
+// Bounded parallel map that preserves input order in its result.
+export async function mapPool<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const width = Math.max(1, Math.min(limit, items.length));
+  const workers = Array.from({ length: width }, async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
+// Pure. One inventory document standing in for every migration file.
+export function renderMigrationInventoryFile(
+  migrations: readonly MigrationFile[],
+  totalPaths: number,
+): string {
+  const inv = parseMigrationsToInventory(migrations);
+  const header = `EFFECTIVE SCHEMA INVENTORY derived from ${migrations.length} of ${totalPaths} supabase/migrations/*.sql files at HEAD, applied in lexicographic order (raw SQL not shown; cite this file for schema-level findings and quote the inventory line).`;
+  return `${header}\n\n${renderTargetInventory(inv)}`;
 }
 
 export type AssembleOptions = {
@@ -91,6 +238,12 @@ export type AssembleOptions = {
   maxTotalBytes?: number;
   /** If true, order files by keyFileScore descending before capping. */
   preferKeyFiles?: boolean;
+  /** Path exclusion; defaults to AUDIT_EXCLUDE, null disables it. */
+  exclude?: RegExp | null;
+  /** Replace raw migration SQL with one parsed inventory file (audits). */
+  foldMigrations?: boolean;
+  /** Parallel content fetches. */
+  fetchConcurrency?: number;
 };
 
 export type AssembledPayload = {
@@ -98,7 +251,13 @@ export type AssembledPayload = {
   headSha: string;
   branch: string;
   skipped: number;
+  skippedPaths: string[];
   fileTree: string[];
+  /** Set when the payload covers only files changed since baseSha. */
+  incremental: boolean;
+  baseSha: string | null;
+  changedPaths: string[];
+  removedPaths: string[];
 };
 
 export async function assembleFromGithub(
@@ -112,6 +271,9 @@ export async function assembleFromGithub(
     maxFileBytes = 100 * 1024,
     maxTotalBytes = 300 * 1024,
     preferKeyFiles = false,
+    exclude = AUDIT_EXCLUDE,
+    foldMigrations = false,
+    fetchConcurrency = 8,
   } = opts;
 
   const repoRes = await gh(token, `/repos/${repo}`);
@@ -121,58 +283,83 @@ export async function assembleFromGithub(
   if (headRes.status >= 300) throw new Error(`head: ${headRes.body?.message ?? headRes.status}`);
   const headSha: string = headRes.body?.sha;
 
-  let candidates: { path: string }[] = [];
   const tree = await gh(token, `/repos/${repo}/git/trees/${headSha}?recursive=1`);
-  const treePaths: string[] = tree.status < 300 && Array.isArray(tree.body?.tree)
-    ? tree.body.tree.filter((t: any) => t.type === "blob").map((t: any) => String(t.path))
+  const treeEntries: TreeEntry[] = tree.status < 300 && Array.isArray(tree.body?.tree)
+    ? tree.body.tree
+      .filter((t: any) => t.type === "blob")
+      .map((t: any) => ({ path: String(t.path), size: Number(t.size ?? 0) || 0, sha: t.sha ? String(t.sha) : undefined }))
     : [];
 
+  let compare: CompareResult | null = null;
   if (baseSha) {
     const cmp = await gh(token, `/repos/${repo}/compare/${baseSha}...${headSha}`);
-    if (cmp.status < 300 && Array.isArray(cmp.body?.files)) {
-      candidates = cmp.body.files
-        .filter((f: any) => f.status !== "removed")
-        .map((f: any) => ({ path: f.filename }));
-    }
-  }
-  if (!candidates.length) candidates = treePaths.map((p) => ({ path: p }));
-
-  let filtered = candidates.filter(
-    (f) => !BINARY_EXT.test(f.path) && !LOCK_FILES.test(f.path) && !IGNORE_DIR.test(f.path) && !SECRET_FILES.test(f.path),
-  );
-
-  if (preferKeyFiles) {
-    filtered = filtered
-      .map((f) => ({ f, score: keyFileScore(f.path) }))
-      .sort((a, b) => b.score - a.score || a.f.path.localeCompare(b.f.path))
-      .map((x) => x.f);
+    compare = cmp.status < 300 && Array.isArray(cmp.body?.files)
+      ? { ok: true, files: cmp.body.files.map((f: any) => ({ filename: String(f.filename), status: String(f.status ?? "") })) }
+      : { ok: false };
   }
 
-  const files: FilePayload[] = [];
-  let total = 0;
-  let skipped = 0;
-  for (const f of filtered) {
-    if (files.length >= maxFiles) { skipped++; continue; }
-    const c = await gh(token, `/repos/${repo}/contents/${encodeURI(f.path)}?ref=${headSha}`);
-    if (c.status >= 300 || Array.isArray(c.body)) { skipped++; continue; }
-    const size: number = c.body?.size ?? 0;
-    if (size > maxFileBytes) { skipped++; continue; }
+  const sel = planFileSelection({ tree: treeEntries, compare, baseSha, maxFileBytes, preferKeyFiles, exclude, foldMigrations });
+  const skippedPaths = [...sel.skippedPaths];
+
+  const fetchContent = async (path: string): Promise<{ ok: true; content: string; size: number } | { ok: false }> => {
+    const c = await gh(token, `/repos/${repo}/contents/${encodeURI(path)}?ref=${headSha}`);
+    if (c.status >= 300 || Array.isArray(c.body)) return { ok: false };
     const raw = c.body?.encoding === "base64"
       ? decodeGithubBase64(String(c.body?.content ?? ""))
       : String(c.body?.content ?? "");
-    const content = redactSecrets(raw);
-    if (total + content.length > maxTotalBytes) { skipped++; continue; }
-    total += content.length;
-    files.push({ path: f.path, content, bytes: content.length });
+    return { ok: true, content: raw, size: Number(c.body?.size ?? 0) };
+  };
+
+  const files: FilePayload[] = [];
+  let total = 0;
+
+  if (sel.migrationPaths.length) {
+    if (sel.migrationPaths.length > MIGRATION_MAX_FILES) {
+      skippedPaths.push(...sel.migrationPaths);
+    } else {
+      const fetched = await mapPool(sel.migrationPaths, fetchConcurrency, fetchContent);
+      const migrations: MigrationFile[] = [];
+      fetched.forEach((r, i) => {
+        if (r.ok) migrations.push({ path: sel.migrationPaths[i], sql: r.content });
+        else skippedPaths.push(sel.migrationPaths[i]);
+      });
+      if (migrations.length) {
+        const content = redactSecrets(renderMigrationInventoryFile(migrations, sel.migrationPaths.length));
+        total += content.length;
+        files.push({ path: MIGRATION_INVENTORY_PATH, content, bytes: content.length });
+      }
+    }
   }
 
-  // Never advertise secret filenames in the tree — even the path itself is
-  // a signal we do not want in a model context (e.g. ".env.production").
-  const fileTree = treePaths
-    .filter((p) => !BINARY_EXT.test(p) && !LOCK_FILES.test(p) && !IGNORE_DIR.test(p) && !SECRET_FILES.test(p))
-    .slice(0, 400);
+  for (let i = 0; i < sel.toFetch.length; i += fetchConcurrency) {
+    if (files.length >= maxFiles) {
+      skippedPaths.push(...sel.toFetch.slice(i).map((f) => f.path));
+      break;
+    }
+    const batch = sel.toFetch.slice(i, i + fetchConcurrency);
+    const results = await mapPool(batch, fetchConcurrency, (f) => fetchContent(f.path));
+    results.forEach((r, k) => {
+      const path = batch[k].path;
+      if (files.length >= maxFiles || !r.ok || r.size > maxFileBytes) { skippedPaths.push(path); return; }
+      const content = redactSecrets(r.content);
+      if (total + content.length > maxTotalBytes) { skippedPaths.push(path); return; }
+      total += content.length;
+      files.push({ path, content, bytes: content.length });
+    });
+  }
 
-  return { files, headSha, branch, skipped, fileTree };
+  return {
+    files,
+    headSha,
+    branch,
+    skipped: skippedPaths.length,
+    skippedPaths,
+    fileTree: sel.fileTree,
+    incremental: sel.incremental,
+    baseSha: sel.incremental ? baseSha : null,
+    changedPaths: sel.changedPaths,
+    removedPaths: sel.removedPaths,
+  };
 }
 
 export function formatFiles(files: FilePayload[]): string {
@@ -192,12 +379,6 @@ export function formatFiles(files: FilePayload[]): string {
 // malformed/non-array tree, zero matching paths, or any per-file fetch/
 // decoding failure produces {ok:false}. No skips, no partial ledgers.
 
-import {
-  finalizeMigrationLedger,
-  MIGRATION_MAX_FILES,
-  type LedgerFetchStatus,
-  type MigrationAttempt,
-} from "./target-schema-inventory.ts";
 
 export async function fetchTargetMigrations(
   token: string,

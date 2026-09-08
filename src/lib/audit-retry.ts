@@ -9,6 +9,7 @@ export type AuditRow = {
   status: AuditStatus;
   created_at: string;
   run_id?: string | null;
+  head_sha?: string | null;
 };
 
 export function finalAudits<T extends AuditRow>(audits: T[]): T[] {
@@ -75,4 +76,15 @@ export function canResumeFinal(params: {
   const latest = params.latest;
   if (!latest || latest.status !== "failed" || !latest.run_id) return false;
   return params.completedAuditSteps > 0;
+}
+
+/**
+ * A GitHub final audit re-reads only what changed since the last successful
+ * final audit of this project (one that read GitHub, so head_sha is set).
+ * The "Full rescan" control is only worth showing when such a base exists.
+ */
+export function canOfferFullRescan(audits: AuditRow[]): boolean {
+  return finalAudits(audits).some(
+    (a) => (a.status === "clean" || a.status === "findings") && !!a.head_sha,
+  );
 }

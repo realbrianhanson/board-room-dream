@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  canOfferFullRescan,
   finalAudits,
   latestFinal,
   previousFinals,
@@ -16,6 +17,7 @@ const mk = (over: Partial<AuditRow>): AuditRow => ({
   status: over.status ?? "clean",
   created_at: over.created_at ?? new Date().toISOString(),
   run_id: over.run_id ?? null,
+  head_sha: over.head_sha ?? null,
 });
 
 describe("audit-retry selectors", () => {
@@ -97,5 +99,17 @@ describe("audit-retry selectors", () => {
     expect(canResumeFinal({ isOwner: true, latest: mk({ status: "findings", run_id: "run-1" }), completedAuditSteps: 12, resuming: false })).toBe(false);
     expect(canResumeFinal({ isOwner: true, latest: mk({ status: "failed", run_id: null }), completedAuditSteps: 12, resuming: false })).toBe(false);
     expect(canResumeFinal({ isOwner: true, latest: null, completedAuditSteps: 12, resuming: false })).toBe(false);
+  });
+
+  it("canOfferFullRescan: only when a successful GitHub final audit (head_sha) exists to diff against", () => {
+    expect(canOfferFullRescan([])).toBe(false);
+    expect(canOfferFullRescan([mk({ status: "clean", head_sha: "abc" })])).toBe(true);
+    expect(canOfferFullRescan([mk({ status: "findings", head_sha: "abc" })])).toBe(true);
+    // Paste audits have no commit; failed and running ones are not a base.
+    expect(canOfferFullRescan([mk({ status: "findings", head_sha: null })])).toBe(false);
+    expect(canOfferFullRescan([mk({ status: "failed", head_sha: "abc" })])).toBe(false);
+    expect(canOfferFullRescan([mk({ status: "running", head_sha: "abc" })])).toBe(false);
+    // Batch audits never seed an incremental final audit.
+    expect(canOfferFullRescan([mk({ kind: "batch", status: "clean", head_sha: "abc" })])).toBe(false);
   });
 });
