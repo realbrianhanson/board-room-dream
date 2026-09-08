@@ -97,6 +97,31 @@ Deno.test("revalidateStoredStep — a truly truncated text still falls through",
   assert(!r.ok && r.reason);
 });
 
+Deno.test("revalidateStoredStep — a budget-cut draft that tail-closes below the contract minimum falls through", () => {
+  // Cut right after batch 3's closing brace: the tail closer balances it to
+  // a valid-looking 3-batch plan, but a greenfield run needs 6.
+  const full = JSON.stringify(liveDraft());
+  const cut = full.slice(0, full.indexOf(',{"batch_no":4'));
+  const greenfield = revalidateStoredStep(failedRow({ error: "truncated_after_correction", response_text: cut }), "batches");
+  assertEquals(greenfield.ok, false);
+  assert(!greenfield.ok && /3 complete entries — minimum 6/.test(greenfield.reason), `got: ${!greenfield.ok && greenfield.reason}`);
+  // An import run's minimum is 3, so the same cut completes with tail_closed recorded.
+  const imported = revalidateStoredStep(failedRow({ error: "truncated_after_correction", response_text: cut, request: { _is_import: true } }), "batches");
+  assert(imported.ok, `expected a pass, got ${imported.ok ? "" : imported.reason}`);
+  assertEquals((imported.response_json as any).batches.length, 3);
+  assertEquals((imported.response_json as any)._meta.tail_closed, "]}");
+  // The same cut on a row that was NOT flagged truncated keeps the plain pipeline verdict.
+  const plain = revalidateStoredStep(failedRow({ error: "invalid_json_after_correction", response_text: cut }), "batches");
+  assert(plain.ok);
+  // A single-judgment step is never completed in part.
+  const vote = revalidateStoredStep(
+    failedRow({ step_key: "cr_verdict_chair", error: "truncated_after_correction", response_text: '{"verdict":"rejected","rationale":"no"' }),
+    "plan",
+  );
+  assertEquals(vote.ok, false);
+  assert(!vote.ok && /cannot be completed in part/.test(vote.reason));
+});
+
 Deno.test("revalidateStoredStep — a stored draft that breaks a hard rule still falls through", () => {
   const draft = liveDraft();
   draft.batches[3].prompt_md = codePrompt(4, 800);

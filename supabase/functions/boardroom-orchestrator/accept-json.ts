@@ -8,7 +8,7 @@
 // completed from the row instead of being bought again. Pure: no I/O.
 
 import { tryCloseJsonTail, tryRecoverTrailingRedundantCloser } from "../_shared/audit-findings.ts";
-import { extractJsonCandidate } from "../_shared/json-extract.ts";
+import { extractJsonCandidate, truncationRepairPolicy } from "../_shared/json-extract.ts";
 import { batchPromptLengthWarnings, normalizeStepJson } from "./protocol.ts";
 
 export type LengthWarning = { batch_no: number; chars: number };
@@ -122,16 +122,31 @@ export type RevalidateStoredStepResult =
 // (finish_reason, tokens, fallback). Anything else falls through to the
 // caller's normal requeue.
 export function revalidateStoredStep(
-  step: { step_key?: string | null; error?: string | null; response_text?: string | null; response_json?: any },
+  step: { step_key?: string | null; error?: string | null; response_text?: string | null; response_json?: any; request?: any },
   kind: string,
 ): RevalidateStoredStepResult {
   const error = String(step?.error ?? "");
   if (!REVALIDATE_ON_RESUME_ERRORS.has(error)) return { ok: false, reason: `error ${error || "(none)"} is not a validation failure` };
   const text = String(step?.response_text ?? "");
   if (!text.trim()) return { ok: false, reason: "no stored response_text" };
-  const acc = acceptStepJson(String(step?.step_key ?? ""), text, kind, { attempt: 1 });
+  const stepKey = String(step?.step_key ?? "");
+  const acc = acceptStepJson(stepKey, text, kind, { attempt: 1 });
   if (acc.error || !acc.value || typeof acc.value !== "object") {
     return { ok: false, reason: acc.error ?? UNPARSEABLE };
+  }
+  if (error === "truncated_after_correction" && acc.tailClosed) {
+    // The proxy said the budget was exhausted AND the text needed closers:
+    // the tail-closed value is a partial list (a batch plan cut after its
+    // third batch balances to a valid 3-item plan). Hold it to the same
+    // allow-list and minimum-count guard executeStep's truncation repair
+    // applies, so a cut draft never completes below the contract minimum.
+    const policy = truncationRepairPolicy(stepKey, { isImport: step?.request?._is_import === true });
+    if (!policy.allowed) return { ok: false, reason: `truncated ${stepKey} cannot be completed in part` };
+    const list = (acc.value as any)?.[policy.listKey];
+    const count = Array.isArray(list) ? list.length : 0;
+    if (count < policy.minCount) {
+      return { ok: false, reason: `truncated ${policy.listKey} has ${count} complete entries — minimum ${policy.minCount}` };
+    }
   }
   const priorMeta = step?.response_json && typeof step.response_json === "object" && step.response_json._meta && typeof step.response_json._meta === "object"
     ? step.response_json._meta
