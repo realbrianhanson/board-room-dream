@@ -6,6 +6,7 @@
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   DEFAULT_SYNTHESIS_LOOPS,
+  deferredDecisionEntries,
   MAX_SYNTHESIS_LOOPS,
   scorecardDecisionEntry,
   synthesisLoopCap,
@@ -127,6 +128,17 @@ Deno.test("scorecardDecisionEntry — a decision_log entry the plan page can ren
   assertStringIncludes(String(scorecardDecisionEntry({ ...sc, passed: true }).reason), "Consensus at threshold 8");
 });
 
+Deno.test("deferredDecisionEntries — the scorecard entry never rides into the batches harvest block", () => {
+  const sc = voteScorecard([vote("strategist", [8, 8, 8, 8, 8, 8])], "plan", 8, false);
+  const debated = { from_seat: "contrarian", objection: "No pricing page", decision: "rejected", reason: "later" };
+  const ruled = { from_seat: "chair", decision: "ruled", reason: "Shipping without pricing." };
+  assertEquals(deferredDecisionEntries([debated, ruled, scorecardDecisionEntry(sc)]), [debated, ruled]);
+  assertEquals(deferredDecisionEntries([scorecardDecisionEntry(sc)]), []);
+  assertEquals(deferredDecisionEntries([]), []);
+  assertEquals(deferredDecisionEntries(null), null);
+  assertEquals(deferredDecisionEntries(undefined), undefined);
+});
+
 // -------- wiring --------
 
 Deno.test("index.ts — the Round-4 advance asks the loop cap, and the lock persists the scorecard", async () => {
@@ -146,4 +158,9 @@ Deno.test("queues.ts — the final ruling names the loops actually run, never a 
   const src = await Deno.readTextFile(new URL("./queues.ts", import.meta.url));
   assertStringIncludes(src, "after ${synthesisLoopsPhrase(lastLoop)}");
   assert(!src.includes("three synthesis loops"));
+});
+
+Deno.test("queues.ts — the batches deferred-value block reads the decision log through deferredDecisionEntries", async () => {
+  const src = await Deno.readTextFile(new URL("./queues.ts", import.meta.url));
+  assertStringIncludes(src, "decision_log: deferredDecisionEntries((plan as any)?.decision_log ?? null)");
 });

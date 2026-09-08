@@ -33,6 +33,7 @@ import {
   promptJson,
   candidateForLoop,
   lastCandidateLoop,
+  deferredDecisionEntries,
   resolveConsensusThreshold,
   synthesisLoopsPhrase,
 } from "./protocol.ts";
@@ -1063,7 +1064,7 @@ Constraints: ${batchRangeText} batches, unique ascending integer batch_no starti
       : "(none listed)";
 
   const deferredRaw = {
-    decision_log: (plan as any)?.decision_log ?? null,
+    decision_log: deferredDecisionEntries((plan as any)?.decision_log ?? null),
     dissent_ledger: (plan as any)?.dissent_ledger ?? null,
   };
   const deferredBlock = requiresPlan && (deferredRaw.decision_log || deferredRaw.dissent_ledger)

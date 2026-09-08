@@ -617,3 +617,13 @@ export function scorecardDecisionEntry(scorecard: Scorecard): Record<string, unk
     scorecard,
   };
 }
+
+/**
+ * A locked plan's decision_log minus the scorecard entry. The batch
+ * compiler's "deferred value" block harvests ideas the board debated and did
+ * not adopt; the vote record is not one of them and should not spend that
+ * block's character budget. Anything that is not an array passes through.
+ */
+export function deferredDecisionEntries<T>(log: T): T {
+  return Array.isArray(log) ? (log.filter((d: any) => d?.decision !== "scorecard") as T) : log;
+}
