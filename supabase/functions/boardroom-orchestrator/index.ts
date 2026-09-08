@@ -2526,6 +2526,21 @@ async function handleRequest(req: Request): Promise<Response> {
       .maybeSingle();
     if (!step) return j(404, { error: "Step not found" });
     if (step.status !== "failed") return j(400, { error: "Only failed steps can be retried" });
+    if (run.status === "failed") {
+      // Reopen the run as 'paused' BEFORE the step is requeued: the tick's
+      // orphan sweep cancels queued steps under a terminal parent, so a step
+      // requeued while the run is still 'failed' could be swept in between.
+      // 'paused' counts as active for the one-active-per-kind index and the
+      // sweep, and is ignored by processRun and the stalled-run detector.
+      const { data: claimed, error: claimErr } = await admin
+        .from("boardroom_runs")
+        .update({ status: "paused" })
+        .eq("id", runId)
+        .eq("status", "failed")
+        .select("id");
+      if (claimErr) return j(409, { error: `Could not reopen the run: ${claimErr.message}` });
+      if (!claimed?.length) return j(409, { error: "Run is no longer failed — refresh and try again." });
+    }
     // Reset attempt markers / reserve pin / correction turn so the retried
     // step gets its correction pass back instead of failing on first miss.
     await admin
@@ -2539,7 +2554,7 @@ async function handleRequest(req: Request): Promise<Response> {
       })
       .eq("id", stepId);
     if (run.status === "failed") {
-      await admin.from("boardroom_runs").update({ status: "running", error: null }).eq("id", runId);
+      await admin.from("boardroom_runs").update({ status: "running", error: null }).eq("id", runId).eq("status", "paused");
     }
     fireSelfTick();
     return j(200, { ok: true });
@@ -2548,10 +2563,12 @@ async function handleRequest(req: Request): Promise<Response> {
   // RC-2: resume a failed run where it stopped. Every sibling failRun
   // cancelled and the step(s) that actually failed are requeued with their
   // attempt markers reset; completed (paid) steps are kept. Steps are
-  // requeued BEFORE the run flips back to running — direct updates, because
-  // requeue_step_if_parent_active refuses a failed parent — so a concurrent
-  // tick can never see an active run with nothing to claim and mis-finalize
-  // it. Idempotent: a second call finds the run active and returns it.
+  // requeued while the run is 'paused' (claimed from 'failed' first, flipped
+  // to running last) — direct updates, because requeue_step_if_parent_active
+  // refuses a failed parent — so a concurrent tick can neither sweep the
+  // requeued steps as orphans of a terminal run nor see a processable run
+  // with nothing to claim and mis-finalize it. Idempotent: a second call
+  // finds the run active and returns it.
   if (action === "resume_failed") {
     const runId: string = body?.run_id;
     if (!runId) return j(400, { error: "Missing run_id" });
@@ -2589,6 +2606,25 @@ async function handleRequest(req: Request): Promise<Response> {
     // (its findings could never reach the finished merge) — the tick simply
     // re-enters finalizeAudit.
     const { chair, chairDead, finalizeRetry, requeue } = planResumeFailed(run, steps);
+    if (!requeue.length && !chairDead && !finalizeRetry && !steps.some((x: any) => x.status === "queued")) {
+      return j(400, { error: "Nothing to resume on this run — start a fresh one." });
+    }
+    // Reopen the run as 'paused' BEFORE any step is requeued: the tick's
+    // orphan sweep cancels queued steps under a terminal parent, and the run
+    // stays 'failed' until the flip below. 'paused' is active for the
+    // one-active-per-kind index and the sweep, yet processRun and the
+    // stalled-run detector ignore it, so a concurrent tick still cannot see
+    // an active run with nothing to claim and mis-finalize it.
+    {
+      const { data: claimed, error: claimErr } = await admin
+        .from("boardroom_runs")
+        .update({ status: "paused" })
+        .eq("id", run.id)
+        .eq("status", "failed")
+        .select("id");
+      if (claimErr) return j(409, { error: `Could not reopen the run: ${claimErr.message}` });
+      if (!claimed?.length) return j(409, { error: "Run is no longer failed — refresh and try again." });
+    }
     let requeued = 0;
     for (const st of requeue) {
       const patch: any = { status: "queued", error: null, completed_at: null, started_at: null };
@@ -2606,13 +2642,10 @@ async function handleRequest(req: Request): Promise<Response> {
         await queueAuditChairMerge(admin, run, steps.filter((x: any) => x.id !== chair.id));
       }
     }
-    if (requeued === 0 && !chairDead && !finalizeRetry && !steps.some((x: any) => x.status === "queued")) {
-      return j(400, { error: "Nothing to resume on this run — start a fresh one." });
-    }
     await reverseAuditFailure(admin, run);
     const patch: any = { status: "running", error: null };
     if (check.extra > 0) patch.budget_usd = check.newTotal;
-    await admin.from("boardroom_runs").update(patch).eq("id", run.id).eq("status", "failed");
+    await admin.from("boardroom_runs").update(patch).eq("id", run.id).eq("status", "paused");
     fireSelfTick();
     return j(200, { ok: true, run_id: run.id, requeued, merge_requeued: chairDead });
   }
