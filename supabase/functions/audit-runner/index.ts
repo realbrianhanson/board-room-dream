@@ -15,7 +15,7 @@ import {
 import { deriveImportWorkflow, type ImportWorkflow } from "../_shared/import-workflow.ts";
 import { scopeContractForPrompt } from "../_shared/import-scope-gates.ts";
 import { assertStepInsertOk } from "../_shared/step-insert.ts";
-import { auditBudgetUsd, auditChunksForRun, auditMapSeats } from "../_shared/smoke-mode.ts";
+import { auditBudgetUsd, auditChunksForRun, auditMapSeats, smokeAuditChunks } from "../_shared/smoke-mode.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -625,7 +625,10 @@ async function beginAudit(params: {
       );
       chunks = chunkFiles(res.files);
       fileTree = res.fileTree;
-      filesAnalyzed = res.files.length;
+      // A smoke audit maps the first chunk only, so the audits row and the
+      // Chair's CODE COVERAGE line must count the files in that chunk, not
+      // the whole repo.
+      filesAnalyzed = smoke ? (chunkFilesFor(res.files)[0]?.length ?? 0) : res.files.length;
       headSha = res.headSha;
     } catch (e) {
       return { error: (e as Error).message };
@@ -679,7 +682,10 @@ async function beginAudit(params: {
     audit_kind: kind,
     files_analyzed: filesAnalyzed,
   };
-  if (smoke) consensus.smoke = true;
+  if (smoke) {
+    consensus.smoke = true;
+    consensus.smoke_chunks = smokeAuditChunks(chunks.length);
+  }
   if (isFinal && auditContractMode) {
     consensus.audit_contract_mode = auditContractMode;
     consensus.included_batch_ids = includedBatchIds;

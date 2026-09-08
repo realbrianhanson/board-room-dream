@@ -17,7 +17,9 @@ import {
   runBudgetUsd,
   SMOKE_BUDGET_USD,
   SMOKE_LOOP_CAP,
+  smokeAuditChunks,
   smokeBatchPromptPolicy,
+  smokeCoverageNote,
 } from "../_shared/smoke-mode.ts";
 import { batchPromptPolicy } from "../_shared/batch-count-policy.ts";
 import { applySmokeSource, type SeatRow } from "../_shared/openrouter-proxy.ts";
@@ -60,6 +62,35 @@ Deno.test("auditChunksForRun — smoke keeps only the first chunk", () => {
 Deno.test("auditMapSeats — smoke queues the inspector alone; full keeps all three", () => {
   assertEquals([...auditMapSeats(true)], ["inspector"]);
   assertEquals([...auditMapSeats(false)], ["inspector", "contrarian", "strategist"]);
+});
+
+Deno.test("smokeAuditChunks — one chunk of N is mapped; zero of zero on an empty repo", () => {
+  assertEquals(smokeAuditChunks(7), { mapped: 1, total: 7 });
+  assertEquals(smokeAuditChunks(1), { mapped: 1, total: 1 });
+  assertEquals(smokeAuditChunks(0), { mapped: 0, total: 0 });
+  assertEquals(smokeAuditChunks(Number.NaN), { mapped: 0, total: 0 });
+});
+
+Deno.test("smokeCoverageNote — empty on a full audit, honest on a smoke audit", () => {
+  assertEquals(smokeCoverageNote({ audit_id: "a", files_analyzed: 200 }), "");
+  assertEquals(smokeCoverageNote(null), "");
+  assertEquals(smokeCoverageNote({ smoke: "true", smoke_chunks: { mapped: 1, total: 7 } }), "");
+  const note = smokeCoverageNote({ smoke: true, smoke_chunks: { mapped: 1, total: 7 } });
+  assertStringIncludes(note, "SMOKE REHEARSAL");
+  assertStringIncludes(note, "only 1 of 7 code chunks");
+  assertStringIncludes(note, "Inspector alone");
+  assert(note.startsWith("; "), "appends to the CODE COVERAGE line");
+  // Legacy/missing smoke_chunks still says the coverage was one chunk.
+  assertStringIncludes(smokeCoverageNote({ smoke: true }), "only the first code chunk");
+});
+
+Deno.test("audit-runner / queues.ts — smoke_chunks is stored at seed time and the merge coverage line carries the note", async () => {
+  const auditSrc = await Deno.readTextFile(new URL("../audit-runner/index.ts", import.meta.url));
+  assertStringIncludes(auditSrc, "consensus.smoke_chunks = smokeAuditChunks(chunks.length)");
+  // files_analyzed must count the files in the one chunk a smoke maps, not the repo.
+  assertStringIncludes(auditSrc, "filesAnalyzed = smoke ? (chunkFilesFor(res.files)[0]?.length ?? 0) : res.files.length");
+  const queuesSrc = await Deno.readTextFile(new URL("./queues.ts", import.meta.url));
+  assertStringIncludes(queuesSrc, "+ smokeCoverageNote(run.consensus)");
 });
 
 // -------- plan / design: loop cap --------

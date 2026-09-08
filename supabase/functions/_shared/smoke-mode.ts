@@ -57,6 +57,31 @@ export function auditChunksForRun<T>(chunks: T[], smoke: boolean): T[] {
   return smoke ? chunks.slice(0, 1) : chunks;
 }
 
+/**
+ * What a smoke audit actually mapped, stored on run.consensus.smoke_chunks so
+ * the merge and the audits row stay honest: one chunk of `total` (zero of
+ * zero when the repo produced nothing to read).
+ */
+export type SmokeChunks = { mapped: number; total: number };
+export function smokeAuditChunks(totalChunks: number): SmokeChunks {
+  const total = Math.max(0, Math.floor(Number(totalChunks) || 0));
+  return { mapped: Math.min(1, total), total };
+}
+
+/**
+ * Clause appended to the Chair merge's CODE COVERAGE line on a smoke audit
+ * (empty for a full audit). Without it the Chair is told "N files were read"
+ * for the whole repo while only one chunk reached one seat.
+ */
+export function smokeCoverageNote(consensus: unknown): string {
+  const c = consensus as { smoke?: unknown; smoke_chunks?: Partial<SmokeChunks> | null } | null | undefined;
+  if (c?.smoke !== true) return "";
+  const total = Math.max(0, Math.floor(Number(c.smoke_chunks?.total) || 0));
+  const mapped = Math.max(0, Math.floor(Number(c.smoke_chunks?.mapped) || 0));
+  const scope = total > 0 ? `only ${mapped} of ${total} code chunks was` : "only the first code chunk was";
+  return `; SMOKE REHEARSAL: ${scope} reviewed, by the Inspector alone - state this gap in the summary and never imply wider coverage`;
+}
+
 /** A smoke audit queues only the inspector per chunk; the merge still runs. */
 export function auditMapSeats(smoke: boolean): readonly AuditMapSeat[] {
   return smoke ? ["inspector"] : ALL_AUDIT_MAP_SEATS;

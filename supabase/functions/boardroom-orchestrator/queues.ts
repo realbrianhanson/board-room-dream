@@ -20,7 +20,7 @@ import {
 } from "../_shared/batch-context.ts";
 export { BatchContextTooLarge } from "../_shared/batch-context.ts";
 import { batchPromptPolicy, productStrategyContract } from "../_shared/batch-count-policy.ts";
-import { batchesReviewSeats, isSmokeRun, smokeBatchPromptPolicy } from "../_shared/smoke-mode.ts";
+import { batchesReviewSeats, isSmokeRun, smokeBatchPromptPolicy, smokeCoverageNote } from "../_shared/smoke-mode.ts";
 import {
   SEATS,
   type Seat,
@@ -1404,9 +1404,11 @@ export async function queueAuditChairMerge(admin: any, run: any, steps: any[]) {
     ? run.consensus.missing_steps.map((k: unknown) => String(k))
     : [];
   const allSeatSteps = steps.filter((x: any) => /^audit_(inspector|contrarian|strategist)/.test(x.step_key));
-  const coverageGap = missing.length
+  // A smoke audit read one chunk with one seat; say so (smokeCoverageNote is
+  // empty on a full audit).
+  const coverageGap = (missing.length
     ? `; ${missing.length} of ${allSeatSteps.length} seat reviews did not complete (${missing.join(", ")}) - state this gap in the summary`
-    : "";
+    : "") + smokeCoverageNote(run.consensus);
   const system = `You are the Chair. The seats independently reviewed the student's code — possibly split across chunks, so the same underlying issue may be reported more than once. Merge, dedupe across seats AND chunks, assign FINAL severities, and produce ONE audit report.
 
 Severities:
