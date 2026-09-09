@@ -39,7 +39,7 @@ const ORCH_URL = `${SUPABASE_URL}/functions/v1/boardroom-orchestrator`;
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every audit-runner change.
-export const BUILD_VERSION = "2026-09-08.p0-fixes.r3";
+export const BUILD_VERSION = "2026-09-09.executor.r1";
 
 function j(status: number, body: any) {
   return new Response(JSON.stringify(body), {
@@ -689,6 +689,8 @@ async function beginAudit(params: {
   workflow: ImportWorkflow | null;
   /** Smoke audit (RC-9): one chunk, inspector only, $1 budget; the Chair merge still runs. */
   smoke?: boolean;
+  /** Batch 17 (§4, §9.9): per-run Cloudflare executor override, stored as consensus.executor (smoke only). */
+  executor?: boolean;
   /** Final audits re-read only what changed since the last successful one; this forces the whole tree. */
   fullRescan?: boolean;
 }) {
@@ -898,6 +900,7 @@ async function beginAudit(params: {
   if (smoke) {
     consensus.smoke = true;
     consensus.smoke_chunks = smokeAuditChunks(chunks.length);
+    if (typeof params.executor === "boolean") consensus.executor = params.executor;
   }
   if (isFinal && auditContractMode) {
     consensus.audit_contract_mode = auditContractMode;
@@ -1150,6 +1153,7 @@ Deno.serve(async (req) => {
         kind: "final_az", loopNo: 1, source, pastedCode, budget: 12.0,
         workflow,
         smoke,
+        ...(smoke && typeof body?.executor === "boolean" ? { executor: body.executor } : {}),
         fullRescan: body?.full_rescan === true,
       });
       if ("error" in res) return j(400, { error: res.error });

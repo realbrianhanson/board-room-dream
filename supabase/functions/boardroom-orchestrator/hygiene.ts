@@ -22,18 +22,25 @@ export const TERMINAL_RUN_STATUSES = [
 export type RequeueOutcome =
   | "requeued"
   | "cancelled_parent_terminal"
-  | "not_found";
+  | "not_found"
+  | "stale_call";
 
+// `expectCallId` (Batch 17) is the executor ownership token: when given, the
+// RPC only flips the row if run_steps.executor_call_id still equals it and
+// answers 'stale_call' otherwise. It is forwarded ONLY when defined so the
+// inline path's RPC payload stays the same three keys.
 export async function requeueStepIfParentActive(
   admin: any,
   stepId: string,
   newRequest: any,
   newError: string,
+  expectCallId?: string,
 ): Promise<RequeueOutcome> {
   const { data, error } = await admin.rpc("requeue_step_if_parent_active", {
     p_step_id: stepId,
     p_new_request: newRequest,
     p_new_error: newError,
+    ...(expectCallId !== undefined ? { p_expect_call_id: expectCallId } : {}),
   });
   if (error) {
     throw new Error(
@@ -41,7 +48,7 @@ export async function requeueStepIfParentActive(
     );
   }
   const out = String(data ?? "");
-  return (out === "requeued" || out === "cancelled_parent_terminal")
+  return (out === "requeued" || out === "cancelled_parent_terminal" || out === "stale_call")
     ? out
     : "not_found";
 }
@@ -378,6 +385,12 @@ export function resetRequestForResume(request: any, error: string | null | undef
   req._timeout_attempts = 0;
   req._transport_attempts = 0;
   req._infra_attempts = 0;
+  // Executor-path markers (Batch 17): a retried step gets the executor again
+  // and a fresh refusal budget.
+  delete req._refusal_attempts;
+  delete req._refusal_fallback;
+  delete req._executor_bypass;
+  delete req._executor_errors;
   if (!KEEP_FALLBACK_ERRORS.has(String(error ?? ""))) delete req.force_fallback;
   const mode = req._validation_retry_mode;
   delete req._validation_retry_mode;
@@ -553,6 +566,14 @@ export function runStepsPhase(steps: Array<{ status?: string }>): RunStepsPhase 
 
 export function hasActiveSteps(steps: Array<{ status?: string }>): boolean {
   return steps.some((s) => s.status === "queued" || s.status === "running");
+}
+
+// Pure. Capacity is held by in-flight calls (executor or inline). processRun
+// consults it on a zero claim: with a running step it returns WITHOUT
+// afterStepComplete, because runStepsPhase would report the queued sibling
+// first and advanceRun would self-tick in a loop for the life of the call.
+export function hasRunningSteps(steps: Array<{ status?: string }>): boolean {
+  return steps.some((s) => s.status === "running");
 }
 
 // A run inserted as 'paused' by start_run / regenerate_batches / beginAudit

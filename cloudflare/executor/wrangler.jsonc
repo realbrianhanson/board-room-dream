@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "boardroom-executor",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "workflows": [
+    { "name": "boardroom-seat-call", "binding": "EXECUTOR_WF", "class_name": "SeatCallWorkflow" }
+  ],
+  "vars": {
+    "EXECUTOR_VERSION": "batch17",
+    "ALLOWED_CALLBACK_HOSTS": "raiyybdrizlmtbvehzaj.supabase.co",
+    "MAX_DISPATCH_BYTES": "900000",
+    "EXECUTOR_MAX_TIMEOUT_MS": "900000"
+  },
+  "limits": { "cpu_ms": 300000 }
+  // Secret (dashboard only, never in this file): EXECUTOR_SECRET
+}

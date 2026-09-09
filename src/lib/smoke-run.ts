@@ -19,17 +19,27 @@ export type SmokeRunRequest = {
   body: Record<string, unknown>;
 };
 
+export type SmokeRunOptions = {
+  /**
+   * Route the smoke's seat calls through the Cloudflare executor regardless of
+   * `app_settings.executor.enabled` (stored as `consensus.executor` on the run).
+   * Only honoured server-side when `smoke === true`.
+   */
+  executor?: boolean;
+};
+
 /** The edge function + body that starts a smoke run of `kind` for `projectId`. */
-export function smokeRunRequest(kind: SmokeKind, projectId: string): SmokeRunRequest {
+export function smokeRunRequest(kind: SmokeKind, projectId: string, opts?: SmokeRunOptions): SmokeRunRequest {
+  const executor = opts?.executor === true ? { executor: true } : {};
   if (kind === "audit") {
     return {
       fn: "audit-runner",
-      body: { action: "start_final_audit", project_id: projectId, source: "github", smoke: true },
+      body: { action: "start_final_audit", project_id: projectId, source: "github", smoke: true, ...executor },
     };
   }
   return {
     fn: "boardroom-orchestrator",
-    body: { action: "start_run", project_id: projectId, kind, smoke: true },
+    body: { action: "start_run", project_id: projectId, kind, smoke: true, ...executor },
   };
 }
 

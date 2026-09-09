@@ -84,6 +84,86 @@ SELECT 'terminal_parent_no_op_return' AS label,
 SELECT 'terminal_parent_no_op_state' AS label, status
   FROM run_steps WHERE id='bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 
+-- Batch 17: ownership token (p_expect_call_id, DEFAULT NULL).
+-- The 3-arg form above still works via the default. With a token, the
+-- requeue only flips the row when executor_call_id matches; a stale token
+-- returns 'stale_call' and writes nothing. A successful requeue NULLs the
+-- executor columns.
+INSERT INTO boardroom_runs (id, project_id, user_id, kind, status)
+VALUES ('55555555-5555-5555-5555-555555555555',
+        (SELECT id FROM projects LIMIT 1),
+        (SELECT user_id FROM projects LIMIT 1),
+        'test', 'running');
+INSERT INTO run_steps (id, run_id, user_id, step_key, round, seat, status, started_at, request,
+                       executor_call_id, executor_dispatch_no, executor_dispatched_at, executor_meta)
+VALUES ('dddddddd-dddd-dddd-dddd-dddddddddddd',
+        '55555555-5555-5555-5555-555555555555',
+        (SELECT user_id FROM projects LIMIT 1),
+        'k4', 1, 'chair', 'running', now(), '{}'::jsonb,
+        'dddddddd-dddd-dddd-dddd-dddddddddddd-1', 1, now(), '{"call_id": "dddddddd-dddd-dddd-dddd-dddddddddddd-1"}'::jsonb);
+
+SELECT 'stale_token_returns_stale_call' AS label,
+       requeue_step_if_parent_active(
+         'dddddddd-dddd-dddd-dddd-dddddddddddd', '{}'::jsonb, 'executor_call_lost',
+         'dddddddd-dddd-dddd-dddd-dddddddddddd-99'
+       ) AS result;
+SELECT 'stale_token_wrote_nothing' AS label, status, error, executor_call_id, executor_meta IS NOT NULL AS meta_kept
+  FROM run_steps WHERE id='dddddddd-dddd-dddd-dddd-dddddddddddd';
+
+SELECT 'matching_token_returns_requeued' AS label,
+       requeue_step_if_parent_active(
+         'dddddddd-dddd-dddd-dddd-dddddddddddd', '{"_executor_errors": 1}'::jsonb, 'executor_call_lost',
+         'dddddddd-dddd-dddd-dddd-dddddddddddd-1'
+       ) AS result;
+SELECT 'matching_token_cleared_executor_columns' AS label, status, error,
+       executor_call_id IS NULL AS call_id_null,
+       executor_dispatched_at IS NULL AS dispatched_at_null,
+       executor_meta IS NULL AS meta_null,
+       executor_dispatch_no,
+       (request->>'_executor_errors')::int AS executor_errors
+  FROM run_steps WHERE id='dddddddd-dddd-dddd-dddd-dddddddddddd';
+
+-- A token on a row that was never dispatched (executor_call_id NULL) is stale too.
+UPDATE run_steps SET status='running', started_at=now()
+  WHERE id='dddddddd-dddd-dddd-dddd-dddddddddddd';
+SELECT 'token_on_undispatched_row_is_stale' AS label,
+       requeue_step_if_parent_active(
+         'dddddddd-dddd-dddd-dddd-dddddddddddd', '{}'::jsonb, 'x',
+         'dddddddd-dddd-dddd-dddd-dddddddddddd-1'
+       ) AS result;
+SELECT 'token_on_undispatched_row_state' AS label, status
+  FROM run_steps WHERE id='dddddddd-dddd-dddd-dddd-dddddddddddd';
+
+-- The 3-arg call (no token) still requeues and also clears the columns.
+UPDATE run_steps SET executor_call_id='dddddddd-dddd-dddd-dddd-dddddddddddd-2', executor_dispatched_at=now(),
+                     executor_meta='{}'::jsonb
+  WHERE id='dddddddd-dddd-dddd-dddd-dddddddddddd';
+SELECT 'three_arg_call_still_requeues' AS label,
+       requeue_step_if_parent_active(
+         'dddddddd-dddd-dddd-dddd-dddddddddddd', '{}'::jsonb, 'requeued_stale'
+       ) AS result;
+SELECT 'three_arg_call_cleared_columns' AS label, status,
+       executor_call_id IS NULL AS call_id_null, executor_meta IS NULL AS meta_null
+  FROM run_steps WHERE id='dddddddd-dddd-dddd-dddd-dddddddddddd';
+
+-- Terminal parent keeps the executor columns on the failed row (the collector
+-- still ledgers the in-flight call, then clears them).
+UPDATE boardroom_runs SET status='failed' WHERE id='55555555-5555-5555-5555-555555555555';
+UPDATE run_steps SET status='running', started_at=now(),
+                     executor_call_id='dddddddd-dddd-dddd-dddd-dddddddddddd-3', executor_dispatched_at=now()
+  WHERE id='dddddddd-dddd-dddd-dddd-dddddddddddd';
+SELECT 'terminal_parent_with_token' AS label,
+       requeue_step_if_parent_active(
+         'dddddddd-dddd-dddd-dddd-dddddddddddd', '{}'::jsonb, 'x',
+         'dddddddd-dddd-dddd-dddd-dddddddddddd-3'
+       ) AS result;
+SELECT 'terminal_parent_keeps_executor_columns' AS label, status, error, executor_call_id
+  FROM run_steps WHERE id='dddddddd-dddd-dddd-dddd-dddddddddddd';
+
+-- Only the 4-arg signature exists (no ambiguous overload).
+SELECT 'single_signature' AS label, count(*) AS overloads
+  FROM pg_proc WHERE proname = 'requeue_step_if_parent_active'
+   AND pronamespace = 'public'::regnamespace;
 
 -- Permission checks: only service_role may execute.
 DO $$ BEGIN

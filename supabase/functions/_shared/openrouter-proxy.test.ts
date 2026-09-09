@@ -3,17 +3,24 @@
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   decideTransportRequeue,
+  estimateCost,
   isBodyTransportError,
   isBudgetExhausted,
   isRefusal,
+  ledgerHasCallId,
+  parseOpenRouterResponse,
   ProxyTimeoutError,
   reasoningAllowance,
+  recordTimeoutEstimate,
   REFUSAL_RETRY_WINDOW_MS,
+  settleSeatCall,
+  settleSeatUsage,
   shouldQuickRetry,
   timeoutLedgerEstimate,
   timeoutLedgerSeat,
   TIMEOUT_LEDGER_SEAT_SUFFIX,
 } from "./openrouter-proxy.ts";
+import { EXECUTOR_FIXTURES } from "./executor-protocol.ts";
 
 // --- classifier: true positives -------------------------------------------
 
@@ -254,4 +261,262 @@ Deno.test("timeoutLedgerSeat — the estimate row is distinguishable from the se
   assertEquals(timeoutLedgerSeat("chair"), "chair:timeout");
   assertEquals(TIMEOUT_LEDGER_SEAT_SUFFIX, ":timeout");
   assert(timeoutLedgerSeat("inspector") !== "inspector");
+});
+
+// ============================================================================
+// Batch 17 — the executor seam. callSeat's inline path is byte-identical; these
+// pin the extracted pieces so the executor settle path (which calls them with
+// the raw JSON a Workflow stored) produces exactly what the inline path does.
+// ============================================================================
+
+const OK_JSON = EXECUTOR_FIXTURES.okOutput.response;
+
+// A minimal supabase-js stand-in: records every rpc call and answers like the
+// idempotent RPC does (the run's new spent_usd). `ledger` seeds the
+// cost_ledger.call_id values a `.from("cost_ledger")…in("call_id", …)` lookup
+// finds; every query chain is recorded in `queries`.
+function fakeAdmin(
+  reply: { data?: unknown; error?: { message: string } | null } = { data: 1.5, error: null },
+  ledger: string[] = [],
+  lookupError: { message: string } | null = null,
+) {
+  const calls: Array<{ name: string; args: any }> = [];
+  const queries: Array<{ table: string; ops: Array<[string, unknown[]]> }> = [];
+  const admin: any = {
+    rpc: (name: string, args: any) => {
+      calls.push({ name, args });
+      return Promise.resolve({ data: reply.data ?? null, error: reply.error ?? null });
+    },
+    from: (table: string) => {
+      const q = { table, ops: [] as Array<[string, unknown[]]> };
+      queries.push(q);
+      const builder: any = {
+        then(resolve: any, reject: any) {
+          if (lookupError) return Promise.resolve({ data: null, error: lookupError }).then(resolve, reject);
+          const inOp = q.ops.find(([op]) => op === "in");
+          const wanted = inOp ? (inOp[1][1] as string[]) : [];
+          const data = table === "cost_ledger" ? ledger.filter((id) => wanted.includes(id)).map((call_id) => ({ call_id })) : [];
+          return Promise.resolve({ data, error: null }).then(resolve, reject);
+        },
+      };
+      for (const op of ["select", "in", "eq", "limit", "order", "not", "match", "update", "maybeSingle"]) {
+        builder[op] = (...args: unknown[]) => {
+          q.ops.push([op, args]);
+          return builder;
+        };
+      }
+      return builder;
+    },
+  };
+  return { admin, calls, queries };
+}
+
+Deno.test("parseOpenRouterResponse — golden: exactly what callOpenRouter computed from the same body + json", () => {
+  const body = { model: "m", messages: [], max_tokens: 16_000 };
+  const out = parseOpenRouterResponse(body, OK_JSON);
+  assertEquals(out.content, "{\"plan\":\"ok\"}");
+  assertEquals(out.finishReason, "stop");
+  assertEquals(out.usage, OK_JSON.usage);
+  assert(out.raw === OK_JSON, "raw is the parsed JSON itself");
+  assertEquals(out.reasoningTokens, 4_200);
+  assertEquals(out.wireMaxTokens, 16_000);
+  assertEquals(out.budgetExhausted, isBudgetExhausted("stop", 6_120, 16_000));
+  assertEquals(out.budgetExhausted, false);
+});
+
+Deno.test("parseOpenRouterResponse — missing pieces degrade exactly as before (empty content, {} usage, 0 tokens, uncapped)", () => {
+  const out = parseOpenRouterResponse({}, { choices: [] });
+  assertEquals(out, {
+    content: "",
+    finishReason: undefined,
+    usage: {},
+    raw: { choices: [] },
+    reasoningTokens: 0,
+    wireMaxTokens: 0,
+    budgetExhausted: false,
+  });
+  // Length-cut at the cap is exhausted by finish_reason AND by count.
+  const cut = parseOpenRouterResponse({ max_tokens: 100 }, { choices: [{ message: { content: "x" }, finish_reason: "length" }], usage: { completion_tokens: 100 } });
+  assertEquals(cut.budgetExhausted, true);
+  const byCount = parseOpenRouterResponse({ max_tokens: 100 }, { choices: [{ message: { content: "x" }, finish_reason: "stop" }], usage: { completion_tokens: 95 } });
+  assertEquals(byCount.budgetExhausted, true);
+});
+
+Deno.test("settleSeatUsage — provider cost when present and > 0, estimateCost otherwise", () => {
+  assertEquals(settleSeatUsage("m", { prompt_tokens: 100, completion_tokens: 50, cost: 0.4183 }), { tokensIn: 100, tokensOut: 50, costUsd: 0.4183 });
+  const est = estimateCost("m", 100, 50);
+  assertEquals(settleSeatUsage("m", { prompt_tokens: 100, completion_tokens: 50 }), { tokensIn: 100, tokensOut: 50, costUsd: est });
+  assertEquals(settleSeatUsage("m", { prompt_tokens: 100, completion_tokens: 50, cost: 0 }), { tokensIn: 100, tokensOut: 50, costUsd: est });
+  assertEquals(settleSeatUsage("m", { prompt_tokens: 100, completion_tokens: 50, cost: "nope" }), { tokensIn: 100, tokensOut: 50, costUsd: est });
+  assertEquals(settleSeatUsage("m", {}), { tokensIn: 0, tokensOut: 0, costUsd: 0 });
+  // The fallback table: $3 / $15 per million.
+  assertEquals(estimateCost("anything", 1_000_000, 1_000_000), 18);
+});
+
+Deno.test("settleSeatCall — records record_model_call_idempotent with p_call_id and returns the inline ProxyResult shape (cost present)", async () => {
+  const { admin, calls } = fakeAdmin();
+  const p = {
+    userId: "u1",
+    seat: "chair",
+    modelId: "anthropic/claude-fable-5.1",
+    primaryModelId: "anthropic/claude-fable-5.1",
+    options: { runId: "r1", projectId: "p1", json: true },
+    wireMaxTokens: 16_000,
+    jsonMode: true,
+  };
+  const out = await settleSeatCall(admin, p, OK_JSON, { callId: "s1-1" });
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].name, "record_model_call_idempotent");
+  assertEquals(calls[0].args, {
+    p_user_id: "u1",
+    p_project_id: "p1",
+    p_run_id: "r1",
+    p_seat: "chair",
+    p_model_id: "anthropic/claude-fable-5.1",
+    p_tokens_in: 21_740,
+    p_tokens_out: 6_120,
+    p_cost_usd: 0.4183,
+    p_call_id: "s1-1",
+  });
+  // Same keys, same values as callSeat's return for this attempt.
+  assertEquals(out, {
+    content: "{\"plan\":\"ok\"}",
+    model: "anthropic/claude-fable-5.1",
+    tokensIn: 21_740,
+    tokensOut: 6_120,
+    costUsd: 0.4183,
+    raw: OK_JSON,
+    finishReason: "stop",
+    reasoningTokens: 4_200,
+    wireMaxTokens: 16_000,
+    budgetExhausted: false,
+  });
+  assertEquals("fallback" in out, false);
+  assertEquals("smokeSource" in out, false);
+});
+
+Deno.test("settleSeatCall — cost absent → estimateCost; null project/run → null RPC args (as recordCall does inline)", async () => {
+  const { admin, calls } = fakeAdmin();
+  const json = { ...OK_JSON, usage: { prompt_tokens: 1_000, completion_tokens: 200 } };
+  const out = await settleSeatCall(admin, {
+    userId: "u1", seat: "inspector", modelId: "m", primaryModelId: "m", options: {}, wireMaxTokens: 0, jsonMode: false,
+  }, json, { callId: "s2-1" });
+  assertEquals(out.costUsd, estimateCost("m", 1_000, 200));
+  assertEquals(calls[0].args.p_cost_usd, estimateCost("m", 1_000, 200));
+  assertEquals(calls[0].args.p_project_id, null);
+  assertEquals(calls[0].args.p_run_id, null);
+  assertEquals(out.wireMaxTokens, 0);
+});
+
+Deno.test("settleSeatCall — fallbackReason stamps the refusal fallback meta; smokeSource passes through", async () => {
+  const { admin } = fakeAdmin();
+  const out = await settleSeatCall(admin, {
+    userId: "u1", seat: "chair", modelId: "openai/gpt-6-astra", primaryModelId: "anthropic/claude-fable-5.1",
+    smokeSource: "smoke", options: { smoke: true }, wireMaxTokens: 100, jsonMode: true,
+  }, OK_JSON, { callId: "s3-2", fallbackReason: "refusal" });
+  assertEquals(out.model, "openai/gpt-6-astra");
+  assertEquals(out.fallback, { fallback_model_used: "openai/gpt-6-astra", primary_model: "anthropic/claude-fable-5.1", reason: "refusal" });
+  assertEquals(out.smokeSource, "smoke");
+});
+
+Deno.test("settleSeatCall — an RPC error throws with the idempotent prefix and nothing else is returned", async () => {
+  const { admin } = fakeAdmin({ error: { message: "canceling statement due to statement timeout" } });
+  let msg = "";
+  try {
+    await settleSeatCall(admin, { userId: "u1", seat: "chair", modelId: "m", primaryModelId: "m", options: {}, wireMaxTokens: 0, jsonMode: false }, OK_JSON, { callId: "s4-1" });
+  } catch (e) {
+    msg = (e as Error).message;
+  }
+  assertStringIncludes(msg, "record_model_call_idempotent failed: canceling statement");
+});
+
+Deno.test("recordTimeoutEstimate — equals timeoutLedgerEstimate(body) for the same body, under <seat>:timeout, keyed <call_id>:timeout", async () => {
+  const body = {
+    model: "anthropic/claude-fable-5.1",
+    messages: [
+      { role: "system", content: "CONSTITUTION\n" + "x".repeat(4_000) },
+      { role: "user", content: "y".repeat(2_345) },
+    ],
+    max_tokens: 12_500,
+  };
+  const est = timeoutLedgerEstimate(body);
+  const { admin, calls } = fakeAdmin();
+  await recordTimeoutEstimate(admin, {
+    userId: "u1",
+    seat: "chair",
+    modelId: body.model,
+    options: { runId: "r1", projectId: "p1" },
+    promptChars: JSON.stringify(body.messages).length,   // what executor_meta.prompt_chars stores
+    wireMaxTokens: body.max_tokens,                       // what executor_meta.wire_max_tokens stores
+  }, { callId: "s5-1", suffix: ":timeout" });
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].name, "record_model_call_idempotent");
+  assertEquals(calls[0].args.p_tokens_in, est.tokensIn);
+  assertEquals(calls[0].args.p_tokens_out, est.tokensOut);
+  assertEquals(calls[0].args.p_cost_usd, estimateCost(body.model, est.tokensIn, est.tokensOut));
+  assertEquals(calls[0].args.p_seat, timeoutLedgerSeat("chair"));
+  assertEquals(calls[0].args.p_model_id, body.model);
+  assertEquals(calls[0].args.p_call_id, "s5-1:timeout");
+  assertEquals(calls[0].args.p_run_id, "r1");
+  assertEquals(calls[0].args.p_project_id, "p1");
+});
+
+Deno.test("ledgerHasCallId — one indexed lookup: cost_ledger.call_id IN (keys) LIMIT 1; true when any key exists", async () => {
+  const { admin, queries } = fakeAdmin({ data: 1.5, error: null }, ["s7-1:timeout"]);
+  assertEquals(await ledgerHasCallId(admin, ["s7-1", "s7-1:timeout"]), true);
+  assertEquals(queries.length, 1);
+  assertEquals(queries[0].table, "cost_ledger");
+  assertEquals(queries[0].ops, [["select", ["call_id"]], ["in", ["call_id", ["s7-1", "s7-1:timeout"]]], ["limit", [1]]]);
+  assertEquals(await ledgerHasCallId(admin, ["s7-1"]), false);
+  assertEquals(await ledgerHasCallId(admin, ["s7-2", "s7-2:timeout"]), false);
+  const broken = fakeAdmin({ data: 1.5, error: null }, [], { message: "canceling statement due to statement timeout" });
+  let msg = "";
+  try {
+    await ledgerHasCallId(broken.admin, ["s7-1"]);
+  } catch (e) {
+    msg = (e as Error).message;
+  }
+  assertStringIncludes(msg, "cost_ledger lookup failed: canceling statement");
+});
+
+Deno.test("recordTimeoutEstimate — never joins a real <call_id> row: skipped, no RPC, when <C> is already ledgered (§0 no double-charge)", async () => {
+  // The deadline backstop reaching a row the callback already settled (a
+  // completed row still carrying its id under the kill switch / a Worker
+  // outage) must not add <C>:timeout on top of the real <C> row.
+  const p = { userId: "u1", seat: "chair", modelId: "anthropic/claude-fable-5.1", options: { runId: "r1" }, promptChars: 64_000, wireMaxTokens: 16_000 };
+  const settled = fakeAdmin({ data: 1.5, error: null }, ["s8-1"]);
+  assertEquals(await recordTimeoutEstimate(settled.admin, p, { callId: "s8-1", suffix: ":timeout" }), "skipped");
+  assertEquals(settled.calls.length, 0, "no ledger insert when the real row exists");
+  assertEquals(settled.queries.length, 1);
+  assertEquals(settled.queries[0].ops[1], ["in", ["call_id", ["s8-1"]]], "looks up exactly <C>");
+  // Nothing ledgered for this call → the estimate is recorded under <C>:timeout.
+  const fresh = fakeAdmin({ data: 1.5, error: null }, ["s8-0", "s8-2:timeout"]);
+  assertEquals(await recordTimeoutEstimate(fresh.admin, p, { callId: "s8-1", suffix: ":timeout" }), "recorded");
+  assertEquals(fresh.calls.length, 1);
+  assertEquals(fresh.calls[0].args.p_call_id, "s8-1:timeout");
+  // Only the estimate itself exists (settle + backstop both writing it): still
+  // handed to the ON CONFLICT DO NOTHING RPC, which is what makes it idempotent.
+  const dup = fakeAdmin({ data: 1.5, error: null }, ["s8-1:timeout"]);
+  assertEquals(await recordTimeoutEstimate(dup.admin, p, { callId: "s8-1", suffix: ":timeout" }), "recorded");
+  assertEquals(dup.calls[0].args.p_call_id, "s8-1:timeout");
+  // A lookup failure throws before any RPC (isTransientInfraError semantics: retried next tick).
+  const broken = fakeAdmin({ data: 1.5, error: null }, [], { message: "canceling statement due to statement timeout" });
+  let msg = "";
+  try {
+    await recordTimeoutEstimate(broken.admin, p, { callId: "s8-1", suffix: ":timeout" });
+  } catch (e) {
+    msg = (e as Error).message;
+  }
+  assertStringIncludes(msg, "cost_ledger lookup failed");
+  assertEquals(broken.calls.length, 0);
+});
+
+Deno.test("recordTimeoutEstimate — uncapped call estimates 0 tokens out (no honest estimate), like the inline path", async () => {
+  const { admin, calls } = fakeAdmin();
+  await recordTimeoutEstimate(admin, { userId: "u1", seat: "chair", modelId: "m", options: {}, promptChars: 0, wireMaxTokens: 0 }, { callId: "s6-1", suffix: ":timeout" });
+  assertEquals(calls[0].args.p_tokens_in, 0);
+  assertEquals(calls[0].args.p_tokens_out, 0);
+  assertEquals(calls[0].args.p_cost_usd, 0);
+  assertEquals(calls[0].args.p_project_id, null);
+  assertEquals(calls[0].args.p_run_id, null);
 });

@@ -158,6 +158,15 @@ Deno.test("keepSmoke — carries the marker across a consensus overwrite, never 
   assertEquals(keepSmoke({ consensus: { audit_id: "x" } }, { scores: { a: 1 } }), { scores: { a: 1 } });
 });
 
+Deno.test("keepSmoke — carries the per-run executor override (Batch 17) only when it is a boolean", () => {
+  assertEquals(keepSmoke({ consensus: { smoke: true, executor: true } }, { scores: { a: 1 } }), { scores: { a: 1 }, smoke: true, executor: true });
+  assertEquals(keepSmoke({ consensus: { smoke: true, executor: false } }, { scores: { a: 1 } }), { scores: { a: 1 }, smoke: true, executor: false });
+  // Not a boolean → not carried; no smoke → no smoke key added.
+  assertEquals(keepSmoke({ consensus: { smoke: true, executor: "yes" } }, { scores: { a: 1 } }), { scores: { a: 1 }, smoke: true });
+  assertEquals(keepSmoke({ consensus: { executor: true } }, { scores: { a: 1 } }), { scores: { a: 1 }, executor: true });
+  assertEquals(keepSmoke(null, { scores: { a: 1 } }), { scores: { a: 1 } });
+});
+
 // -------- smoke seat resolution --------
 
 const row = (seat: string, model_id: string, enabled = true, fallback_model_id: string | null = null): SeatRow => ({

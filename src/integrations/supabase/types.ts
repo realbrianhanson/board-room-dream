@@ -561,6 +561,7 @@ export type Database = {
       }
       cost_ledger: {
         Row: {
+          call_id: string | null
           cost_usd: number
           created_at: string
           id: string
@@ -573,6 +574,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          call_id?: string | null
           cost_usd?: number
           created_at?: string
           id?: string
@@ -585,6 +587,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          call_id?: string | null
           cost_usd?: number
           created_at?: string
           id?: string
@@ -882,6 +885,10 @@ export type Database = {
           cost_usd: number
           created_at: string
           error: string | null
+          executor_call_id: string | null
+          executor_dispatch_no: number
+          executor_dispatched_at: string | null
+          executor_meta: Json | null
           id: string
           request: Json | null
           response_json: Json | null
@@ -901,6 +908,10 @@ export type Database = {
           cost_usd?: number
           created_at?: string
           error?: string | null
+          executor_call_id?: string | null
+          executor_dispatch_no?: number
+          executor_dispatched_at?: string | null
+          executor_meta?: Json | null
           id?: string
           request?: Json | null
           response_json?: Json | null
@@ -920,6 +931,10 @@ export type Database = {
           cost_usd?: number
           created_at?: string
           error?: string | null
+          executor_call_id?: string | null
+          executor_dispatch_no?: number
+          executor_dispatched_at?: string | null
+          executor_meta?: Json | null
           id?: string
           request?: Json | null
           response_json?: Json | null
@@ -1017,6 +1032,10 @@ export type Database = {
           cost_usd: number
           created_at: string
           error: string | null
+          executor_call_id: string | null
+          executor_dispatch_no: number
+          executor_dispatched_at: string | null
+          executor_meta: Json | null
           id: string
           request: Json | null
           response_json: Json | null
@@ -1060,10 +1079,30 @@ export type Database = {
         }
         Returns: number
       }
+      record_model_call_idempotent: {
+        Args: {
+          p_call_id: string
+          p_cost_usd: number
+          p_model_id: string
+          p_project_id: string
+          p_run_id: string
+          p_seat: string
+          p_tokens_in: number
+          p_tokens_out: number
+          p_user_id: string
+        }
+        Returns: number
+      }
       requeue_step_if_parent_active: {
-        Args: { p_new_error: string; p_new_request: Json; p_step_id: string }
+        Args: {
+          p_expect_call_id?: string
+          p_new_error: string
+          p_new_request: Json
+          p_step_id: string
+        }
         Returns: string
       }
+      reserve_executor_call: { Args: { p_step_id: string }; Returns: string }
       set_batch_status: {
         Args: { p_batch_id: string; p_next: string; p_outcome?: string }
         Returns: {

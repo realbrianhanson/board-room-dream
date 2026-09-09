@@ -11,6 +11,7 @@ import {
   isTransientInfraError,
   seatCapPause,
   hasActiveSteps,
+  hasRunningSteps,
   isAbandonedSeed,
   runStepsPhase,
   STALE_RUNNING_STEP_MS,
@@ -695,6 +696,21 @@ Deno.test("runStepsPhase: queued beats running beats settled", () => {
   assertEquals(hasActiveSteps([{ status: "completed" }, { status: "failed" }]), false);
 });
 
+// processRun consults hasRunningSteps BEFORE advancing on a zero claim: with a
+// running step (capacity held by an in-flight executor or inline call) it
+// returns without afterStepComplete, because runStepsPhase reports the queued
+// sibling first and advanceRun would fireSelfTick() in a loop for the life of
+// the call (Batch 17, spec §5.2).
+Deno.test("hasRunningSteps: true only when some step is 'running'", () => {
+  assertEquals(hasRunningSteps([{ status: "queued" }, { status: "running" }]), true);
+  assertEquals(hasRunningSteps([{ status: "queued" }, { status: "completed" }]), false);
+  assertEquals(hasRunningSteps([]), false);
+  assertEquals(hasRunningSteps([{ status: "failed" }, { status: "skipped" }, { status: "completed" }]), false);
+  // A queued-only run is still 'queued' for runStepsPhase — the advance path is unchanged there.
+  assertEquals(runStepsPhase([{ status: "queued" }]), "queued");
+  assertEquals(hasRunningSteps([{ status: "queued" }]), false);
+});
+
 Deno.test("tick cutoffs: stale step 160 s (inside the 105 s proxy abort + 150 s isolate cap), stalled run 5 min", () => {
   assertEquals(STALE_RUNNING_STEP_MS, 160_000);
   assertEquals(STALLED_RUN_MS, 300_000);
@@ -895,4 +911,71 @@ Deno.test("resetRequestForResume: clears the infra attempt counter with the othe
   const out = resetRequestForResume({ _infra_attempts: 2, _transport_attempts: 1 }, "some error");
   assertEquals(out._infra_attempts, 0);
   assertEquals(out._transport_attempts, 0);
+});
+
+// ---------------------------------------------------------------- Batch 17: executor markers
+
+Deno.test("resetRequestForResume: clears the four executor markers so a retry gets the executor and a fresh refusal budget", () => {
+  const stored = {
+    json_output: true,
+    _refusal_attempts: 2,
+    _refusal_fallback: true,
+    _executor_bypass: true,
+    _executor_errors: 2,
+    _attempts: 1,
+  };
+  const out = resetRequestForResume(stored, "executor_call_lost");
+  assertEquals("_refusal_attempts" in out, false);
+  assertEquals("_refusal_fallback" in out, false);
+  assertEquals("_executor_bypass" in out, false);
+  assertEquals("_executor_errors" in out, false);
+  assertEquals(out._attempts, 0);
+  assertEquals(out.json_output, true, "other keys survive");
+  // Input is not mutated.
+  assertEquals(stored._executor_bypass, true);
+  assertEquals(stored._executor_errors, 2);
+});
+
+Deno.test("requeueStepIfParentActive: p_expect_call_id is OMITTED when undefined (inline payload unchanged) and forwarded when defined", async () => {
+  const calls: any[] = [];
+  const admin: any = {
+    rpc: (name: string, args: any) => {
+      calls.push({ name, args });
+      return Promise.resolve({ data: "requeued", error: null });
+    },
+  };
+  assertEquals(await requeueStepIfParentActive(admin, "s1", { a: 1 }, "timeout_failover"), "requeued");
+  assertEquals(calls[0].name, "requeue_step_if_parent_active");
+  assertEquals(Object.keys(calls[0].args).sort(), ["p_new_error", "p_new_request", "p_step_id"]);
+  assertEquals("p_expect_call_id" in calls[0].args, false);
+
+  assertEquals(await requeueStepIfParentActive(admin, "s1", { a: 1 }, "executor_call_lost", "s1-3"), "requeued");
+  assertEquals(calls[1].args, { p_step_id: "s1", p_new_request: { a: 1 }, p_new_error: "executor_call_lost", p_expect_call_id: "s1-3" });
+});
+
+Deno.test("requeueStepIfParentActive: maps the RPC's 'stale_call' verbatim; unknown strings still collapse to not_found", async () => {
+  const stale: any = { rpc: () => Promise.resolve({ data: "stale_call", error: null }) };
+  assertEquals(await requeueStepIfParentActive(stale, "s1", {}, "x", "s1-1"), "stale_call");
+  const odd: any = { rpc: () => Promise.resolve({ data: "something_else", error: null }) };
+  assertEquals(await requeueStepIfParentActive(odd, "s1", {}, "x"), "not_found");
+});
+
+Deno.test("failRun / sweepOrphanSteps regression: still keyed on queued/running only, no executor columns touched", async () => {
+  // A row that is 'running' with an executor call id in flight is cancelled
+  // like any other running row (the collector later ledgers its real usage
+  // and clears the columns — hygiene never touches them).
+  const state = {
+    runs: [{ id: "r1", status: "running", error: null }],
+    steps: [
+      { id: "s1", run_id: "r1", status: "running", started_at: "t", created_at: "t", error: null, executor_call_id: "s1-1" } as any,
+      { id: "s2", run_id: "r1", status: "queued", started_at: null, created_at: "t", error: null, executor_call_id: null } as any,
+      { id: "s3", run_id: "r1", status: "completed", started_at: "t", created_at: "t", error: null, executor_call_id: null } as any,
+    ],
+    audits: [],
+    rpcCalls: [],
+  };
+  const admin = makeFakeAdmin(state);
+  assertEquals(await failRun(admin, { id: "r1" }, "owner cancel"), "won");
+  assertEquals(state.steps.map((s: any) => s.status), ["failed", "failed", "completed"]);
+  assertEquals(state.steps[0].executor_call_id, "s1-1", "call id deliberately kept on the failed row (spec §5.5)");
 });
