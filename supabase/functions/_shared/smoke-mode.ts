@@ -36,12 +36,16 @@ export function isSmokeRun(run: { consensus?: unknown } | null | undefined): boo
  * Several stages replace run.consensus wholesale (plan lock, terminal
  * writes). Carry the smoke marker across so later steps (the blueprint) still
  * resolve to the smoke model and the finished row still says it was a smoke.
+ * The per-run executor override (`consensus.executor`, Batch 17) rides along
+ * the same way when it is a boolean.
  */
 export function keepSmoke<T extends Record<string, unknown>>(
   run: { consensus?: unknown } | null | undefined,
   meta: T,
-): T & { smoke?: boolean } {
-  return isSmokeRun(run) ? { ...meta, smoke: true } : meta;
+): T & { smoke?: boolean; executor?: boolean } {
+  const c = run?.consensus as { executor?: unknown } | null | undefined;
+  const carried: T & { executor?: boolean } = typeof c?.executor === "boolean" ? { ...meta, executor: c.executor } : meta;
+  return isSmokeRun(run) ? { ...carried, smoke: true } : carried;
 }
 
 /** start_run budget per kind; smoke runs are capped at $1 whatever the kind. */

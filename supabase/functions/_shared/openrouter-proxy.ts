@@ -188,7 +188,7 @@ const FALLBACK_PRICING: Record<string, { in: number; out: number }> = {
   default: { in: 3, out: 15 },
 };
 
-function estimateCost(modelId: string, tokensIn: number, tokensOut: number): number {
+export function estimateCost(modelId: string, tokensIn: number, tokensOut: number): number {
   const p = FALLBACK_PRICING[modelId] ?? FALLBACK_PRICING.default;
   return (tokensIn * p.in + tokensOut * p.out) / 1_000_000;
 }
@@ -412,10 +412,10 @@ export function isRefusal(content: string, finishReason: string | undefined, jso
   return trimmed.length < 300 && REFUSAL_PATTERNS.some((r) => r.test(trimmed.slice(0, 200)));
 }
 
-async function callOpenRouter(
-  apiKey: string,
-  body: any,
-): Promise<{
+// The parsed, cost-free view of one OpenRouter completion. Produced by the
+// inline fetch (callOpenRouter) and, on the executor path, from the raw JSON
+// the Workflow stored (settleSeatCall) — one parser for both.
+export type CallResult = {
   content: string;
   finishReason: string | undefined;
   usage: any;
@@ -423,7 +423,30 @@ async function callOpenRouter(
   reasoningTokens: number;
   wireMaxTokens: number;
   budgetExhausted: boolean;
-}> {
+};
+
+// Pure. `body` contributes only max_tokens (the wire cap); `json` is the
+// OpenRouter NON-streaming response shape.
+export function parseOpenRouterResponse(body: any, json: any): CallResult {
+  const choice = json?.choices?.[0];
+  const finishReason = choice?.finish_reason;
+  const wireMaxTokens = Number(body?.max_tokens ?? 0) || 0;
+  const tokensOut = Number(json?.usage?.completion_tokens ?? 0) || 0;
+  return {
+    content: choice?.message?.content ?? "",
+    finishReason,
+    usage: json?.usage ?? {},
+    raw: json,
+    reasoningTokens: Number(json?.usage?.completion_tokens_details?.reasoning_tokens ?? 0) || 0,
+    wireMaxTokens,
+    budgetExhausted: isBudgetExhausted(finishReason, tokensOut, wireMaxTokens),
+  };
+}
+
+async function callOpenRouter(
+  apiKey: string,
+  body: any,
+): Promise<CallResult> {
   // BUILD: 2026-07-22.atomic-accounting.1 — timer stays live through the
   // ENTIRE response lifecycle (fetch + non-OK body read + r.json body read),
   // and is cleared exactly once in the outer finally. The prior code cleared
@@ -491,19 +514,7 @@ async function callOpenRouter(
       }
       throw e;
     }
-    const choice = json?.choices?.[0];
-    const finishReason = choice?.finish_reason;
-    const wireMaxTokens = Number(body?.max_tokens ?? 0) || 0;
-    const tokensOut = Number(json?.usage?.completion_tokens ?? 0) || 0;
-    return {
-      content: choice?.message?.content ?? "",
-      finishReason,
-      usage: json?.usage ?? {},
-      raw: json,
-      reasoningTokens: Number(json?.usage?.completion_tokens_details?.reasoning_tokens ?? 0) || 0,
-      wireMaxTokens,
-      budgetExhausted: isBudgetExhausted(finishReason, tokensOut, wireMaxTokens),
-    };
+    return parseOpenRouterResponse(body, json);
   } finally {
     clearTimeout(timer);
   }
@@ -628,7 +639,28 @@ async function recordCall(
   tokensOut: number,
   costUsd: number,
   options: ProxyOptions,
+  callId?: string,
 ) {
+  if (callId) {
+    // Executor path: the ledger row carries cost_ledger.call_id and the RPC
+    // is ON CONFLICT DO NOTHING on it, so a callback and a collector poll
+    // that both settle the same call converge on ONE row and ONE spend bump.
+    const { error } = await admin.rpc("record_model_call_idempotent", {
+      p_user_id: userId,
+      p_project_id: options.projectId ?? null,
+      p_run_id: options.runId ?? null,
+      p_seat: seat,
+      p_model_id: modelId,
+      p_tokens_in: tokensIn,
+      p_tokens_out: tokensOut,
+      p_cost_usd: costUsd,
+      p_call_id: callId,
+    });
+    if (error) {
+      throw new Error(`record_model_call_idempotent failed: ${error.message}`);
+    }
+    return;
+  }
   // Atomic: single SECURITY DEFINER RPC inserts the ledger row and updates
   // the run's spent_usd + budget_warning in one transaction. Replaces the
   // prior insert + read-modify-write, which race-lost concurrent seat calls.
@@ -648,12 +680,36 @@ async function recordCall(
 }
 
 
-export async function callSeat(
+// Everything callSeat decides BEFORE it touches the network, in one value:
+// the pre-call checks, the seat row (after smoke substitution), the resolved
+// primary model, the finished OpenRouter body and the user's key. callSeat
+// consumes it inline; the orchestrator's executor path ships `body` to the
+// Cloudflare Worker instead of fetching. `admin` and `buildBody` are inline
+// plumbing (the refusal fallback rebuilds the body for the reserve model);
+// the executor path ignores them and never persists `apiKey`.
+export type PreparedSeatCall = {
+  userId: string;
+  seat: string;
+  options: ProxyOptions;
+  seatRow: SeatRow;                 // after smoke substitution
+  smokeSource?: SmokeModelSource;
+  modelId: string;                  // primary on the wire (fallback when forceFallback && allowed)
+  primaryModelId: string;           // seatRow.model_id
+  fallbackModelId: string | null;   // seatRow.fallback_model_id when allowed && != model_id, else null
+  body: any;                        // buildBody(modelId) — no `stream`
+  apiKey: string;                   // NEVER persisted by the orchestrator
+  wireMaxTokens: number;            // body.max_tokens ?? 0
+  promptChars: number;              // JSON.stringify(body.messages).length
+  admin: SupabaseClient;
+  buildBody: (modelId: string) => any;
+};
+
+export async function prepareSeatCall(
   userId: string,
   seat: string,
   messages: ProxyMessage[],
   options: ProxyOptions = {},
-): Promise<ProxyResult> {
+): Promise<PreparedSeatCall> {
   const admin = adminClient();
 
   // Daily cap (before every call)
@@ -705,6 +761,49 @@ export async function callSeat(
     return body;
   };
 
+  // The orchestrator can force the seat's fallback model as primary — a step
+  // whose primary model timed out gets requeued with force_fallback and the
+  // reserve/fallback answers in a fresh invocation (this is now the ONLY
+  // way a fallback ever runs for a timeout; see ProxyTimeoutError above).
+  const primaryId = options.forceFallback
+    && seatRow.fallback_model_id
+    && allowed.has(seatRow.fallback_model_id)
+      ? seatRow.fallback_model_id
+      : seatRow.model_id;
+
+  const body = buildBody(primaryId);
+  const fallbackModelId = seatRow.fallback_model_id
+    && seatRow.fallback_model_id !== seatRow.model_id
+    && allowed.has(seatRow.fallback_model_id)
+      ? seatRow.fallback_model_id
+      : null;
+  return {
+    userId,
+    seat,
+    options,
+    seatRow,
+    smokeSource,
+    modelId: primaryId,
+    primaryModelId: seatRow.model_id,
+    fallbackModelId,
+    body,
+    apiKey,
+    wireMaxTokens: Number(body?.max_tokens ?? 0) || 0,
+    promptChars: JSON.stringify(body.messages).length,
+    admin,
+    buildBody,
+  };
+}
+
+export async function callSeat(
+  userId: string,
+  seat: string,
+  messages: ProxyMessage[],
+  options: ProxyOptions = {},
+): Promise<ProxyResult> {
+  const p = await prepareSeatCall(userId, seat, messages, options);
+  const { admin, apiKey, buildBody, seatRow, smokeSource } = p;
+
   const doCall = async (modelId: string) => {
     const body = buildBody(modelId);
     let res: Awaited<ReturnType<typeof callOpenRouter>>;
@@ -726,25 +825,12 @@ export async function callSeat(
       }
       throw e;
     }
-    const tokensIn = Number(res.usage.prompt_tokens ?? 0);
-    const tokensOut = Number(res.usage.completion_tokens ?? 0);
-    const reportedCost = Number(res.usage.cost);
-    const costUsd = Number.isFinite(reportedCost) && reportedCost > 0
-      ? reportedCost
-      : estimateCost(modelId, tokensIn, tokensOut);
+    const { tokensIn, tokensOut, costUsd } = settleSeatUsage(modelId, res.usage);
     await recordCall(admin, userId, seat, modelId, tokensIn, tokensOut, costUsd, options);
     return { ...res, tokensIn, tokensOut, costUsd, modelId };
   };
 
-  // The orchestrator can force the seat's fallback model as primary — a step
-  // whose primary model timed out gets requeued with force_fallback and the
-  // reserve/fallback answers in a fresh invocation (this is now the ONLY
-  // way a fallback ever runs for a timeout; see ProxyTimeoutError above).
-  const primaryId = options.forceFallback
-    && seatRow.fallback_model_id
-    && allowed.has(seatRow.fallback_model_id)
-      ? seatRow.fallback_model_id
-      : seatRow.model_id;
+  const primaryId = p.modelId;
 
   // 1st attempt on primary. A ProxyTimeoutError propagates OUT of this
   // function immediately — never start a fallback call inside the same
@@ -767,10 +853,8 @@ export async function callSeat(
 
   if (refused
     && withinRefusalWindow()
-    && seatRow.fallback_model_id
-    && seatRow.fallback_model_id !== seatRow.model_id
-    && allowed.has(seatRow.fallback_model_id)) {
-    const fbAttempt = await doCall(seatRow.fallback_model_id);
+    && p.fallbackModelId) {
+    const fbAttempt = await doCall(p.fallbackModelId);
     return {
       content: fbAttempt.content,
       model: fbAttempt.modelId,
@@ -804,5 +888,91 @@ export async function callSeat(
     budgetExhausted: attempt.budgetExhausted,
     ...(smokeSource ? { smokeSource } : {}),
   };
+}
+
+// Pure. Tokens and cost of one completion from its `usage` block: the
+// provider-reported cost when present, the fallback price table otherwise.
+export function settleSeatUsage(modelId: string, usage: any): { tokensIn: number; tokensOut: number; costUsd: number } {
+  const tokensIn = Number(usage.prompt_tokens ?? 0);
+  const tokensOut = Number(usage.completion_tokens ?? 0);
+  const reportedCost = Number(usage.cost);
+  const costUsd = Number.isFinite(reportedCost) && reportedCost > 0
+    ? reportedCost
+    : estimateCost(modelId, tokensIn, tokensOut);
+  return { tokensIn, tokensOut, costUsd };
+}
+
+// The second half of doCall for a completion that arrived by way of the
+// executor: parse the raw OpenRouter JSON, ledger it idempotently under
+// `ctx.callId`, and hand back a ProxyResult shaped exactly like the inline
+// one (so the orchestrator's acceptance / correction / continuation code
+// cannot tell the two apart). `p` is what executor_meta remembers about the
+// dispatch (see fromMeta) — never the key, never the messages.
+export async function settleSeatCall(
+  admin: SupabaseClient,
+  p: {
+    userId: string;
+    seat: string;
+    modelId: string;
+    primaryModelId: string;
+    smokeSource?: SmokeModelSource;
+    options: ProxyOptions;
+    wireMaxTokens: number;
+    jsonMode: boolean;
+  },
+  json: any,
+  ctx: { callId: string; fallbackReason?: "refusal" },
+): Promise<ProxyResult> {
+  const res = parseOpenRouterResponse({ max_tokens: p.wireMaxTokens }, json);
+  const { tokensIn, tokensOut, costUsd } = settleSeatUsage(p.modelId, res.usage);
+  await recordCall(admin, p.userId, p.seat, p.modelId, tokensIn, tokensOut, costUsd, p.options, ctx.callId);
+  return {
+    content: res.content,
+    model: p.modelId,
+    tokensIn,
+    tokensOut,
+    costUsd,
+    raw: res.raw,
+    finishReason: res.finishReason,
+    reasoningTokens: res.reasoningTokens,
+    wireMaxTokens: res.wireMaxTokens,
+    budgetExhausted: res.budgetExhausted,
+    ...(ctx.fallbackReason
+      ? {
+        fallback: {
+          fallback_model_used: p.modelId,
+          primary_model: p.primaryModelId,
+          reason: ctx.fallbackReason,
+        },
+      }
+      : {}),
+    ...(p.smokeSource ? { smokeSource: p.smokeSource } : {}),
+  };
+}
+
+// The executor analogue of doCall's timeout branch: the same estimate
+// (prompt chars / 4 in, the wire cap out — timeoutLedgerEstimate semantics
+// rebuilt from executor_meta without the body) under the same
+// `<seat>:timeout` label, keyed `<call_id>:timeout` so the settle path and
+// the deadline backstop can both write it and only one row lands.
+export async function recordTimeoutEstimate(
+  admin: SupabaseClient,
+  p: { userId: string; seat: string; modelId: string; options: ProxyOptions; promptChars: number; wireMaxTokens: number },
+  ctx: { callId: string; suffix: ":timeout" },
+): Promise<void> {
+  const tokensIn = Math.ceil(Math.max(0, Number(p.promptChars) || 0) / 4);
+  const tokensOut = Math.max(0, Math.floor(Number(p.wireMaxTokens ?? 0) || 0));
+  const estCost = estimateCost(p.modelId, tokensIn, tokensOut);
+  await recordCall(
+    admin,
+    p.userId,
+    timeoutLedgerSeat(p.seat),
+    p.modelId,
+    tokensIn,
+    tokensOut,
+    estCost,
+    p.options,
+    `${ctx.callId}${ctx.suffix}`,
+  );
 }
 
