@@ -25,6 +25,10 @@ export const OPENROUTER_APP_HEADERS: Record<string, string> = {
 };
 
 // Pure: both values non-blank → env (trailing slashes stripped), else null.
+// EXECUTOR_URL must be an ORIGIN (workers.dev or a bare custom domain, no
+// path prefix): the orchestrator signs `/v1/calls…` and the Worker verifies
+// `new URL(req.url).pathname + search`, so a prefixed URL would fail both
+// routing and the signature and surface only as rejected 401/404 → inline.
 export function executorEnvFromValues(
   url: string | null | undefined,
   secret: string | null | undefined,

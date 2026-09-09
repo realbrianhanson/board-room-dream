@@ -34,7 +34,11 @@ export default {
         maxTimeoutMs: numberOr(env.EXECUTOR_MAX_TIMEOUT_MS, EXECUTOR_MAX_TIMEOUT_MS),
       });
     } catch (e) {
-      return new Response(JSON.stringify({ error: "internal", detail: String((e as any)?.message ?? e) }), {
+      // The catch wraps the pre-auth body read and the signature check too,
+      // so the response body is fixed: internal error text is logged, never
+      // returned to a caller that may not be authenticated.
+      console.error(`[executor] unhandled: ${String((e as any)?.message ?? e)}`);
+      return new Response(JSON.stringify({ error: "internal" }), {
         status: 500,
         headers: { "content-type": "application/json" },
       });

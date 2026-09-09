@@ -206,8 +206,6 @@ async function instanceExists(wf: WorkflowLike, id: string): Promise<boolean> {
 }
 
 async function dispatch(raw: string, deps: HandlerDeps): Promise<Response> {
-  const bytes = new TextEncoder().encode(raw).byteLength;
-  if (bytes > deps.maxDispatchBytes) return json(413, { error: "payload_too_large", bytes });
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -292,6 +290,10 @@ export async function handleRequest(req: Request, deps: HandlerDeps): Promise<Re
   }
   // Everything else is signed. With no secret configured nothing can verify (§13.1: 401 until the secret exists).
   const raw = await req.text();
+  // The size cap (§6.3 413) is the first line of defence: an oversize body
+  // is refused before it is hashed for the signature check, signed or not.
+  const bytes = new TextEncoder().encode(raw).byteLength;
+  if (bytes > deps.maxDispatchBytes) return json(413, { error: "payload_too_large", bytes });
   if (!deps.secret) return json(401, { error: "not_configured" });
   const v = await verifyExecutorRequest(deps.secret, method, path + url.search, req.headers, raw, deps.now());
   if (!v.ok) return json(401, { error: v.reason === "mismatch" ? "bad_signature" : v.reason });

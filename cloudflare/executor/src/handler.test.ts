@@ -145,6 +145,15 @@ describe("POST /v1/calls", () => {
     expect(log).toEqual([]);
   });
 
+  it("oversize is refused before the signature check — unsigned → 413, not 401", async () => {
+    const { wf, log } = fakeWf();
+    const big = JSON.stringify({ ...D, openrouter: { ...D.openrouter, body: { ...D.openrouter.body, messages: [{ role: "user", content: "x".repeat(2_000) }] } } });
+    const r = await asJson(await handleRequest(new Request(ORIGIN + "/v1/calls", { method: "POST", body: big }), deps(wf, { maxDispatchBytes: 1_000 })));
+    expect(r.status).toBe(413);
+    expect(r.body.error).toBe("payload_too_large");
+    expect(log).toEqual([]);
+  });
+
   it("bad callback host, caller-set stream, plaintext key, non-JSON → 400 bad_dispatch", async () => {
     const { wf, log } = fakeWf();
     const d = deps(wf);

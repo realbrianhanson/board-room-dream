@@ -258,6 +258,15 @@ Deno.test("decideOnPoll: errored / terminated → lost", () => {
   assertEquals(decideOnPoll(row(), state("terminated"), BEFORE, true), { action: "lost", reason: "terminated" });
 });
 
+Deno.test("decideOnPoll: errored / terminated stay `lost` past the deadline — no usage arrived, so no :timeout estimate", () => {
+  // An instance that errored early (unseal failure) but is first observed
+  // after deadline_at (the Worker was unreachable across it) must be
+  // released, not charged. Same for a non-running row.
+  assertEquals(decideOnPoll(row(), state("errored"), AFTER, true), { action: "lost", reason: "errored" });
+  assertEquals(decideOnPoll(row(), state("terminated"), AFTER + 60_000, true), { action: "lost", reason: "terminated" });
+  assertEquals(decideOnPoll(row({ status: "failed" }), state("errored"), AFTER, true), { action: "lost", reason: "errored" });
+});
+
 Deno.test("decideOnPoll: unknown / unrecognised state counts as unreachable, bounded by the failure cap", () => {
   assertEquals(decideOnPoll(row(), state("unknown"), BEFORE, true), { action: "unreachable" });
   assertEquals(decideOnPoll(row(), state("wat"), BEFORE, true), { action: "unreachable" });

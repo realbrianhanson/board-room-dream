@@ -189,11 +189,13 @@ let executorBackoffUntil = 0;
 
 // app_settings.executor with the proxy's 30 s module-cache pattern. Missing
 // row = disabled. The collector and the callback route never consult it.
+// `fresh` bypasses the cache (the Settings card's executor_status, so the
+// toggle is reflected at once instead of up to 30 s later).
 const EXECUTOR_SETTINGS_TTL_MS = 30_000;
 let _executorSettingsCache: { value: ExecutorSettings | null; at: number } | null = null;
-async function loadExecutorSettings(admin: any): Promise<ExecutorSettings | null> {
+async function loadExecutorSettings(admin: any, fresh = false): Promise<ExecutorSettings | null> {
   const now = Date.now();
-  if (_executorSettingsCache && now - _executorSettingsCache.at < EXECUTOR_SETTINGS_TTL_MS) {
+  if (!fresh && _executorSettingsCache && now - _executorSettingsCache.at < EXECUTOR_SETTINGS_TTL_MS) {
     return _executorSettingsCache.value;
   }
   const { data } = await admin
@@ -1265,6 +1267,23 @@ async function handleExecutorDeadline(admin: any, row: any): Promise<void> {
       console.error(`[exec] EXECUTOR_DEADLINE cancel failed call=${callId}: ${(e as Error)?.message ?? e}`);
     }
   }
+  // Re-read after the cancel, never act on the collector's snapshot: a
+  // callback POST already in flight when the instance was terminated may
+  // have settled the row meanwhile (§5.9 — CAS decides). Acting on the stale
+  // snapshot would write an estimate for a call the callback already
+  // settled, and — on a force_fallback step — let the verbatim timeout
+  // branch's guarded update no-op and then failRun() a run whose step just
+  // completed. A moved id means another settle owns the row: nothing to do.
+  const { data: cur } = await admin
+    .from("run_steps")
+    .select("status, executor_call_id")
+    .eq("id", row.id)
+    .maybeSingle();
+  if (!cur || cur.executor_call_id !== callId) {
+    console.log(`[exec] EXECUTOR_DEADLINE call=${callId} row moved on (row_call=${cur?.executor_call_id ?? "null"}) — settled meanwhile, nothing to do`);
+    return;
+  }
+  const status = String(cur.status ?? row.status);
   const run = await getRun(admin, row.run_id);
   if (run && meta?.model_id) {
     try {
@@ -1277,7 +1296,7 @@ async function handleExecutorDeadline(admin: any, row: any): Promise<void> {
       console.error(`[exec] EXECUTOR_DEADLINE estimate failed call=${callId}: ${(e as Error)?.message ?? e}`);
     }
   }
-  if (!run || row.status !== "running") {
+  if (!run || status !== "running") {
     await clearExecutorColumns(admin, row.id, callId);
     return;
   }
@@ -1286,8 +1305,10 @@ async function handleExecutorDeadline(admin: any, row: any): Promise<void> {
     await handleCallFailure(admin, run, row, e, { quickRetryAllowed: false, guard: { callId } });
   } catch (err) {
     // The estimate is already ledgered and the row is still running with
-    // its id: the next tick re-enters here (or the ok-after-deadline branch
-    // of settleExecutorStep, which takes the same exit) — never stranded.
+    // its id: the next tick releases it — `terminated` polls as lost
+    // (requeue, no second estimate), an unreachable cancel re-enters here,
+    // and a completed instance takes the ok-after-deadline branch of
+    // settleExecutorStep, which has the same exit — never stranded.
     console.error(`[exec] EXECUTOR_DEADLINE timeout branch failed step=${row.step_key} run=${row.run_id} call=${callId}: ${(err as Error)?.message ?? err}`);
     throw err;
   }
@@ -3240,7 +3261,7 @@ async function handleRequest(req: Request): Promise<Response> {
     const { data: isAdmin, error: roleErr } = await admin.rpc("has_role", { _user_id: userId, _role: "admin" });
     if (roleErr) return j(500, { error: "Role check failed" });
     if (isAdmin !== true) return j(403, { error: "Executor status is admin-only" });
-    const setting = await loadExecutorSettings(admin);
+    const setting = await loadExecutorSettings(admin, true);
     const { count } = await admin
       .from("run_steps")
       .select("id", { count: "exact", head: true })

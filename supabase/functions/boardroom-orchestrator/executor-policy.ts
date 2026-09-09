@@ -277,11 +277,20 @@ export function decideOnPoll(
     return { action: "lost", reason: dispatchAttempts >= EXECUTOR_DISPATCH_MAX ? "dispatch_attempts_exhausted" : "not_found" };
   }
 
+  // errored | terminated beat the deadline clock: no usage arrived (§5.6
+  // "nothing to ledger"), so an instance that errored early (unseal failure,
+  // engine error) but is first observed past the deadline — a Worker outage
+  // spanning it — is released as lost, never charged the :timeout estimate.
+  // An instance WE terminated at the deadline had its estimate written by
+  // handleExecutorDeadline before the cancel, so it is not under-charged.
+  if (poll && poll.kind === "state" && (poll.state === "errored" || poll.state === "terminated")) {
+    return { action: "lost", reason: poll.state };
+  }
+
   if (pastDeadline) return { action: "deadline" };
 
   if (poll && poll.kind === "state") {
     if (WAIT_STATES.has(poll.state)) return { action: "wait" };
-    if (poll.state === "errored" || poll.state === "terminated") return { action: "lost", reason: poll.state };
     // `unknown` (the platform status or a string the Worker did not
     // recognise) counts exactly like a transport failure.
   }
