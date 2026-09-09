@@ -1342,13 +1342,23 @@ type CollectorStats = {
 // self-ticks instead of starting an inline step it could not finish.
 async function collectExecutorCalls(admin: any, tickStartedAt: number): Promise<CollectorStats> {
   const stats: CollectorStats = { polled: 0, settled: 0, requeued: 0, deadline: 0, lost: 0, unreached: 0, exhausted: false, breaker_tripped: false };
-  const { data: rows, error } = await admin
-    .from("run_steps")
-    .select("id, run_id, step_key, seat, status, request, executor_call_id, executor_dispatched_at, executor_meta")
-    .not("executor_call_id", "is", null)
-    .order("executor_meta->>last_polled_at", { ascending: true, nullsFirst: true })
-    .order("executor_dispatched_at", { ascending: true })
-    .limit(60);
+  // Least-recently-polled first so a partial pass makes progress next tick.
+  // The JSON-path order is what PostgREST documents; if this deployment's
+  // PostgREST ever rejects it, fall back to dispatch order rather than let
+  // the collector (and the deadline backstop) go dark.
+  const selectInflight = (lru: boolean) => {
+    let q = admin
+      .from("run_steps")
+      .select("id, run_id, step_key, seat, status, request, executor_call_id, executor_dispatched_at, executor_meta")
+      .not("executor_call_id", "is", null);
+    if (lru) q = q.order("executor_meta->>last_polled_at", { ascending: true, nullsFirst: true });
+    return q.order("executor_dispatched_at", { ascending: true }).limit(60);
+  };
+  let { data: rows, error } = await selectInflight(true);
+  if (error) {
+    console.warn(`[collector] LRU order rejected (${error.message ?? error}); falling back to dispatch order`);
+    ({ data: rows, error } = await selectInflight(false));
+  }
   if (error) throw new Error(`collector select failed: ${error.message ?? error}`);
   const list: any[] = rows ?? [];
   if (!list.length) return stats;
