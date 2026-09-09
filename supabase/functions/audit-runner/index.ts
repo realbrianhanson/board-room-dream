@@ -39,7 +39,7 @@ const ORCH_URL = `${SUPABASE_URL}/functions/v1/boardroom-orchestrator`;
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every audit-runner change.
-export const BUILD_VERSION = "2026-09-08.p0-fixes.r2";
+export const BUILD_VERSION = "2026-09-08.p0-fixes.r3";
 
 function j(status: number, body: any) {
   return new Response(JSON.stringify(body), {

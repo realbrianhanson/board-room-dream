@@ -14,7 +14,7 @@ Deno.test("correctionForStep — batch generation routes to batches copy (contra
     // Correction copy asks for a materially SMALLER payload than the 24,000-char
     // validator ceiling so the retry cannot re-truncate in the same shape.
     assertStringIncludes(c, "<=16,000 characters");
-    assertStringIncludes(c, "900-1,800 characters");
+    assertStringIncludes(c, "900-2,600 characters (hard maximum 3,200)");
     assert(!/\b3-8 batches\b/.test(c), `must not tell the model a 3-8 range (got: ${c})`);
     assert(!/exactly\s+6\s+batches/i.test(c), `must not force exactly six (got: ${c})`);
 

@@ -30,7 +30,7 @@ import {
   type TargetSchemaInventory,
 } from "../_shared/target-schema-inventory.ts";
 
-const BUILD_VERSION = "2026-09-08.p0-fixes.r2";
+const BUILD_VERSION = "2026-09-08.p0-fixes.r3";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",

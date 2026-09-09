@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { SMOKE_KINDS, SMOKE_KIND_LABEL, smokeRunOutcome, smokeRunRequest } from "./smoke-run";
+import {
+  SMOKE_DEFAULT_KIND,
+  SMOKE_KINDS,
+  SMOKE_KIND_LABEL,
+  SMOKE_LAST_KEY,
+  parseSmokeLast,
+  readSmokeLast,
+  restoreSmokeSelection,
+  smokeRunOutcome,
+  smokeRunRequest,
+  writeSmokeLast,
+} from "./smoke-run";
 
 describe("smokeRunRequest", () => {
   it("audit goes to audit-runner as a github final audit with smoke: true", () => {
@@ -34,5 +45,34 @@ describe("smokeRunOutcome", () => {
 
   it("falls back to a plain confirmation", () => {
     expect(smokeRunOutcome(null)).toBe("Smoke run queued.");
+  });
+});
+
+describe("remembered smoke selection", () => {
+  it("defaults to batches", () => {
+    expect(SMOKE_DEFAULT_KIND).toBe("batches");
+    expect(restoreSmokeSelection({}, [{ id: "a" }, { id: "b" }])).toEqual({ projectId: "a", kind: "batches" });
+  });
+
+  it("parses a stored selection and drops anything malformed", () => {
+    expect(parseSmokeLast(JSON.stringify({ projectId: "p9", kind: "audit" }))).toEqual({ projectId: "p9", kind: "audit" });
+    expect(parseSmokeLast(JSON.stringify({ projectId: "", kind: "nope" }))).toEqual({});
+    expect(parseSmokeLast(JSON.stringify({ projectId: 12, kind: "plan" }))).toEqual({ kind: "plan" });
+    expect(parseSmokeLast("{not json")).toEqual({});
+    expect(parseSmokeLast(null)).toEqual({});
+    expect(parseSmokeLast("null")).toEqual({});
+    expect(SMOKE_LAST_KEY).toBe("boardroom.smoke.last");
+  });
+
+  it("restores the remembered project only while it is still in the list", () => {
+    const projects = [{ id: "a" }, { id: "b" }];
+    expect(restoreSmokeSelection({ projectId: "b", kind: "design" }, projects)).toEqual({ projectId: "b", kind: "design" });
+    expect(restoreSmokeSelection({ projectId: "gone", kind: "design" }, projects)).toEqual({ projectId: "a", kind: "design" });
+    expect(restoreSmokeSelection({ projectId: "b" }, [])).toEqual({ projectId: "", kind: "batches" });
+  });
+
+  it("read/write never throw without localStorage", () => {
+    expect(readSmokeLast()).toEqual({});
+    expect(() => writeSmokeLast({ projectId: "a", kind: "audit" })).not.toThrow();
   });
 });

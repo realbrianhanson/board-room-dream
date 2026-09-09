@@ -10,7 +10,17 @@ import { toast } from "sonner";
 import { SpendPanel } from "@/components/spend-panel";
 import { startGithubConnect } from "@/lib/github-connect";
 import { extractFunctionsErrorMessage } from "@/lib/functions-error";
-import { SMOKE_KIND_LABEL, SMOKE_KINDS, type SmokeKind, smokeRunOutcome, smokeRunRequest } from "@/lib/smoke-run";
+import {
+  SMOKE_DEFAULT_KIND,
+  SMOKE_KIND_LABEL,
+  SMOKE_KINDS,
+  type SmokeKind,
+  readSmokeLast,
+  restoreSmokeSelection,
+  smokeRunOutcome,
+  smokeRunRequest,
+  writeSmokeLast,
+} from "@/lib/smoke-run";
 
 export const Route = createFileRoute("/_authenticated/settings")({
   component: SettingsPage,
@@ -872,8 +882,12 @@ function SmokeRunPanel() {
   const [projects, setProjects] = useState<SmokeProject[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [projectId, setProjectId] = useState("");
-  const [kind, setKind] = useState<SmokeKind>("audit");
+  const [kind, setKind] = useState<SmokeKind>(SMOKE_DEFAULT_KIND);
   const [busy, setBusy] = useState(false);
+
+  function remember(next: { projectId: string; kind: SmokeKind }) {
+    if (next.projectId) writeSmokeLast(next);
+  }
 
   async function load() {
     const { data, error } = await supabase
@@ -887,7 +901,10 @@ function SmokeRunPanel() {
     setLoadError(null);
     const rows = (data ?? []) as SmokeProject[];
     setProjects(rows);
-    setProjectId((cur) => cur || rows[0]?.id || "");
+    // Restore the last project + kind (localStorage) once the list is known.
+    const last = restoreSmokeSelection(readSmokeLast(), rows);
+    setProjectId((cur) => cur || last.projectId);
+    setKind(last.kind);
   }
   useEffect(() => { void load(); }, []);
 
@@ -926,12 +943,19 @@ function SmokeRunPanel() {
       ) : projects.length === 0 ? (
         <p className="text-sm text-muted-foreground">No projects yet — create one before running a smoke.</p>
       ) : (
+        <>
+        <p className="mb-3 text-xs text-muted-foreground">
+          Runs on the smoke seat (cheap). Audit smokes need a project whose scope includes Code Audit.
+        </p>
         <div className="grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end">
           <label className="block">
             <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Project</span>
             <select
               value={projectId}
-              onChange={(e) => setProjectId(e.target.value)}
+              onChange={(e) => {
+                setProjectId(e.target.value);
+                remember({ projectId: e.target.value, kind });
+              }}
               className="mt-1.5 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground"
             >
               {projects.map((p) => (
@@ -943,7 +967,11 @@ function SmokeRunPanel() {
             <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Kind</span>
             <select
               value={kind}
-              onChange={(e) => setKind(e.target.value as SmokeKind)}
+              onChange={(e) => {
+                const next = e.target.value as SmokeKind;
+                setKind(next);
+                remember({ projectId, kind: next });
+              }}
               className="mt-1.5 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground"
             >
               {SMOKE_KINDS.map((k) => (
@@ -960,6 +988,7 @@ function SmokeRunPanel() {
             {busy ? "Queuing…" : "Run smoke"}
           </button>
         </div>
+        </>
       )}
       <p className="mt-4 text-xs text-muted-foreground">
         Same gates and the same side effects as a real run (a smoke plan locks a plan version, a smoke

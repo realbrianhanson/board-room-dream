@@ -148,13 +148,15 @@ export function applySmokeSource(seatRow: SeatRow, rows: readonly SeatRow[]): { 
 // wire cap adds a per-model allowance for the thinking. Keyed on the RESOLVED
 // model id (primary or fallback) because the same step can run on either.
 // google/x-ai/moonshotai/qwen models think by default even with no effort
-// set, and their trace is counted inside max_tokens.
+// set, and their trace is counted inside max_tokens. The non-thinking table's
+// low/medium rows are sized so a ~1,500-token low-effort trace (the live
+// batches_review shape on a 2,500 visible cap) still leaves the answer room.
 export function reasoningAllowance(modelId: string, effort?: "low" | "medium" | "high"): number {
   const thinking = /^(google|x-ai|moonshotai|qwen)\//.test(String(modelId ?? ""));
   if (!effort) return thinking ? 2500 : 0;
   const table = thinking
     ? { low: 2500, medium: 5000, high: 8000 }
-    : { low: 1500, medium: 3000, high: 6000 };
+    : { low: 2500, medium: 4000, high: 6000 };
   return table[effort] ?? 0;
 }
 

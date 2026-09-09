@@ -156,8 +156,8 @@ Deno.test("reasoningAllowance — effort table scales per family", () => {
   assertEquals(reasoningAllowance("google/gemini-3.1-pro", "low"), 2500);
   assertEquals(reasoningAllowance("google/gemini-3.1-pro", "medium"), 5000);
   assertEquals(reasoningAllowance("google/gemini-3.1-pro", "high"), 8000);
-  assertEquals(reasoningAllowance("anthropic/some-model", "low"), 1500);
-  assertEquals(reasoningAllowance("anthropic/some-model", "medium"), 3000);
+  assertEquals(reasoningAllowance("anthropic/some-model", "low"), 2500);
+  assertEquals(reasoningAllowance("anthropic/some-model", "medium"), 4000);
   assertEquals(reasoningAllowance("openai/some-model", "high"), 6000);
   assertEquals(reasoningAllowance("qwen/qwen3.8-max-0902", "low"), 2500);
   assertEquals(reasoningAllowance("qwen/qwen3.8-max-0902", "high"), 8000);
@@ -167,6 +167,14 @@ Deno.test("reasoningAllowance — the live batches_review shape: 2,500 visible +
   // Live run b67878e0: ~2,200 of 2,500 tokens went to reasoning and the
   // visible JSON was ~300 chars. With the allowance the visible 2,500 survive.
   assertEquals(2500 + reasoningAllowance("google/gemini-3.1-pro", "low"), 5000);
+});
+
+Deno.test("reasoningAllowance — a low-effort review on a non-thinking vendor: 2,500 visible + low = 5,000 on the wire", () => {
+  // Live smoke run before dd1e502e: the Inspector's first review spent ~1,500
+  // reasoning tokens against a 2,500 + 1,500 cap and the JSON was cut; the
+  // allowance now leaves the visible 2,500 intact for that trace.
+  assertEquals(2500 + reasoningAllowance("anthropic/some-model", "low"), 5000);
+  assertEquals(8000 + reasoningAllowance("openai/some-model", "low"), 10500);
 });
 
 // --- budget exhausted: finish_reason OR token count at the wire cap --------

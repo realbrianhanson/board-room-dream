@@ -40,3 +40,65 @@ export function smokeRunOutcome(data: unknown): string {
   if (d.run_id) return `Smoke run queued (${d.run_id.slice(0, 8)}). Budget $1.`;
   return "Smoke run queued.";
 }
+
+// ---- Remembered selection -------------------------------------------------
+
+export const SMOKE_DEFAULT_KIND: SmokeKind = "batches";
+export const SMOKE_LAST_KEY = "boardroom.smoke.last";
+
+export type SmokeLastSelection = { projectId?: string; kind?: SmokeKind };
+
+export function isSmokeKind(v: unknown): v is SmokeKind {
+  return typeof v === "string" && (SMOKE_KINDS as readonly string[]).includes(v);
+}
+
+/** Parse the stored selection; anything malformed is an empty selection. */
+export function parseSmokeLast(raw: string | null | undefined): SmokeLastSelection {
+  if (!raw) return {};
+  try {
+    const v = JSON.parse(raw) as { projectId?: unknown; kind?: unknown } | null;
+    if (!v || typeof v !== "object") return {};
+    return {
+      ...(typeof v.projectId === "string" && v.projectId ? { projectId: v.projectId } : {}),
+      ...(isSmokeKind(v.kind) ? { kind: v.kind } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The project + kind to show once the projects list has loaded: the remembered
+ * project when it is still in the list (else the first project), the
+ * remembered kind when valid (else the default).
+ */
+export function restoreSmokeSelection(
+  last: SmokeLastSelection,
+  projects: ReadonlyArray<{ id: string }>,
+): { projectId: string; kind: SmokeKind } {
+  const remembered = last.projectId && projects.some((p) => p.id === last.projectId) ? last.projectId : "";
+  return {
+    projectId: remembered || projects[0]?.id || "",
+    kind: last.kind ?? SMOKE_DEFAULT_KIND,
+  };
+}
+
+/** Read the remembered selection from localStorage; never throws. */
+export function readSmokeLast(): SmokeLastSelection {
+  try {
+    if (typeof localStorage === "undefined") return {};
+    return parseSmokeLast(localStorage.getItem(SMOKE_LAST_KEY));
+  } catch {
+    return {};
+  }
+}
+
+/** Remember the selection in localStorage; never throws. */
+export function writeSmokeLast(sel: SmokeLastSelection): void {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(SMOKE_LAST_KEY, JSON.stringify(sel));
+  } catch {
+    // Private mode / quota / disabled storage: the choice is simply not remembered.
+  }
+}
