@@ -30,6 +30,22 @@ describe("smokeRunRequest", () => {
   it("every kind has a label", () => {
     for (const kind of SMOKE_KINDS) expect(SMOKE_KIND_LABEL[kind]).toBeTruthy();
   });
+
+  it("adds executor: true to the body only when the override is set", () => {
+    expect(smokeRunRequest("plan", "p3", { executor: true }).body).toEqual({
+      action: "start_run", project_id: "p3", kind: "plan", smoke: true, executor: true,
+    });
+    expect(smokeRunRequest("audit", "p3", { executor: true }).body).toEqual({
+      action: "start_final_audit", project_id: "p3", source: "github", smoke: true, executor: true,
+    });
+    // Unset / false / no opts: the body is byte-identical to before the override existed.
+    for (const opts of [undefined, {}, { executor: false }]) {
+      expect(smokeRunRequest("batches", "p3", opts).body).toEqual({
+        action: "start_run", project_id: "p3", kind: "batches", smoke: true,
+      });
+      expect(smokeRunRequest("audit", "p3", opts).body).not.toHaveProperty("executor");
+    }
+  });
 });
 
 describe("smokeRunOutcome", () => {

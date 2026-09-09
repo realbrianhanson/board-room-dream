@@ -7,6 +7,7 @@ import {
 } from "@/lib/settings-load";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { formatDistanceToNow } from "date-fns";
 import { SpendPanel } from "@/components/spend-panel";
 import { startGithubConnect } from "@/lib/github-connect";
 import { extractFunctionsErrorMessage } from "@/lib/functions-error";
@@ -655,6 +656,169 @@ function DefaultDailyCapEditor() {
   );
 }
 
+// ---- Cloudflare executor (Batch 17) ----------------------------------------
+// `app_settings.executor` is the flag the orchestrator reads on every claim;
+// `executor_status` (orchestrator action, admin-only) reports whether the
+// EXECUTOR_URL / EXECUTOR_SECRET pair is present, how many seat calls are in
+// flight on the Worker, and the last settle mark — `callback` proves the fast
+// path is alive, `poll` alone means the callback signature is being rejected.
+
+type ExecutorSetting = {
+  enabled?: boolean;
+  transport?: "sse" | "json";
+  timeouts_ms?: { default?: number; by_model?: Record<string, number> };
+};
+type ExecutorStatus = {
+  configured: boolean;
+  enabled: boolean;
+  transport: "sse" | "json";
+  in_flight: number;
+  last_settle: { source?: string; call_id?: string; at?: string } | null;
+  version?: string;
+};
+
+function ExecutorCard() {
+  // Fail-closed load state, same shape as the daily-cap card: the toggle is
+  // never rendered against a fabricated value. The settings row is the load
+  // that gates the card; the orchestrator status call is reported inline so
+  // the kill switch stays reachable even when the function is unhealthy.
+  type CardState =
+    | { kind: "loading" }
+    | { kind: "error"; message: string }
+    | { kind: "ready"; setting: ExecutorSetting; status: ExecutorStatus | null; statusError: string | null };
+  const [state, setState] = useState<CardState>({ kind: "loading" });
+  const [saving, setSaving] = useState(false);
+
+  async function load() {
+    setState({ kind: "loading" });
+    const [row, status] = await Promise.all([
+      supabase.from("app_settings").select("value").eq("key", "executor").maybeSingle(),
+      // POST via functions.invoke — Deno.serve answers 405 to a GET.
+      supabase.functions.invoke("boardroom-orchestrator", { body: { action: "executor_status" } }),
+    ]);
+    if (row.error) {
+      setState({ kind: "error", message: row.error.message });
+      return;
+    }
+    if (!row.data) {
+      setState({ kind: "error", message: "app_settings.executor is not seeded — apply the Batch 17 migration." });
+      return;
+    }
+    const raw = row.data.value as ExecutorSetting | null;
+    const setting: ExecutorSetting = raw && typeof raw === "object" ? raw : {};
+    let statusError: string | null = null;
+    let statusValue: ExecutorStatus | null = null;
+    if (status.error) statusError = await extractFunctionsErrorMessage(status.error);
+    else if ((status.data as { error?: string })?.error) statusError = (status.data as { error: string }).error;
+    else statusValue = status.data as ExecutorStatus;
+    setState({ kind: "ready", setting, status: statusValue, statusError });
+  }
+  useEffect(() => { void load(); }, []);
+
+  async function toggle(next: boolean) {
+    if (state.kind !== "ready") return;
+    setSaving(true);
+    const value = { ...state.setting, enabled: next };
+    const { error } = await supabase
+      .from("app_settings")
+      .update({ value, updated_at: new Date().toISOString() })
+      .eq("key", "executor");
+    if (error) toast.error(error.message);
+    else {
+      toast.success(next ? "Executor enabled — new seat calls dispatch to Cloudflare." : "Executor disabled — new seat calls run inline.");
+      setState({ ...state, setting: value });
+    }
+    setSaving(false);
+  }
+
+  if (state.kind === "loading") {
+    return <div className="h-20 animate-pulse rounded-md bg-surface-2" role="status" aria-label="Loading executor settings" />;
+  }
+  if (state.kind === "error") {
+    return (
+      <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-5 text-sm text-destructive">
+        <p className="font-medium">Couldn't load the executor settings.</p>
+        <p className="mt-1 break-words text-destructive/80">{state.message}</p>
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="mt-3 inline-flex rounded-md border border-destructive/50 bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/20"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+  const { setting, status, statusError } = state;
+  const enabled = setting.enabled === true;
+  const configured = status?.configured === true;
+  const transport = status?.transport ?? setting.transport ?? "sse";
+  const settle = status?.last_settle;
+  const settleAt = settle?.at ? new Date(settle.at) : null;
+  const settleLine = settleAt && !Number.isNaN(settleAt.getTime())
+    ? `${settle?.source ?? "unknown"} · ${formatDistanceToNow(settleAt)} ago`
+    : "never";
+  return (
+    <div className="rounded-lg border border-border bg-surface-2 p-5">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">Cloudflare executor</span>
+          {status && (
+            <span className={`rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest ${configured ? "border-success/40 text-success" : "border-border text-muted-foreground"}`}>
+              {configured ? "Configured" : "Off"}
+            </span>
+          )}
+        </div>
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={enabled}
+            disabled={saving}
+            onChange={(e) => void toggle(e.target.checked)}
+          />
+          Enabled
+        </label>
+      </div>
+      {status ? (
+        <dl className="grid gap-x-6 gap-y-1 text-xs md:grid-cols-3">
+          <div>
+            <dt className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Transport</dt>
+            <dd className="mt-0.5 font-mono text-foreground">{transport}</dd>
+          </div>
+          <div>
+            <dt className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">In flight</dt>
+            <dd className="mt-0.5 font-mono text-foreground">{status.in_flight}</dd>
+          </div>
+          <div>
+            <dt className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Last settle</dt>
+            <dd className="mt-0.5 font-mono text-foreground">{settleLine}</dd>
+          </div>
+        </dl>
+      ) : (
+        <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+          <p className="font-medium">Couldn't reach the orchestrator for executor status.</p>
+          <p className="mt-1 break-words text-destructive/80">{statusError}</p>
+        </div>
+      )}
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-xs text-muted-foreground">
+          {enabled
+            ? "New seat calls dispatch to the Cloudflare Workflow; in-flight calls settle either way."
+            : "New seat calls run inline in the edge function. A smoke run can still opt in per run."}
+          {!configured && status ? " EXECUTOR_URL / EXECUTOR_SECRET are not set, so the flag has no effect." : ""}
+        </p>
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="inline-flex rounded-md border border-border bg-surface-1 px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-surface-3"
+        >
+          Refresh
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ConstitutionEditor() {
   const [loadState, dispatch] = useReducer(
     settingsLoadReducer<{ text: string; version: number }>,
@@ -844,6 +1008,20 @@ function SettingsPage() {
 
           <div className="mt-14 border-t border-border pt-10">
             <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
+              Admin · Cloudflare executor
+            </span>
+            <h2 className="mt-3 font-display text-2xl text-foreground">The long-form room.</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Seat calls that outlive the edge function's clock run on a Cloudflare Workflow instead.
+              Flip it off and new calls go back inline; anything in flight still settles.
+            </p>
+            <div className="mt-6">
+              <ExecutorCard />
+            </div>
+          </div>
+
+          <div className="mt-14 border-t border-border pt-10">
+            <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-muted-foreground">
               Admin · Constitution
             </span>
             <h2 className="mt-3 font-display text-2xl text-foreground">
@@ -883,6 +1061,7 @@ function SmokeRunPanel() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [projectId, setProjectId] = useState("");
   const [kind, setKind] = useState<SmokeKind>(SMOKE_DEFAULT_KIND);
+  const [executor, setExecutor] = useState(false);
   const [busy, setBusy] = useState(false);
 
   function remember(next: { projectId: string; kind: SmokeKind }) {
@@ -912,7 +1091,7 @@ function SmokeRunPanel() {
     if (!projectId) return toast.error("Pick a project first");
     setBusy(true);
     try {
-      const req = smokeRunRequest(kind, projectId);
+      const req = smokeRunRequest(kind, projectId, { executor });
       const { data, error } = await supabase.functions.invoke(req.fn, { body: req.body });
       if (error) throw new Error(await extractFunctionsErrorMessage(error));
       if ((data as { error?: string })?.error) throw new Error((data as { error: string }).error);
@@ -988,6 +1167,14 @@ function SmokeRunPanel() {
             {busy ? "Queuing…" : "Run smoke"}
           </button>
         </div>
+        <label className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={executor}
+            onChange={(e) => setExecutor(e.target.checked)}
+          />
+          Route through Cloudflare executor
+        </label>
         </>
       )}
       <p className="mt-4 text-xs text-muted-foreground">

@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { formatDistanceToNow } from "date-fns";
 import { AlertTriangle, KeyRound, Pause, Play, RotateCcw, Users2 } from "lucide-react";
 import {
   computeVoteSegments,
@@ -59,7 +60,10 @@ export type SessionStep = {
   error: string | null;
   cost_usd: number;
   created_at: string;
+  started_at: string | null;
   completed_at: string | null;
+  /** Set while the seat call is running on the Cloudflare executor (status stays `running`). */
+  executor_call_id: string | null;
 };
 type SeatRow = { seat: Seat; display_name: string | null; model_id: string; enabled: boolean };
 
@@ -133,7 +137,7 @@ export function BoardroomSession(props: BoardroomSessionProps) {
   const loadSteps = useCallback(async (runId: string) => {
     const { data, error } = await supabase
       .from("run_steps")
-      .select("id, run_id, step_key, round, seat, status, response_text, response_json, error, cost_usd, created_at, completed_at")
+      .select("id, run_id, step_key, round, seat, status, response_text, response_json, error, cost_usd, created_at, started_at, completed_at, executor_call_id")
       .eq("run_id", runId)
       .order("created_at", { ascending: true });
     if (error) {
@@ -909,6 +913,7 @@ function TranscriptCard({
   const meta = SEAT_META[step.seat];
   const roundLabel = stepRoundLabel(step, loopCount);
   const failed = step.status === "failed";
+  const deliberating = !!step.executor_call_id;
   return (
     <div className={`transcript-enter rounded-xl border bg-surface-1 p-5 ${failed ? "border-l-2 border-l-destructive border-border" : "border-border"}`}>
       <div className="flex items-center gap-3">
@@ -921,7 +926,7 @@ function TranscriptCard({
           <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">{roundLabel}</p>
         </div>
         <FallbackChip meta={step.response_json?._meta?.fallback} />
-        <StepStatusChip status={step.status} />
+        <StepStatusChip status={step.status} deliberating={deliberating} />
       </div>
       <div className="mt-4">
         {step.status === "running" || step.status === "queued" ? (
@@ -929,6 +934,12 @@ function TranscriptCard({
             <div className="h-2 w-2/3 animate-pulse rounded bg-surface-2" />
             <div className="h-2 w-full animate-pulse rounded bg-surface-2" />
             <div className="h-2 w-5/6 animate-pulse rounded bg-surface-2" />
+            {step.status === "running" && deliberating && (
+              <p className="pt-1 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                Long-form reasoning in progress
+                {step.started_at ? ` · started ${formatDistanceToNow(new Date(step.started_at))} ago` : ""}
+              </p>
+            )}
           </div>
         ) : failed ? (
           <div className="space-y-3">
@@ -1128,7 +1139,7 @@ function FinalRulingBody({ json }: { json: any }) {
   );
 }
 
-function StepStatusChip({ status }: { status: SessionStep["status"] }) {
+function StepStatusChip({ status, deliberating }: { status: SessionStep["status"]; deliberating?: boolean }) {
   const map: Record<string, { label: string; cls: string }> = {
     queued: { label: "Queued", cls: "border-border text-muted-foreground" },
     running: { label: "Speaking", cls: "border-primary/40 text-primary" },
@@ -1136,7 +1147,11 @@ function StepStatusChip({ status }: { status: SessionStep["status"] }) {
     failed: { label: "Failed", cls: "border-destructive/40 text-destructive" },
     skipped: { label: "Skipped", cls: "border-border text-muted-foreground" },
   };
-  const v = map[status] ?? map.queued;
+  // A seat call running on the Cloudflare executor keeps status `running`;
+  // the chip alone says it is off in long-form reasoning rather than streaming.
+  const v = status === "running" && deliberating
+    ? { label: "Deliberating", cls: "border-primary/40 text-primary" }
+    : map[status] ?? map.queued;
   return <span className={`rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest ${v.cls}`}>{v.label}</span>;
 }
 
