@@ -8,11 +8,56 @@ import {
   callSeat,
   decideTransportRequeue,
   isBodyTransportError,
+  isRefusal,
+  ledgerHasCallId,
   NoUserKey,
+  prepareSeatCall,
+  ProxyTimeoutError,
+  type ProxyResult,
+  recordTimeoutEstimate,
   SeatBudgetExceeded,
   SeatUnavailable,
+  settleSeatCall,
+  settleSeatUsage,
   shouldQuickRetry,
 } from "../_shared/openrouter-proxy.ts";
+// Batch 17 — Cloudflare executor (spec §2, §5, §9.6). With EXECUTOR_URL /
+// EXECUTOR_SECRET unset every import below is inert: executorMode answers
+// "inline" without a query and the collector finds no rows to poll.
+import {
+  buildDispatchSpec,
+  executorCancel,
+  executorDispatch,
+  executorEnvFromDeno,
+  executorPoll,
+  type PollResult,
+} from "../_shared/executor-client.ts";
+import { sealApiKey, verifyExecutorRequest } from "../_shared/executor-auth.ts";
+import {
+  type CallOutput,
+  type DispatchLabels,
+  EXECUTOR_CALLBACK_PATH,
+  type SettleOutcome,
+} from "../_shared/executor-protocol.ts";
+import {
+  budgetPausePatch,
+  buildExecutorMeta,
+  decideOnPoll,
+  errorFromExecutor,
+  EXECUTOR_COLLECT_BUDGET_MS,
+  EXECUTOR_DEFAULT_IDLE_MS,
+  EXECUTOR_GRACE_MS,
+  EXECUTOR_UNREACHABLE_BREAKER,
+  type ExecutorMeta,
+  type ExecutorSettings,
+  executorMode,
+  executorTimeoutMs,
+  fromMeta,
+  isWellFormedCallOutput,
+  lostRequeueRequest,
+  parseExecutorSettings,
+  refusalRequeueDecision,
+} from "./executor-policy.ts";
 
 
 import {
@@ -117,13 +162,56 @@ async function verifyUser(token: string): Promise<string | null> {
 
 // Runtime build stamp, returned on unauthenticated requests so the live build
 // is verifiable with a single curl. Bump on every orchestrator change.
-const BUILD_VERSION = "2026-09-08.p0-fixes.r3";
+const BUILD_VERSION = "2026-09-09.executor.r1";
+
+// ============================== Executor config (§9.6) ==============================
+
+// null when either secret is missing → executeStep takes the inline branch
+// byte-for-byte and nothing below ever makes a network call.
+const EXECUTOR_ENV = executorEnvFromDeno();
+const EXECUTOR_SECRET = EXECUTOR_ENV?.secret ?? "";
+// The callback the Worker POSTs its result to. CALLBACK_PATH is the ONLY path
+// the callback signature is verified against (§5.3): inside a hosted edge
+// function the gateway strips /functions/v1, so new URL(req.url).pathname
+// would be "/boardroom-orchestrator" and every callback would 401.
+const CALLBACK_URL = SELF_URL;
+const CALLBACK_PATH = (() => {
+  try {
+    return new URL(CALLBACK_URL).pathname;
+  } catch {
+    return EXECUTOR_CALLBACK_PATH;
+  }
+})();
+// Per-isolate optimisation only: after a definitive dispatch rejection (bad
+// secret, oversize) skip the POST we know will fail for a minute. Correctness
+// never depends on it — every rejected dispatch falls through inline.
+let executorBackoffUntil = 0;
+
+// app_settings.executor with the proxy's 30 s module-cache pattern. Missing
+// row = disabled. The collector and the callback route never consult it.
+const EXECUTOR_SETTINGS_TTL_MS = 30_000;
+let _executorSettingsCache: { value: ExecutorSettings | null; at: number } | null = null;
+async function loadExecutorSettings(admin: any): Promise<ExecutorSettings | null> {
+  const now = Date.now();
+  if (_executorSettingsCache && now - _executorSettingsCache.at < EXECUTOR_SETTINGS_TTL_MS) {
+    return _executorSettingsCache.value;
+  }
+  const { data } = await admin
+    .from("app_settings")
+    .select("value")
+    .eq("key", "executor")
+    .maybeSingle();
+  const value = parseExecutorSettings(data?.value);
+  _executorSettingsCache = { value, at: now };
+  return value;
+}
 
 import {
   auditSeatCoverage,
   decideInfraRequeue,
   failRun,
   hasActiveSteps,
+  hasRunningSteps,
   isAbandonedSeed,
   isStepLocalFailure,
   isTransientInfraError,
@@ -236,22 +324,31 @@ function withHardTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T
 // TERMINAL_RUN_STATUSES live in ./hygiene.ts so they can be unit tested
 // without booting Deno.serve. See that module for behavior contracts.
 
+// Executor ownership guard (§0 "no double-write"). Every terminal write on
+// the executor path is additionally filtered on executor_call_id = C so two
+// settles of the same call converge on one winner. `.match({})` adds no
+// filter, so the inline path's requests are byte-identical to before.
+type ExecutorGuard = { callId: string } | undefined;
+function guardFilter(guard: ExecutorGuard): Record<string, string> {
+  return guard ? { executor_call_id: guard.callId } : {};
+}
 
 // Payload built by the pure timeoutRequeueRequest (hygiene.ts): reserve
 // model, low reasoning, same visible cap.
-async function requeueForTimeout(admin: any, step: any): Promise<string> {
+async function requeueForTimeout(admin: any, step: any, expectCallId?: string): Promise<string> {
   return await requeueStepIfParentActive(
     admin,
     step.id,
     timeoutRequeueRequest(step.request),
     "timeout_failover",
+    expectCallId,
   );
 }
 
 // Body-stream/transport failure on a 2xx OpenRouter response. Fresh retry on
 // the SAME model (transport is not a model-quality signal); one retry max —
 // caller already decided that via decideTransportRequeue.
-async function requeueForBodyTransport(admin: any, step: any, attempts: number): Promise<string> {
+async function requeueForBodyTransport(admin: any, step: any, attempts: number, expectCallId?: string): Promise<string> {
   return await requeueStepIfParentActive(
     admin,
     step.id,
@@ -260,6 +357,7 @@ async function requeueForBodyTransport(admin: any, step: any, attempts: number):
       _transport_attempts: attempts,
     },
     "body_transport_requeued",
+    expectCallId,
   );
 }
 
@@ -272,6 +370,7 @@ async function requeueForValidation(
   validationError: string,
   truncated: boolean,
   continuation = false,
+  expectCallId?: string,
 ): Promise<string> {
   const attempts = Number(step.request?._validation_attempts ?? 0) + 1;
   try {
@@ -305,6 +404,7 @@ async function requeueForValidation(
         _validation_retry_mode: mode,
       },
       truncated ? "truncated_output_requeued" : "invalid_json_requeued",
+      expectCallId,
     );
   } catch (e) {
     if (e instanceof BatchContextTooLarge) {
@@ -320,7 +420,8 @@ async function requeueForValidation(
           completed_at: new Date().toISOString(),
         })
         .eq("id", step.id)
-        .eq("status", "running");
+        .eq("status", "running")
+        .match(guardFilter(expectCallId ? { callId: expectCallId } : undefined));
       await failRun(admin, run, e.message);
       return "cancelled_parent_terminal";
     }
@@ -329,41 +430,28 @@ async function requeueForValidation(
 }
 
 
-async function executeStep(admin: any, run: any, step: any) {
-  const baseMessages = step.request?.messages ?? [];
-  const jsonMode = !!step.request?.json_output;
-  console.log(`[exec] start step=${step.step_key} seat=${step.seat} run=${run.id}`);
-
-  // Quick 429/5xx retry is capped at 1 AND only fires for errors that hit
-  // before the model produced any response — timeouts requeue in a fresh
-  // invocation instead, and invalid JSON requeues for a fresh correction.
-  let networkAttempt = 0;
-  while (true) {
-    let result: Awaited<ReturnType<typeof callSeat>>;
-    try {
-      console.log(`[exec] calling model step=${step.step_key} attempt=${networkAttempt} force_fallback=${!!step.request?.force_fallback}`);
-      result = await withHardTimeout(
-        callSeat(run.user_id, step.seat as Seat, baseMessages, {
-          runId: run.id,
-          projectId: run.project_id,
-          temperature: Number(step.request?.temperature ?? 0.4),
-          reasoningEffort: step.request?.reasoning_effort,
-          json: jsonMode,
-          forceFallback: !!step.request?.force_fallback,
-          maxTokens: Number(step.request?.max_tokens) > 0 ? Number(step.request.max_tokens) : undefined,
-          smoke: isSmokeRun(run),
-        }),
-        STEP_HARD_TIMEOUT_MS,
-        step.step_key,
-      );
-    } catch (e) {
+// The catch block of executeStep, moved verbatim (Batch 17, §9.6) so the
+// executor settle path (settleExecutorStep) and the deadline backstop reuse
+// the same pause / fail / requeue branches. `opts.guard` adds the executor
+// ownership filter to every terminal step write and the ownership token to
+// every requeue; with `quickRetryAllowed` the pre-response/429/5xx branch
+// answers "quick_retry" and the inline loop retries in place, otherwise
+// (executor) it requeues the step once via executorQuickRequeue.
+async function handleCallFailure(
+  admin: any,
+  run: any,
+  step: any,
+  e: unknown,
+  opts: { quickRetryAllowed: boolean; guard?: { callId: string } },
+): Promise<"quick_retry" | void> {
       if (e instanceof DailyCapExceeded) {
         const capCopy =
           `Daily spend cap hit — ${e.scope} scope. ` +
           `Cap $${Number(e.cap).toFixed(2)}, spent $${Number(e.spent).toFixed(2)}. ` +
           `Resets at 00:00 UTC or an admin can raise the cap in Settings.`;
-        await admin.from("run_steps").update({ status: "queued", error: "daily_cap" }).eq("id", step.id);
-        await admin.from("boardroom_runs").update({ status: "paused_budget", error: capCopy }).eq("id", run.id);
+        await admin.from("run_steps").update({ status: "queued", error: "daily_cap" }).eq("id", step.id).in("status", budgetPausePatch("daily_cap").stepGuard).match(guardFilter(opts.guard));
+        await admin.from("boardroom_runs").update({ status: "paused_budget", error: capCopy }).eq("id", run.id).in("status", budgetPausePatch("daily_cap").runGuard);
+        if (opts.guard) await clearExecutorColumns(admin, step.id, opts.guard.callId);
         if (run.project_id && run.user_id) {
           await insertAlert(admin, {
             user_id: run.user_id,
@@ -378,8 +466,9 @@ async function executeStep(admin: any, run: any, step: any) {
         const budgetCopy =
           `Run budget hit — spent $${Number(run.spent_usd ?? 0).toFixed(2)} of $${Number(run.budget_usd ?? 0).toFixed(2)}. ` +
           `You can resume this run with extra budget.`;
-        await admin.from("run_steps").update({ status: "queued", error: "budget" }).eq("id", step.id);
-        await admin.from("boardroom_runs").update({ status: "paused_budget", error: budgetCopy }).eq("id", run.id);
+        await admin.from("run_steps").update({ status: "queued", error: "budget" }).eq("id", step.id).in("status", budgetPausePatch("budget").stepGuard).match(guardFilter(opts.guard));
+        await admin.from("boardroom_runs").update({ status: "paused_budget", error: budgetCopy }).eq("id", run.id).in("status", budgetPausePatch("budget").runGuard);
+        if (opts.guard) await clearExecutorColumns(admin, step.id, opts.guard.callId);
         if (run.project_id && run.user_id) {
           await insertAlert(admin, {
             user_id: run.user_id,
@@ -396,8 +485,9 @@ async function executeStep(admin: any, run: any, step: any) {
       // again without spending (RC-10).
       if (e instanceof SeatBudgetExceeded) {
         const pause = seatCapPause(e, run);
-        await admin.from("run_steps").update(pause.step).eq("id", step.id);
-        await admin.from("boardroom_runs").update(pause.run).eq("id", run.id);
+        await admin.from("run_steps").update(pause.step).eq("id", step.id).in("status", budgetPausePatch("seat_cap").stepGuard).match(guardFilter(opts.guard));
+        await admin.from("boardroom_runs").update(pause.run).eq("id", run.id).in("status", budgetPausePatch("seat_cap").runGuard);
+        if (opts.guard) await clearExecutorColumns(admin, step.id, opts.guard.callId);
         if (run.project_id && run.user_id) {
           await insertAlert(admin, {
             user_id: run.user_id,
@@ -413,7 +503,8 @@ async function executeStep(admin: any, run: any, step: any) {
           .from("run_steps")
           .update({ status: "failed", error: (e as Error).message, completed_at: new Date().toISOString() })
           .eq("id", step.id)
-          .eq("status", "running");
+          .eq("status", "running")
+          .match(guardFilter(opts.guard));
         await failRun(admin, run, (e as Error).message);
         return;
       }
@@ -430,14 +521,15 @@ async function executeStep(admin: any, run: any, step: any) {
             .from("run_steps")
             .update({ status: "failed", error: "timeout_failover_exhausted", completed_at: new Date().toISOString() })
             .eq("id", step.id)
-            .eq("status", "running");
+            .eq("status", "running")
+            .match(guardFilter(opts.guard));
           // An audit map chunk fails alone; the merge reports the gap (RC-2).
           if (isStepLocalFailure(run, step)) { fireSelfTick(); return; }
           await failRun(admin, run, tmsg);
           return;
         }
-        const outcome = await requeueForTimeout(admin, step);
-        if (outcome === "cancelled_parent_terminal") {
+        const outcome = await requeueForTimeout(admin, step, opts.guard?.callId);
+        if (outcome === "cancelled_parent_terminal" || outcome === "stale_call") {
           console.log(`[exec] TIMEOUT step=${step.step_key} run=${run.id} parent already terminal — step cancelled`);
         }
         return;
@@ -453,8 +545,8 @@ async function executeStep(admin: any, run: any, step: any) {
         const decision = decideTransportRequeue(step);
         console.log(`[exec] BODY_TRANSPORT step=${step.step_key} run=${run.id} decision=${decision.action} attempts=${decision.attempts}`);
         if (decision.action === "requeue") {
-          const outcome = await requeueForBodyTransport(admin, step, decision.attempts);
-          if (outcome === "cancelled_parent_terminal") {
+          const outcome = await requeueForBodyTransport(admin, step, decision.attempts, opts.guard?.callId);
+          if (outcome === "cancelled_parent_terminal" || outcome === "stale_call") {
             console.log(`[exec] BODY_TRANSPORT step=${step.step_key} parent already terminal — step cancelled`);
           }
           return;
@@ -467,7 +559,8 @@ async function executeStep(admin: any, run: any, step: any) {
             completed_at: new Date().toISOString(),
           })
           .eq("id", step.id)
-          .eq("status", "running");
+          .eq("status", "running")
+          .match(guardFilter(opts.guard));
         if (isStepLocalFailure(run, step)) { fireSelfTick(); return; }
         await failRun(admin, run, decision.message);
         return;
@@ -475,10 +568,15 @@ async function executeStep(admin: any, run: any, step: any) {
       // Strictly classified quick retry: ONLY pre-response network failures,
       // 429, or 5xx. Any other 4xx, validation, budget, or unexpected error
       // fails the step immediately — no blind same-invocation retry.
-      if (networkAttempt === 0 && shouldQuickRetry(e)) {
-        networkAttempt++;
-        await new Promise((r) => setTimeout(r, 800));
-        continue;
+      if (shouldQuickRetry(e)) {
+        if (opts.quickRetryAllowed) return "quick_retry";
+        // Executor path (§5.4 step 3): the analogue of the 800 ms in-invocation
+        // retry is ONE requeue with _executor_errors+1; a second falls through
+        // to the generic failed branch below.
+        if (opts.guard && Number(step.request?._executor_errors ?? 0) < 1) {
+          await executorQuickRequeue(admin, step, opts.guard.callId, e as Error);
+          return;
+        }
       }
       const msg = (e as Error).message ?? String(e);
       console.log(`[exec] ERROR step=${step.step_key} run=${run.id} msg=${msg}`);
@@ -489,8 +587,8 @@ async function executeStep(admin: any, run: any, step: any) {
         const decision = decideInfraRequeue(step);
         console.log(`[exec] INFRA step=${step.step_key} run=${run.id} decision=${decision.action} attempts=${decision.attempts}`);
         if (decision.action === "requeue") {
-          const outcome = await requeueStepIfParentActive(admin, step.id, decision.request, "infra_requeued");
-          if (outcome === "cancelled_parent_terminal") {
+          const outcome = await requeueStepIfParentActive(admin, step.id, decision.request, "infra_requeued", opts.guard?.callId);
+          if (outcome === "cancelled_parent_terminal" || outcome === "stale_call") {
             console.log(`[exec] INFRA step=${step.step_key} parent already terminal — step cancelled`);
           }
           return;
@@ -500,12 +598,29 @@ async function executeStep(admin: any, run: any, step: any) {
         .from("run_steps")
         .update({ status: "failed", error: msg, completed_at: new Date().toISOString() })
         .eq("id", step.id)
-        .eq("status", "running");
+        .eq("status", "running")
+        .match(guardFilter(opts.guard));
       if (isStepLocalFailure(run, step)) { fireSelfTick(); return; }
       await failRun(admin, run, msg);
       return;
-    }
+}
 
+// The success half of executeStep, moved verbatim (Batch 17, §9.6): JSON
+// acceptance, correction pass, continuation, degraded and terminal writes.
+// Reached inline with the ProxyResult callSeat produced, and from
+// settleExecutorStep with the ProxyResult settleSeatCall produced from the
+// Workflow's stored output — the two are indistinguishable here. `guard`
+// adds the executor ownership filter to every terminal write and the
+// ownership token to every requeue.
+async function settleStepResult(
+  admin: any,
+  run: any,
+  step: any,
+  result: ProxyResult,
+  baseMessages: any[],
+  guard?: { callId: string },
+): Promise<void> {
+  const jsonMode = !!step.request?.json_output;
     // Success path — the model answered. Validate structured output.
     const content = result.content;
     const usage = { tokensIn: result.tokensIn, tokensOut: result.tokensOut, costUsd: result.costUsd };
@@ -603,7 +718,8 @@ async function executeStep(admin: any, run: any, step: any) {
                 completed_at: new Date().toISOString(),
               })
               .eq("id", step.id)
-              .eq("status", "running");
+              .eq("status", "running")
+              .match(guardFilter(guard));
             return;
           }
           await admin
@@ -619,14 +735,15 @@ async function executeStep(admin: any, run: any, step: any) {
               completed_at: new Date().toISOString(),
             })
             .eq("id", step.id)
-            .eq("status", "running");
+            .eq("status", "running")
+            .match(guardFilter(guard));
           if (isStepLocalFailure(run, step)) { fireSelfTick(); return; }
           await failRun(admin, run, vmsg);
           return;
         }
         if (err) {
-          const vOutcome = await requeueForValidation(admin, run, step, baseMessages, content, err, truncated);
-          if (vOutcome === "cancelled_parent_terminal") {
+          const vOutcome = await requeueForValidation(admin, run, step, baseMessages, content, err, truncated, false, guard?.callId);
+          if (vOutcome === "cancelled_parent_terminal" || vOutcome === "stale_call") {
             console.log(`[exec] VALIDATION step=${step.step_key} parent already terminal — step cancelled`);
           }
           return;
@@ -655,7 +772,8 @@ async function executeStep(admin: any, run: any, step: any) {
           completed_at: new Date().toISOString(),
         })
         .eq("id", step.id)
-        .eq("status", "running");
+        .eq("status", "running")
+        .match(guardFilter(guard));
       return;
     }
 
@@ -667,8 +785,8 @@ async function executeStep(admin: any, run: any, step: any) {
     const validationAttempts = Number(step.request?._validation_attempts ?? 0);
     if (result.budgetExhausted && validationAttempts === 0) {
       console.log(`[exec] TRUNCATED_MARKDOWN step=${step.step_key} run=${run.id} chars=${content.length} — queueing continuation`);
-      const cOutcome = await requeueForValidation(admin, run, step, baseMessages, content, "truncated markdown", true, true);
-      if (cOutcome === "cancelled_parent_terminal") {
+      const cOutcome = await requeueForValidation(admin, run, step, baseMessages, content, "truncated markdown", true, true, guard?.callId);
+      if (cOutcome === "cancelled_parent_terminal" || cOutcome === "stale_call") {
         console.log(`[exec] TRUNCATED_MARKDOWN step=${step.step_key} parent already terminal — step cancelled`);
       }
       return;
@@ -696,9 +814,636 @@ async function executeStep(admin: any, run: any, step: any) {
         completed_at: new Date().toISOString(),
       })
       .eq("id", step.id)
-      .eq("status", "running");
+      .eq("status", "running")
+      .match(guardFilter(guard));
+    return;
+}
+
+
+async function executeStep(admin: any, run: any, step: any) {
+  const baseMessages = step.request?.messages ?? [];
+  const jsonMode = !!step.request?.json_output;
+  console.log(`[exec] start step=${step.step_key} seat=${step.seat} run=${run.id}`);
+
+  // Batch 17 mode switch (§4, §5.1): with the executor configured AND
+  // enabled for this step, dispatch the prepared call to the Cloudflare
+  // Worker and return with the row still 'running' (executor_call_id set);
+  // the settle path finishes it. A definitive dispatch rejection falls
+  // through to today's inline call in the same invocation. With no
+  // EXECUTOR_URL / EXECUTOR_SECRET this block is skipped without a query.
+  if (EXECUTOR_ENV) {
+    const setting = await loadExecutorSettings(admin);
+    if (executorMode(EXECUTOR_ENV, setting, run, step) === "executor" && Date.now() >= executorBackoffUntil) {
+      const d = await dispatchStepToExecutor(admin, run, step);
+      if (d !== "fallthrough_inline") return;
+    }
+  }
+
+  // Quick 429/5xx retry is capped at 1 AND only fires for errors that hit
+  // before the model produced any response — timeouts requeue in a fresh
+  // invocation instead, and invalid JSON requeues for a fresh correction.
+  let networkAttempt = 0;
+  while (true) {
+    let result: Awaited<ReturnType<typeof callSeat>>;
+    try {
+      console.log(`[exec] calling model step=${step.step_key} attempt=${networkAttempt} force_fallback=${!!step.request?.force_fallback}`);
+      result = await withHardTimeout(
+        callSeat(run.user_id, step.seat as Seat, baseMessages, {
+          runId: run.id,
+          projectId: run.project_id,
+          temperature: Number(step.request?.temperature ?? 0.4),
+          reasoningEffort: step.request?.reasoning_effort,
+          json: jsonMode,
+          forceFallback: !!step.request?.force_fallback,
+          maxTokens: Number(step.request?.max_tokens) > 0 ? Number(step.request.max_tokens) : undefined,
+          smoke: isSmokeRun(run),
+        }),
+        STEP_HARD_TIMEOUT_MS,
+        step.step_key,
+      );
+    } catch (e) {
+      if (await handleCallFailure(admin, run, step, e, { quickRetryAllowed: networkAttempt === 0 }) === "quick_retry") {
+        networkAttempt++;
+        await new Promise((r) => setTimeout(r, 800));
+        continue;
+      }
+      return;
+    }
+    await settleStepResult(admin, run, step, result, baseMessages);
     return;
   }
+}
+
+
+// ============================== Executor path (Batch 17, §5, §9.6) ==============================
+
+// The inline seatOptions, shared by the executor dispatch so prepareSeatCall
+// runs exactly the checks and builds exactly the body callSeat would.
+function seatOptionsFor(run: any, step: any) {
+  return {
+    runId: run.id,
+    projectId: run.project_id,
+    temperature: Number(step.request?.temperature ?? 0.4),
+    reasoningEffort: step.request?.reasoning_effort,
+    json: !!step.request?.json_output,
+    forceFallback: !!step.request?.force_fallback,
+    maxTokens: Number(step.request?.max_tokens) > 0 ? Number(step.request.max_tokens) : undefined,
+    smoke: isSmokeRun(run),
+  };
+}
+
+// RPC reserve_executor_call: CAS on status='running' AND executor_call_id IS
+// NULL → `<step_id>-<n>`; null when the row is not reservable (already
+// dispatched, moved on, missing). The reservation lands BEFORE the network
+// call so an isolate death between the two leaves a resumable row, never an
+// untracked instance (§5.1 b).
+async function reserveExecutorCall(admin: any, stepId: string): Promise<string | null> {
+  const { data, error } = await admin.rpc("reserve_executor_call", { p_step_id: stepId });
+  if (error) throw new Error(`reserve_executor_call failed: ${error.message ?? error}`);
+  return typeof data === "string" && data.length ? data : null;
+}
+
+// Guarded on the id: a row that has since been re-reserved is left alone.
+async function clearExecutorColumns(admin: any, stepId: string, callId: string): Promise<void> {
+  const { error } = await admin
+    .from("run_steps")
+    .update({ executor_call_id: null, executor_dispatched_at: null, executor_meta: null })
+    .eq("id", stepId)
+    .eq("executor_call_id", callId);
+  if (error) console.error(`[exec] clearExecutorColumns failed step=${stepId} call=${callId}: ${error.message ?? error}`);
+}
+
+// Best-effort mark so the Settings card and §13 can prove the fast path is
+// alive: a card that only ever shows `poll` means callbacks are rejected.
+async function writeExecutorSettleMark(admin: any, source: "callback" | "poll", callId: string): Promise<void> {
+  try {
+    const now = new Date().toISOString();
+    const { error } = await admin
+      .from("app_settings")
+      .upsert({ key: "executor_last_settle", value: { source, call_id: callId, at: now }, updated_at: now }, { onConflict: "key" });
+    if (error) console.error(`[exec] settle mark write failed: ${error.message ?? error}`);
+  } catch (e) {
+    console.error(`[exec] settle mark write failed: ${(e as Error)?.message ?? e}`);
+  }
+}
+
+// §5.1: prepare (today's pre-checks + body) → reserve → meta → seal → POST.
+//   dispatched          the Worker holds the call; the row stays 'running' with executor_call_id set
+//   skipped             nothing reservable / nothing written that needs handling
+//   fallthrough_inline  definitive rejection: columns cleared, caller runs the inline call now
+//   handled             a pre-check threw and handleCallFailure paused/failed/requeued the step
+// `existingCallId` is the collector's re-dispatch (§5.6 `redispatch`): same
+// id (Worker create({id}) is idempotent), prep rebuilt from the row.
+async function dispatchStepToExecutor(
+  admin: any,
+  run: any,
+  step: any,
+  existingCallId?: string,
+): Promise<"dispatched" | "skipped" | "fallthrough_inline" | "handled"> {
+  const env = EXECUTOR_ENV;
+  if (!env) return "skipped";
+  const baseMessages = step.request?.messages ?? [];
+  const guard = existingCallId ? { callId: existingCallId } : undefined;
+
+  // a. today's pre-checks and body. Any thrown cap / key / seat error goes to
+  //    the same catch block the inline path uses.
+  let prep: Awaited<ReturnType<typeof prepareSeatCall>>;
+  try {
+    prep = await prepareSeatCall(run.user_id, step.seat as Seat, baseMessages, seatOptionsFor(run, step));
+  } catch (e) {
+    await handleCallFailure(admin, run, step, e, { quickRetryAllowed: false, guard });
+    return "handled";
+  }
+
+  // b. reserve the call id (CAS) before anything leaves this function.
+  let callId = existingCallId ?? null;
+  if (!callId) {
+    callId = await reserveExecutorCall(admin, step.id);
+    if (!callId) {
+      console.log(`[exec] EXECUTOR_RESERVE_SKIPPED step=${step.step_key} run=${run.id} — row not reservable`);
+      return "skipped";
+    }
+  }
+
+  // c. per-dispatch facts the settle needs (never the key, never the messages).
+  const setting = await loadExecutorSettings(admin);
+  const transport = setting?.transport ?? "sse";
+  const timeoutMs = executorTimeoutMs(prep.modelId, step.request?.reasoning_effort, setting?.timeouts_ms);
+  const meta = buildExecutorMeta(prep, callId, timeoutMs, transport, new Date().toISOString(), BUILD_VERSION, !!step.request?.force_fallback);
+  if (existingCallId) {
+    // A re-dispatch is attempt ≥ 2 even when the first attempt died before
+    // its meta write (executor_meta NULL), so EXECUTOR_DISPATCH_MAX counts
+    // real attempts; and the deadline stays anchored at the ORIGINAL
+    // dispatch (kept from the prior meta, else rebuilt from
+    // executor_dispatched_at — the same fallback decideOnPoll applies) so a
+    // re-dispatch never extends the wait past dispatched_at + timeout + grace.
+    meta.dispatch_attempts = Math.max(1, Number(step.executor_meta?.dispatch_attempts ?? 0) || 0) + 1;
+    const priorDeadline = step.executor_meta?.deadline_at;
+    const dispatchedAt = Date.parse(String(step.executor_dispatched_at ?? ""));
+    if (typeof priorDeadline === "string" && Number.isFinite(Date.parse(priorDeadline))) {
+      meta.deadline_at = priorDeadline;
+    } else if (Number.isFinite(dispatchedAt)) {
+      meta.deadline_at = new Date(dispatchedAt + timeoutMs + EXECUTOR_GRACE_MS).toISOString();
+    }
+  }
+  const { error: metaErr } = await admin
+    .from("run_steps")
+    .update({ executor_meta: meta })
+    .eq("id", step.id)
+    .eq("executor_call_id", callId);
+  if (metaErr) {
+    // The reservation stands and no instance exists: the collector sees
+    // not_found and re-dispatches with the same id next tick.
+    console.error(`[exec] EXECUTOR_META_WRITE_FAILED step=${step.step_key} call=${callId}: ${metaErr.message ?? metaErr}`);
+    return "skipped";
+  }
+
+  // d. seal the key to this call id and POST.
+  const sealed = await sealApiKey(env.secret, callId, prep.apiKey);
+  const labels: DispatchLabels = {
+    run_id: String(run.id),
+    step_id: String(step.id),
+    step_key: String(step.step_key ?? ""),
+    seat: String(step.seat ?? ""),
+    smoke: isSmokeRun(run),
+  };
+  const spec = buildDispatchSpec(prep, callId, labels, timeoutMs, EXECUTOR_DEFAULT_IDLE_MS, transport, sealed, CALLBACK_URL, BUILD_VERSION);
+  const outcome = await executorDispatch(env, spec);
+
+  // e. decideDispatchResponse already classified the answer.
+  if (outcome.kind === "accepted") {
+    console.log(`[exec] EXECUTOR_DISPATCHED step=${step.step_key} run=${run.id} call=${callId} model=${prep.modelId} timeout_ms=${timeoutMs} created=${outcome.created} attempt=${meta.dispatch_attempts}`);
+    return "dispatched";
+  }
+  if (outcome.kind === "rejected") {
+    console.log(`[exec] executor_dispatch_rejected step=${step.step_key} run=${run.id} call=${callId} reason=${outcome.status}${outcome.detail ? ` ${outcome.detail}` : ""}`);
+    executorBackoffUntil = Date.now() + 60_000;
+    if (existingCallId) {
+      // Re-dispatch from the collector: no inline step may run inside the
+      // collector, so the row is requeued (columns NULLed by the RPC) and the
+      // next claim runs inline while the backoff holds.
+      const lost = lostRequeueRequest(step.request);
+      const r = await requeueStepIfParentActive(admin, step.id, lost.request, "executor_dispatch_rejected", callId);
+      if (r !== "requeued") await clearExecutorColumns(admin, step.id, callId);
+      return "handled";
+    }
+    await clearExecutorColumns(admin, step.id, callId);
+    return "fallthrough_inline";
+  }
+  // Ambiguous (5xx, fetch timeout, socket cut after send): keep the
+  // reservation; the collector polls next tick and re-dispatches on not_found.
+  console.log(`[exec] EXECUTOR_DISPATCH_AMBIGUOUS step=${step.step_key} run=${run.id} call=${callId} msg=${outcome.message}`);
+  return "dispatched";
+}
+
+// The executor analogue of the 800 ms in-invocation quick retry: one requeue
+// with _executor_errors+1 (a second falls to the generic failed branch).
+async function executorQuickRequeue(admin: any, step: any, callId: string, e: Error): Promise<void> {
+  const n = (Number(step.request?._executor_errors ?? 0) || 0) + 1;
+  console.log(`[exec] EXECUTOR_QUICK_REQUEUE step=${step.step_key} call=${callId} errors=${n} msg=${e?.message ?? e}`);
+  const outcome = await requeueStepIfParentActive(
+    admin,
+    step.id,
+    { ...(step.request ?? {}), _executor_errors: n },
+    "executor_quick_requeue",
+    callId,
+  );
+  if (outcome === "cancelled_parent_terminal" || outcome === "stale_call") {
+    console.log(`[exec] EXECUTOR_QUICK_REQUEUE step=${step.step_key} outcome=${outcome} — nothing written`);
+  }
+}
+
+// §5.10 stale_ledgered rule. The row has moved on (requeued, retried,
+// re-claimed) so its executor_meta is NULL — the ledger args come from the
+// row's seat column, the run row and the callback itself. One lookup covers
+// both keys so a deadline estimate already charged for this call is never
+// joined by the real row (§7: one row per call, never both).
+async function ledgerStaleExecutorResult(
+  admin: any,
+  run: { id: string; user_id: string; project_id: string | null },
+  step: { id: string; seat: string },
+  callId: string,
+  output: CallOutput & { ok: true },
+): Promise<"stale" | "stale_ledgered"> {
+  if (await ledgerHasCallId(admin, [callId, `${callId}:timeout`])) return "stale";
+  const model = String(output.model ?? output.response?.model ?? "unknown");
+  const { tokensIn, tokensOut, costUsd } = settleSeatUsage(model, output.response?.usage ?? {});
+  const { error } = await admin.rpc("record_model_call_idempotent", {
+    p_user_id: run.user_id,
+    p_project_id: run.project_id ?? null,
+    p_run_id: run.id,
+    p_seat: step.seat,
+    p_model_id: model,
+    p_tokens_in: tokensIn,
+    p_tokens_out: tokensOut,
+    p_cost_usd: costUsd,
+    p_call_id: callId,
+  });
+  if (error) throw new Error(`record_model_call_idempotent failed: ${error.message ?? error}`);
+  console.log(`[exec] EXECUTOR_STALE_LEDGERED step=${step.id} call=${callId} model=${model} cost=${costUsd}`);
+  return "stale_ledgered";
+}
+
+// What a settle did, read back from the row (the moved bodies return void).
+async function settleOutcomeFromRow(admin: any, stepId: string, runId: string): Promise<SettleOutcome> {
+  const { data: after } = await admin.from("run_steps").select("status").eq("id", stepId).maybeSingle();
+  const status = String(after?.status ?? "");
+  if (status === "completed") return "completed";
+  if (status === "failed") return "failed";
+  if (status === "queued") {
+    const fresh = await getRun(admin, runId);
+    return fresh?.status === "paused_budget" ? "budget_pause" : "requeued";
+  }
+  return "stale";
+}
+
+// §5.4 — reachable from the signed callback (fast path) and from the tick
+// collector (guarantee). Every write is idempotent or guarded on
+// status='running' AND executor_call_id = C, so two settles of the same
+// call converge on one winner without a lease.
+async function settleExecutorStep(
+  admin: any,
+  ref: { stepId: string; callId: string },
+  output: CallOutput,
+  source: "callback" | "poll",
+): Promise<SettleOutcome> {
+  const { stepId, callId } = ref;
+  const { data: step } = await admin.from("run_steps").select("*").eq("id", stepId).maybeSingle();
+  if (!step) {
+    console.log(`[exec] EXECUTOR_SETTLE step=${stepId} call=${callId} source=${source} — step row missing`);
+    return "stale";
+  }
+  const run = await getRun(admin, step.run_id);
+  if (!run) {
+    console.log(`[exec] EXECUTOR_SETTLE step=${stepId} call=${callId} source=${source} — run row missing`);
+    return "stale";
+  }
+
+  // 1. Ownership. A different (or NULL) id means the row moved on; the only
+  //    question left is money (§5.10).
+  if (step.executor_call_id !== callId) {
+    console.log(`[exec] EXECUTOR_SETTLE_STALE step=${step.step_key} call=${callId} row_call=${step.executor_call_id ?? "null"} source=${source}`);
+    if (output.ok === true) {
+      const r = await ledgerStaleExecutorResult(admin, run, step, callId, output);
+      if (r === "stale_ledgered") await writeExecutorSettleMark(admin, source, callId);
+      return r;
+    }
+    return "stale";
+  }
+
+  const meta = (step.executor_meta ?? null) as ExecutorMeta | null;
+  let outcome: SettleOutcome;
+
+  if (!meta || !meta.model_id) {
+    // Unreachable in practice (the meta write precedes the POST); never
+    // crash on it: ledger real usage from the row + callback, then release
+    // the row the way a lost call is released (a requeued row falls through
+    // to step 4 so it is advanced now, not on the next cron tick).
+    console.error(`[exec] EXECUTOR_SETTLE step=${step.step_key} call=${callId} has no executor_meta — treating as lost`);
+    if (output.ok === true) await ledgerStaleExecutorResult(admin, run, step, callId, output);
+    if (step.status === "running") {
+      const r = await requeueStepIfParentActive(admin, step.id, lostRequeueRequest(step.request).request, "executor_call_lost", callId);
+      outcome = r === "requeued" ? "requeued" : "ledger_only";
+    } else {
+      await clearExecutorColumns(admin, step.id, callId);
+      outcome = "ledger_only";
+    }
+  } else if (output.ok === true) {
+    // 2a. Parse + ledger (idempotent on call_id). An RPC error throws before
+    //     anything else is written: callback 500 / collector log, retried.
+    //     If the deadline backstop has already charged <C>:timeout it owns
+    //     this call (§7: one row per call, never both) — the late real
+    //     output is dropped, exactly as inline drops the usage of an aborted
+    //     fetch. But this branch must NEVER leave a running row in place:
+    //     the backstop may have died between its estimate and its
+    //     handleCallFailure (a transient requeue RPC error), the cancel may
+    //     have been unreachable, and the instance has since completed — so
+    //     every later poll answers `complete` (which beats the deadline
+    //     clock in decideOnPoll) and lands here. Give the row the
+    //     backstop's own exit instead: the timeout branch (requeue via
+    //     timeout_failover, or timeout_failover_exhausted) for a running
+    //     row, a column clear for a finished one. No <C> insert either way.
+    if (await ledgerHasCallId(admin, [`${callId}:timeout`])) {
+      console.log(`[exec] EXECUTOR_SETTLE_AFTER_DEADLINE step=${step.step_key} call=${callId} source=${source} status=${step.status} — estimate already charged, output dropped`);
+      if (step.status !== "running") {
+        await clearExecutorColumns(admin, step.id, callId);
+        outcome = "ledger_only";
+      } else {
+        const e = new ProxyTimeoutError(meta.model_id, Number(meta.timeout_ms) || 0);
+        await handleCallFailure(admin, run, step, e, { quickRetryAllowed: false, guard: { callId } });
+        await clearExecutorColumns(admin, step.id, callId);
+        outcome = await settleOutcomeFromRow(admin, step.id, run.id);
+      }
+    } else {
+      const p = fromMeta(meta, run, step);
+      const fallbackReason = meta.force_fallback && step.request?._refusal_fallback === true ? "refusal" as const : undefined;
+      const result = await settleSeatCall(admin, p, output.response, { callId, ...(fallbackReason ? { fallbackReason } : {}) });
+      // 2b. Cancelled / swept / paused-then-cancelled: the money was real, the
+      //     verdict is not wanted.
+      if (step.status !== "running") {
+        await clearExecutorColumns(admin, step.id, callId);
+        console.log(`[exec] EXECUTOR_SETTLE_LEDGER_ONLY step=${step.step_key} call=${callId} status=${step.status} cost=${result.costUsd}`);
+        outcome = "ledger_only";
+      } else {
+        // 2c. Refusal mirror (§5.7) — the same 15 s rule callSeat honours.
+        const refused = isRefusal(result.content, result.finishReason, meta.json);
+        const rd = refused
+          ? refusalRequeueDecision(step.request, Number(output.latency_ms ?? 0), meta.fallback_allowed)
+          : { action: "accept" as const };
+        if (rd.action === "requeue") {
+          console.log(`[exec] EXECUTOR_REFUSAL step=${step.step_key} call=${callId} → ${rd.error}`);
+          const r = await requeueStepIfParentActive(admin, step.id, rd.request, rd.error, callId);
+          outcome = r === "requeued" ? "refusal_requeued" : "stale";
+        } else {
+          // 2d. Today's success half, guarded.
+          await settleStepResult(admin, run, step, result, step.request?.messages ?? [], { callId });
+          outcome = await settleOutcomeFromRow(admin, step.id, run.id);
+        }
+      }
+    }
+  } else {
+    const p = fromMeta(meta, run, step);
+    // 3. Classified failure → the proxy's own error shapes → today's catch block.
+    const e = errorFromExecutor(output.error);
+    if (output.error?.kind === "timeout" || output.error?.kind === "idle") {
+      await recordTimeoutEstimate(admin, p, { callId, suffix: ":timeout" });
+    }
+    if (step.status !== "running") {
+      await clearExecutorColumns(admin, step.id, callId);
+      console.log(`[exec] EXECUTOR_SETTLE_LEDGER_ONLY step=${step.step_key} call=${callId} status=${step.status} kind=${output.error?.kind}`);
+      outcome = "ledger_only";
+    } else {
+      await handleCallFailure(admin, run, step, e, { quickRetryAllowed: false, guard: { callId } });
+      outcome = await settleOutcomeFromRow(admin, step.id, run.id);
+    }
+  }
+
+  // Release the row once the owning settle terminalised it (guarded on the
+  // id): a late duplicate delivery then lands in the stale branch and finds
+  // <C> in the ledger, in_flight is honest, and the collector never selects
+  // the row again — no ledger-only re-settle, no second estimate at the
+  // deadline, no self-tick per already-settled row.
+  if (outcome === "completed" || outcome === "failed") await clearExecutorColumns(admin, step.id, callId);
+
+  // 4. Mirrors processRun: a paused / paused_budget run gets its step settled
+  //    but is not advanced; resume's tick advances it. A ledger-only settle
+  //    changed nothing about the run (the row was already terminal), but it
+  //    still proves the path is alive (§5.3), so the mark is written for
+  //    every settle that wrote something.
+  if (outcome !== "ledger_only") {
+    const fresh = await getRun(admin, run.id);
+    if (fresh?.status === "running") await afterStepComplete(admin, fresh);
+  }
+  await writeExecutorSettleMark(admin, source, callId);
+  console.log(`[exec] EXECUTOR_SETTLED step=${step.step_key} run=${run.id} call=${callId} source=${source} outcome=${outcome}`);
+  return outcome;
+}
+
+// §5.6 `deadline`: dispatched_at + timeout + grace has passed and the Worker
+// has not reported completion (or cannot be reached, or the env is gone).
+// Terminate best effort, charge the estimate (idempotent), then today's
+// timeout branch for a running row / a column clear for a finished one.
+async function handleExecutorDeadline(admin: any, row: any): Promise<void> {
+  const callId = String(row.executor_call_id);
+  const meta = (row.executor_meta ?? null) as ExecutorMeta | null;
+  console.log(`[exec] EXECUTOR_DEADLINE step=${row.step_key} run=${row.run_id} call=${callId} status=${row.status}`);
+  if (EXECUTOR_ENV) {
+    try {
+      const cancel = await executorCancel(EXECUTOR_ENV, callId);
+      if (cancel?.state === "complete") {
+        // The instance finished between the poll and the cancel: the real
+        // output exists on the Worker, so settle it instead of charging an
+        // estimate and re-buying the step.
+        const poll = await executorPoll(EXECUTOR_ENV, callId);
+        if (poll.kind === "state" && poll.state === "complete" && poll.output) {
+          console.log(`[exec] EXECUTOR_DEADLINE call=${callId} completed before cancel — settling the real output`);
+          await settleExecutorStep(admin, { stepId: row.id, callId }, poll.output, "poll");
+          return;
+        }
+      }
+    } catch (e) {
+      console.error(`[exec] EXECUTOR_DEADLINE cancel failed call=${callId}: ${(e as Error)?.message ?? e}`);
+    }
+  }
+  const run = await getRun(admin, row.run_id);
+  if (run && meta?.model_id) {
+    try {
+      // Skipped (no second ledger row) when the call's real usage is already
+      // under <C> — a settled row still carrying its id, or the no_env rule
+      // reaching rows the callback already paid for (§0 no double-charge).
+      const est = await recordTimeoutEstimate(admin, fromMeta(meta, run, row), { callId, suffix: ":timeout" });
+      if (est === "skipped") console.log(`[exec] EXECUTOR_DEADLINE call=${callId} real usage already ledgered — no estimate`);
+    } catch (e) {
+      console.error(`[exec] EXECUTOR_DEADLINE estimate failed call=${callId}: ${(e as Error)?.message ?? e}`);
+    }
+  }
+  if (!run || row.status !== "running") {
+    await clearExecutorColumns(admin, row.id, callId);
+    return;
+  }
+  const e = new ProxyTimeoutError(meta?.model_id ?? "unknown", Number(meta?.timeout_ms ?? 0) || 0);
+  try {
+    await handleCallFailure(admin, run, row, e, { quickRetryAllowed: false, guard: { callId } });
+  } catch (err) {
+    // The estimate is already ledgered and the row is still running with
+    // its id: the next tick re-enters here (or the ok-after-deadline branch
+    // of settleExecutorStep, which takes the same exit) — never stranded.
+    console.error(`[exec] EXECUTOR_DEADLINE timeout branch failed step=${row.step_key} run=${row.run_id} call=${callId}: ${(err as Error)?.message ?? err}`);
+    throw err;
+  }
+  // A requeue already NULLed the columns (RPC); a row the timeout branch
+  // failed (timeout_failover_exhausted) is released here so a late result
+  // lands in the stale branch and the collector stops selecting it.
+  await clearExecutorColumns(admin, row.id, callId);
+  // Same exit as the settle_error path (§5.4 step 4): a requeued row is
+  // advanced now rather than waiting for the next cron tick.
+  const fresh = await getRun(admin, run.id);
+  if (fresh?.status === "running") await afterStepComplete(admin, fresh);
+}
+
+type CollectorStats = {
+  polled: number;
+  settled: number;
+  requeued: number;
+  deadline: number;
+  lost: number;
+  unreached: number;
+  exhausted: boolean;
+  breaker_tripped: boolean;
+};
+
+// §5.2 / §5.4 — the guarantee. Runs on every tick whenever ANY run_steps row
+// carries an executor_call_id (any status; not gated on env or flag), least
+// recently polled first, concurrency 6, until EXECUTOR_COLLECT_BUDGET_MS
+// measured from TICK start is spent. Three consecutive unreachable polls
+// end the pass (a Worker outage never starves the runs loop); a pass that
+// runs out of budget with rows unpolled reports `exhausted` and the tick
+// self-ticks instead of starting an inline step it could not finish.
+async function collectExecutorCalls(admin: any, tickStartedAt: number): Promise<CollectorStats> {
+  const stats: CollectorStats = { polled: 0, settled: 0, requeued: 0, deadline: 0, lost: 0, unreached: 0, exhausted: false, breaker_tripped: false };
+  const { data: rows, error } = await admin
+    .from("run_steps")
+    .select("id, run_id, step_key, seat, status, request, executor_call_id, executor_dispatched_at, executor_meta")
+    .not("executor_call_id", "is", null)
+    .order("executor_meta->>last_polled_at", { ascending: true, nullsFirst: true })
+    .order("executor_dispatched_at", { ascending: true })
+    .limit(60);
+  if (error) throw new Error(`collector select failed: ${error.message ?? error}`);
+  const list: any[] = rows ?? [];
+  if (!list.length) return stats;
+
+  const env = EXECUTOR_ENV;
+  const budgetSpent = () => Date.now() - tickStartedAt >= EXECUTOR_COLLECT_BUDGET_MS;
+
+  const pollOne = async (row: any): Promise<"unreachable" | "other"> => {
+    const callId = String(row.executor_call_id);
+    const meta = (row.executor_meta ?? null) as ExecutorMeta | null;
+    const poll: PollResult | null = env ? await executorPoll(env, callId) : null;
+    const decision = decideOnPoll(row, poll, Date.now(), !!env);
+    const bumpMeta = async (patch: Partial<ExecutorMeta>) => {
+      await admin
+        .from("run_steps")
+        .update({ executor_meta: { ...(meta ?? {}), ...patch, last_polled_at: new Date().toISOString() } })
+        .eq("id", row.id)
+        .eq("executor_call_id", callId);
+    };
+    switch (decision.action) {
+      case "wait": {
+        await bumpMeta({ last_state: poll && poll.kind === "state" ? poll.state : (meta?.last_state ?? null) });
+        return "other";
+      }
+      case "settle_ok":
+      case "settle_error": {
+        await settleExecutorStep(admin, { stepId: row.id, callId }, decision.output, "poll");
+        stats.settled++;
+        return "other";
+      }
+      case "unreachable": {
+        await bumpMeta({
+          poll_failures: (Number(meta?.poll_failures ?? 0) || 0) + 1,
+          last_state: poll && poll.kind === "state" ? poll.state : "unreachable",
+        });
+        stats.unreached++;
+        return "unreachable";
+      }
+      case "no_env":
+        return "other";
+      case "deadline": {
+        await handleExecutorDeadline(admin, row);
+        stats.deadline++;
+        return "other";
+      }
+      case "redispatch": {
+        if (row.status !== "running") {
+          // Nothing ran and the row no longer wants a verdict: release it.
+          await clearExecutorColumns(admin, row.id, callId);
+          return "other";
+        }
+        const run = await getRun(admin, row.run_id);
+        if (!run) {
+          await clearExecutorColumns(admin, row.id, callId);
+          return "other";
+        }
+        console.log(`[exec] EXECUTOR_REDISPATCH step=${row.step_key} run=${row.run_id} call=${callId}`);
+        await dispatchStepToExecutor(admin, run, row, callId);
+        stats.requeued++;
+        return "other";
+      }
+      case "lost": {
+        console.log(`[exec] EXECUTOR_LOST step=${row.step_key} run=${row.run_id} call=${callId} reason=${decision.reason} status=${row.status}`);
+        if (row.status !== "running") {
+          await clearExecutorColumns(admin, row.id, callId);
+        } else {
+          const lost = lostRequeueRequest(row.request);
+          const r = await requeueStepIfParentActive(admin, row.id, lost.request, "executor_call_lost", callId);
+          if (r !== "requeued") await clearExecutorColumns(admin, row.id, callId);
+          if (lost.bypass) console.log(`[exec] EXECUTOR_BYPASS step=${row.step_key} — next claim runs inline`);
+        }
+        stats.lost++;
+        return "other";
+      }
+    }
+  };
+
+  let next = 0;
+  let consecutiveUnreachable = 0;
+  let stop = false;
+  // Progress guarantee: the first batch (one row per worker) is polled even
+  // when the phases before the collector already spent the budget —
+  // otherwise a slow sweep/watchdog would make every tick report
+  // `exhausted` with zero rows polled, self-tick, and never reach the runs
+  // loop while executor rows exist.
+  const firstBatch = Math.min(6, list.length);
+  const worker = async () => {
+    while (!stop) {
+      if (next >= firstBatch && budgetSpent()) {
+        stop = true;
+        break;
+      }
+      const i = next++;
+      if (i >= list.length) break;
+      const row = list[i];
+      let kind: "unreachable" | "other" = "other";
+      try {
+        kind = await pollOne(row);
+      } catch (e) {
+        console.error(`[exec] collector: step=${row.id} call=${row.executor_call_id} failed: ${(e as Error)?.message ?? e}`);
+      }
+      stats.polled++;
+      if (kind === "unreachable") {
+        consecutiveUnreachable++;
+        if (consecutiveUnreachable >= EXECUTOR_UNREACHABLE_BREAKER) {
+          stats.breaker_tripped = true;
+          stop = true;
+        }
+      } else {
+        consecutiveUnreachable = 0;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(6, list.length) }, () => worker()));
+  stats.exhausted = !stats.breaker_tripped && stats.polled < list.length && budgetSpent();
+  return stats;
 }
 
 
@@ -2219,6 +2964,15 @@ async function processRun(admin: any, runId: string) {
   }
   if (!claimed.length && claimFailed) return;
   if (!claimed.length) {
+    // Capacity held by in-flight (executor or inline) calls: runStepsPhase
+    // would report the queued sibling first and advanceRun would self-tick in
+    // a loop for the life of the call (§5.2). The settle path / next cron
+    // tick claims the rest. With no running rows the behaviour is unchanged.
+    const steps = await loadAllSteps(admin, runId);
+    if (hasRunningSteps(steps)) {
+      console.log(`[tick] run ${runId}: ${steps.filter((s: any) => s.status === "running").length} step(s) in flight, not advancing`);
+      return;
+    }
     await afterStepComplete(admin, run);
     return;
   }
@@ -2296,6 +3050,9 @@ async function pipelineTick(admin: any) {
 }
 
 async function pipelineTickBody(admin: any) {
+  // The collector's budget is measured from here, not from its own start:
+  // an inline step may follow it in this same invocation (§5.2).
+  const tickStart = Date.now();
   // Orphan sweep: queued/running steps under a run that is already terminal
   // are invisible to the watchdog (it scans 'running' steps) and to the run
   // loop (it scans active runs). Bounded UPDATE, terminal parents only.
@@ -2320,10 +3077,13 @@ async function pipelineTickBody(admin: any) {
   // primary model: existing force_fallback stays sticky, existing
   // _timeout_attempts is preserved, and _attempts caps the rescue count.
   const staleCutoff = new Date(Date.now() - STALE_RUNNING_STEP_MS).toISOString();
+  // Executor rows (executor_call_id set) are waiting on a Workflow that may
+  // legitimately run for minutes; the collector owns their exits (§3.2).
   const { data: staleSteps } = await admin
     .from("run_steps")
     .select("id, run_id, step_key, request")
     .eq("status", "running")
+    .is("executor_call_id", null)
     .lt("started_at", staleCutoff);
   for (const st of staleSteps ?? []) {
     // Never resurrect steps whose parent is already terminal — go straight to
@@ -2377,6 +3137,25 @@ async function pipelineTickBody(admin: any) {
 
   const stalledFailed = await failStalledRuns(admin);
 
+  // Batch 17 collector (§5.2, §5.4): settle / re-dispatch / expire every
+  // in-flight executor call. Not gated on env or flag — it runs on the
+  // presence of rows, so turning the flag off or deleting the secrets is
+  // safe. If the budget ran out with rows unpolled, no inline step may start
+  // in this invocation (it has already spent its slack): self-tick and stop.
+  let collector: CollectorStats | null = null;
+  try {
+    collector = await collectExecutorCalls(admin, tickStart);
+    if (collector.polled > 0 || collector.exhausted || collector.breaker_tripped) {
+      console.log(`[tick] executor collector: ${JSON.stringify(collector)}`);
+    }
+  } catch (e) {
+    console.error(`[tick] executor collector failed: ${(e as Error)?.message ?? e}`);
+  }
+  if (collector?.exhausted) {
+    fireSelfTick();
+    return { processed: 0, orphans_cancelled: orphansCancelled, stalled_failed: stalledFailed, collector_exhausted: true, executor: collector };
+  }
+
   const { data: runs } = await admin
     .from("boardroom_runs")
     .select("id")
@@ -2408,6 +3187,32 @@ Deno.serve(async (req) => {
 
 async function handleRequest(req: Request): Promise<Response> {
   const admin = adminClient();
+
+  // Batch 17 fast path (§5.3): the Worker's signed result callback. Verified
+  // against CALLBACK_PATH — the path WE put in callback_url — never req.url:
+  // inside a hosted edge function the gateway strips the /functions/v1
+  // prefix, so new URL(req.url).pathname would be "/boardroom-orchestrator"
+  // while the Worker signed "/functions/v1/boardroom-orchestrator". 4xx stops
+  // the Workflow's retries; a throw (500) lets it retry; the collector is the
+  // backstop either way.
+  if (req.headers.get("x-executor-sig")) {
+    if (!EXECUTOR_SECRET) return j(404, { error: "executor not configured" });
+    const raw = await req.text();
+    const v = await verifyExecutorRequest(EXECUTOR_SECRET, "POST", CALLBACK_PATH, req.headers, raw, Date.now());
+    if (!v.ok) return j(401, { error: v.reason });
+    let body: any;
+    try { body = JSON.parse(raw); } catch { return j(400, { error: "Invalid JSON" }); }
+    if (body?.action !== "executor_result") return j(400, { error: "unknown executor action" });
+    const stepId = String(body?.step_id ?? "");
+    const callId = String(body?.call_id ?? "");
+    const output = body?.output;
+    if (!stepId || !callId || !isWellFormedCallOutput(output)) {
+      return j(400, { error: "bad executor_result" });
+    }
+    const settled = await settleExecutorStep(admin, { stepId, callId }, output, "callback");
+    return j(200, { ok: true, settled });
+  }
+
   const pipelineHeader = req.headers.get("x-pipeline-secret");
 
   if (pipelineHeader && PIPELINE_SECRET && pipelineHeader === PIPELINE_SECRET) {
@@ -2423,11 +3228,37 @@ async function handleRequest(req: Request): Promise<Response> {
 
   const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
   const userId = await verifyUser(token);
-  if (!userId) return j(401, { error: "Missing or invalid user JWT", version: BUILD_VERSION });
+  if (!userId) return j(401, { error: "Missing or invalid user JWT", version: BUILD_VERSION, executor: EXECUTOR_ENV ? "configured" : "off" });
 
   let body: any;
   try { body = await req.json(); } catch { return j(400, { error: "Invalid JSON" }); }
   const action: string = body?.action;
+
+  // Batch 17 (§9.6): admin-only executor status for the Settings card and
+  // the rollout checks (§13). Never a GET — Deno.serve answers 405.
+  if (action === "executor_status") {
+    const { data: isAdmin, error: roleErr } = await admin.rpc("has_role", { _user_id: userId, _role: "admin" });
+    if (roleErr) return j(500, { error: "Role check failed" });
+    if (isAdmin !== true) return j(403, { error: "Executor status is admin-only" });
+    const setting = await loadExecutorSettings(admin);
+    const { count } = await admin
+      .from("run_steps")
+      .select("id", { count: "exact", head: true })
+      .not("executor_call_id", "is", null);
+    const { data: mark } = await admin
+      .from("app_settings")
+      .select("value")
+      .eq("key", "executor_last_settle")
+      .maybeSingle();
+    return j(200, {
+      configured: !!EXECUTOR_ENV,
+      enabled: setting?.enabled === true,
+      transport: setting?.transport ?? "sse",
+      in_flight: count ?? 0,
+      last_settle: mark?.value ?? null,
+      version: BUILD_VERSION,
+    });
+  }
 
   if (action === "start_run") {
     const projectId: string = body?.project_id;
@@ -2600,6 +3431,9 @@ async function handleRequest(req: Request): Promise<Response> {
       .maybeSingle();
 
     if (smoke) consensusMeta = { ...(consensusMeta ?? {}), smoke: true };
+    // Batch 17 (§4): per-run executor override, smoke runs only (already
+    // admin-gated above). keepSmoke carries it across consensus rewrites.
+    if (smoke && typeof body?.executor === "boolean") consensusMeta.executor = body.executor;
     const budget = runBudgetUsd(kind, smoke);
     const { data: run, error: rerr } = await admin
       .from("boardroom_runs")
@@ -2722,6 +3556,10 @@ async function handleRequest(req: Request): Promise<Response> {
     // instead of failing on first miss.
     const revalidated = await completeStepFromStoredOutput(admin, run, step);
     if (!revalidated) {
+      // Guarded on 'failed' (like resume_failed) so a retry racing a late
+      // executor settle cannot flip a just-completed row back to queued; the
+      // executor columns are NULLed so a stale instance's verdict is never
+      // consulted (its money is still ledgered by the stale rule, §5.10).
       await admin
         .from("run_steps")
         .update({
@@ -2730,8 +3568,12 @@ async function handleRequest(req: Request): Promise<Response> {
           completed_at: null,
           started_at: null,
           request: resetRequestForResume(step.request, step.error),
+          executor_call_id: null,
+          executor_dispatched_at: null,
+          executor_meta: null,
         })
-        .eq("id", stepId);
+        .eq("id", stepId)
+        .eq("status", "failed");
     }
     if (run.status === "failed") {
       // Same reconciliation as resume_failed: failRun marked the audits row
@@ -2819,7 +3661,16 @@ async function handleRequest(req: Request): Promise<Response> {
         revalidated++;
         continue;
       }
-      const patch: any = { status: "queued", error: null, completed_at: null, started_at: null };
+      const patch: any = {
+        status: "queued",
+        error: null,
+        completed_at: null,
+        started_at: null,
+        // Batch 17: a resumed step never carries a stale executor call (§5.10).
+        executor_call_id: null,
+        executor_dispatched_at: null,
+        executor_meta: null,
+      };
       if (st.error !== "cancelled_parent_terminal") {
         patch.request = resetRequestForResume(st.request, st.error);
       }

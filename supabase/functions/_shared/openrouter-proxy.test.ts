@@ -7,6 +7,7 @@ import {
   isBodyTransportError,
   isBudgetExhausted,
   isRefusal,
+  ledgerHasCallId,
   parseOpenRouterResponse,
   ProxyTimeoutError,
   reasoningAllowance,
@@ -271,16 +272,43 @@ Deno.test("timeoutLedgerSeat — the estimate row is distinguishable from the se
 const OK_JSON = EXECUTOR_FIXTURES.okOutput.response;
 
 // A minimal supabase-js stand-in: records every rpc call and answers like the
-// idempotent RPC does (the run's new spent_usd).
-function fakeAdmin(reply: { data?: unknown; error?: { message: string } | null } = { data: 1.5, error: null }) {
+// idempotent RPC does (the run's new spent_usd). `ledger` seeds the
+// cost_ledger.call_id values a `.from("cost_ledger")…in("call_id", …)` lookup
+// finds; every query chain is recorded in `queries`.
+function fakeAdmin(
+  reply: { data?: unknown; error?: { message: string } | null } = { data: 1.5, error: null },
+  ledger: string[] = [],
+  lookupError: { message: string } | null = null,
+) {
   const calls: Array<{ name: string; args: any }> = [];
+  const queries: Array<{ table: string; ops: Array<[string, unknown[]]> }> = [];
   const admin: any = {
     rpc: (name: string, args: any) => {
       calls.push({ name, args });
       return Promise.resolve({ data: reply.data ?? null, error: reply.error ?? null });
     },
+    from: (table: string) => {
+      const q = { table, ops: [] as Array<[string, unknown[]]> };
+      queries.push(q);
+      const builder: any = {
+        then(resolve: any, reject: any) {
+          if (lookupError) return Promise.resolve({ data: null, error: lookupError }).then(resolve, reject);
+          const inOp = q.ops.find(([op]) => op === "in");
+          const wanted = inOp ? (inOp[1][1] as string[]) : [];
+          const data = table === "cost_ledger" ? ledger.filter((id) => wanted.includes(id)).map((call_id) => ({ call_id })) : [];
+          return Promise.resolve({ data, error: null }).then(resolve, reject);
+        },
+      };
+      for (const op of ["select", "in", "eq", "limit", "order", "not", "match", "update", "maybeSingle"]) {
+        builder[op] = (...args: unknown[]) => {
+          q.ops.push([op, args]);
+          return builder;
+        };
+      }
+      return builder;
+    },
   };
-  return { admin, calls };
+  return { admin, calls, queries };
 }
 
 Deno.test("parseOpenRouterResponse — golden: exactly what callOpenRouter computed from the same body + json", () => {
@@ -431,6 +459,56 @@ Deno.test("recordTimeoutEstimate — equals timeoutLedgerEstimate(body) for the 
   assertEquals(calls[0].args.p_call_id, "s5-1:timeout");
   assertEquals(calls[0].args.p_run_id, "r1");
   assertEquals(calls[0].args.p_project_id, "p1");
+});
+
+Deno.test("ledgerHasCallId — one indexed lookup: cost_ledger.call_id IN (keys) LIMIT 1; true when any key exists", async () => {
+  const { admin, queries } = fakeAdmin({ data: 1.5, error: null }, ["s7-1:timeout"]);
+  assertEquals(await ledgerHasCallId(admin, ["s7-1", "s7-1:timeout"]), true);
+  assertEquals(queries.length, 1);
+  assertEquals(queries[0].table, "cost_ledger");
+  assertEquals(queries[0].ops, [["select", ["call_id"]], ["in", ["call_id", ["s7-1", "s7-1:timeout"]]], ["limit", [1]]]);
+  assertEquals(await ledgerHasCallId(admin, ["s7-1"]), false);
+  assertEquals(await ledgerHasCallId(admin, ["s7-2", "s7-2:timeout"]), false);
+  const broken = fakeAdmin({ data: 1.5, error: null }, [], { message: "canceling statement due to statement timeout" });
+  let msg = "";
+  try {
+    await ledgerHasCallId(broken.admin, ["s7-1"]);
+  } catch (e) {
+    msg = (e as Error).message;
+  }
+  assertStringIncludes(msg, "cost_ledger lookup failed: canceling statement");
+});
+
+Deno.test("recordTimeoutEstimate — never joins a real <call_id> row: skipped, no RPC, when <C> is already ledgered (§0 no double-charge)", async () => {
+  // The deadline backstop reaching a row the callback already settled (a
+  // completed row still carrying its id under the kill switch / a Worker
+  // outage) must not add <C>:timeout on top of the real <C> row.
+  const p = { userId: "u1", seat: "chair", modelId: "anthropic/claude-fable-5.1", options: { runId: "r1" }, promptChars: 64_000, wireMaxTokens: 16_000 };
+  const settled = fakeAdmin({ data: 1.5, error: null }, ["s8-1"]);
+  assertEquals(await recordTimeoutEstimate(settled.admin, p, { callId: "s8-1", suffix: ":timeout" }), "skipped");
+  assertEquals(settled.calls.length, 0, "no ledger insert when the real row exists");
+  assertEquals(settled.queries.length, 1);
+  assertEquals(settled.queries[0].ops[1], ["in", ["call_id", ["s8-1"]]], "looks up exactly <C>");
+  // Nothing ledgered for this call → the estimate is recorded under <C>:timeout.
+  const fresh = fakeAdmin({ data: 1.5, error: null }, ["s8-0", "s8-2:timeout"]);
+  assertEquals(await recordTimeoutEstimate(fresh.admin, p, { callId: "s8-1", suffix: ":timeout" }), "recorded");
+  assertEquals(fresh.calls.length, 1);
+  assertEquals(fresh.calls[0].args.p_call_id, "s8-1:timeout");
+  // Only the estimate itself exists (settle + backstop both writing it): still
+  // handed to the ON CONFLICT DO NOTHING RPC, which is what makes it idempotent.
+  const dup = fakeAdmin({ data: 1.5, error: null }, ["s8-1:timeout"]);
+  assertEquals(await recordTimeoutEstimate(dup.admin, p, { callId: "s8-1", suffix: ":timeout" }), "recorded");
+  assertEquals(dup.calls[0].args.p_call_id, "s8-1:timeout");
+  // A lookup failure throws before any RPC (isTransientInfraError semantics: retried next tick).
+  const broken = fakeAdmin({ data: 1.5, error: null }, [], { message: "canceling statement due to statement timeout" });
+  let msg = "";
+  try {
+    await recordTimeoutEstimate(broken.admin, p, { callId: "s8-1", suffix: ":timeout" });
+  } catch (e) {
+    msg = (e as Error).message;
+  }
+  assertStringIncludes(msg, "cost_ledger lookup failed");
+  assertEquals(broken.calls.length, 0);
 });
 
 Deno.test("recordTimeoutEstimate — uncapped call estimates 0 tokens out (no honest estimate), like the inline path", async () => {

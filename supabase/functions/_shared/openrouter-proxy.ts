@@ -959,7 +959,12 @@ export async function recordTimeoutEstimate(
   admin: SupabaseClient,
   p: { userId: string; seat: string; modelId: string; options: ProxyOptions; promptChars: number; wireMaxTokens: number },
   ctx: { callId: string; suffix: ":timeout" },
-): Promise<void> {
+): Promise<"recorded" | "skipped"> {
+  // §0 "no double-charge": a call whose REAL usage is already ledgered under
+  // <call_id> (settled by the callback before the deadline backstop reached
+  // the row, or a settled row still carrying its id) is never joined by an
+  // estimate. One indexed lookup, the same rule the stale branch applies.
+  if (await ledgerHasCallId(admin, [ctx.callId])) return "skipped";
   const tokensIn = Math.ceil(Math.max(0, Number(p.promptChars) || 0) / 4);
   const tokensOut = Math.max(0, Math.floor(Number(p.wireMaxTokens ?? 0) || 0));
   const estCost = estimateCost(p.modelId, tokensIn, tokensOut);
@@ -974,5 +979,21 @@ export async function recordTimeoutEstimate(
     p.options,
     `${ctx.callId}${ctx.suffix}`,
   );
+  return "recorded";
+}
+
+// One indexed lookup on cost_ledger.call_id (partial unique index, §0).
+// Shared by the stale-branch rule (§5.10: <C> or <C>:timeout present → the
+// call is already paid for), the deadline backstop (skip the estimate when
+// the real row exists) and the owning settle (skip the real row when the
+// backstop already charged — §7 "one row per call, never both").
+export async function ledgerHasCallId(admin: SupabaseClient, callIds: string[]): Promise<boolean> {
+  const { data, error } = await admin
+    .from("cost_ledger")
+    .select("call_id")
+    .in("call_id", callIds)
+    .limit(1);
+  if (error) throw new Error(`cost_ledger lookup failed: ${error.message ?? error}`);
+  return (data ?? []).length > 0;
 }
 
